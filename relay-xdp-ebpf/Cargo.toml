@@ -1,0 +1,28 @@
+[package]
+name = "relay-xdp-ebpf"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "relay-xdp-ebpf"
+path = "src/main.rs"
+
+[dependencies]
+relay-xdp-common = { path = "../relay-xdp-common" }
+aya-ebpf = "0.1"
+
+[features]
+default = []
+profiling = []
+
+[profile.dev]
+opt-level = 2       # eBPF verifier needs optimized code
+panic = "abort"
+debug = 2
+
+[profile.release]
+opt-level = 2
+panic = "abort"
+lto = true
+debug = 2
+

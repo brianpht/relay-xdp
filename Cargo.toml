@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+    "relay-xdp-common",
+    "relay-xdp",
+    "xtask",
+]
+exclude = [
+    "relay-xdp-ebpf",
+]
+# NOTE: relay-xdp-ebpf is NOT a workspace member because it targets
+# bpfel-unknown-none and must be built separately with:
+#   cargo +nightly build --target bpfel-unknown-none -Z build-std=core --release
+# Use: cargo xtask build-ebpf-rust
+
+[workspace.dependencies]
+relay-xdp-common = { path = "relay-xdp-common" }
+
