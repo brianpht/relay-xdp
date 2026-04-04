@@ -167,6 +167,30 @@ export RELAY_NO_BPF=1                             # Run without BPF (testing)
 sudo ./target/release/relay-xdp
 ```
 
+### relay-backend
+
+```bash
+# Crypto (enables direct mode - relay-xdp connects without gateway proxy)
+export RELAY_BACKEND_PUBLIC_KEY="<base64>"
+export RELAY_BACKEND_PRIVATE_KEY="<base64>"
+
+# Optional (all have defaults)
+export HTTP_PORT=80                               # Listen port
+export REDIS_HOSTNAME="127.0.0.1:6379"            # Redis for leader election
+export INITIAL_DELAY=15                            # Seconds before serving routes
+export ROUTE_MATRIX_INTERVAL_MS=1000              # Route recomputation interval
+export MAX_JITTER=1000                            # Max jitter threshold for costs
+export MAX_PACKET_LOSS=100.0                      # Max packet loss threshold
+export ENABLE_RELAY_HISTORY=false                 # 300-entry ring buffer per pair
+
+# Run
+./target/release/relay-backend
+```
+
+When `RELAY_BACKEND_PRIVATE_KEY` is set, the handler decrypts NaCl crypto_box requests
+from relay-xdp directly (no gateway proxy needed). Without it, the handler accepts
+plaintext requests (legacy gateway mode). Both modes return a full binary response.
+
 ## How It Works
 
 ### Packet Processing Pipeline
