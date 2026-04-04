@@ -1,4 +1,4 @@
-//! Relay manager — tracks relay set, manages ping history per relay.
+//! Relay manager - tracks relay set, manages ping history per relay.
 //! Port of `relay_manager.c` and `relay_manager.h`.
 
 #![allow(dead_code)]

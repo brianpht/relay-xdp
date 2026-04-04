@@ -1,4 +1,4 @@
-//! Test helpers — wraps relay-backend modules for integration tests.
+//! Test helpers - wraps relay-backend modules for integration tests.
 //!
 //! Provides convenience functions that build/parse relay update packets,
 //! cost matrices, route matrices, etc. using the relay-backend library.
@@ -56,7 +56,7 @@ pub fn build_relay_update_request_bytes(
     buf.push(1u8);
 
     // address: type(1) + ip octets(4) + port(2 LE)
-    // Go's encoding.WriteAddress and SimpleReader::read_address both use raw IP octets.
+    // SimpleReader::read_address uses raw IP octets in this format.
     buf.push(1u8); // RELAY_ADDRESS_IPV4
     buf.extend_from_slice(&ip.octets());
     buf.extend_from_slice(&port.to_le_bytes());

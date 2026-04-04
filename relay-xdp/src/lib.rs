@@ -1,4 +1,4 @@
-//! Network Next XDP Relay — library crate for testing.
+//! Network Next XDP Relay - library crate for testing.
 //!
 //! Re-exports all modules so integration tests can access them.
 

@@ -1,4 +1,4 @@
-//! Binary encoding helpers — little-endian, matching `relay_encoding.h`.
+//! Binary encoding helpers - little-endian wire format.
 
 #![allow(dead_code)]
 

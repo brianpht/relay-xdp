@@ -1,4 +1,4 @@
-//! Ping history — circular buffer tracking RTT, jitter, packet loss.
+//! Ping history - circular buffer tracking RTT, jitter, packet loss.
 //! Port of `relay_ping_history.c`.
 
 use relay_xdp_common::RELAY_PING_HISTORY_SIZE;

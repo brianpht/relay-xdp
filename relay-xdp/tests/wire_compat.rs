@@ -122,7 +122,7 @@ fn test_session_data_field_offsets() {
 
 #[test]
 fn test_ping_token_data_field_offsets() {
-    // Packed struct — fields are contiguous with no padding
+    // Packed struct - fields are contiguous with no padding
     assert_eq!(offset_of!(PingTokenData, ping_key), 0);
     assert_eq!(offset_of!(PingTokenData, expire_timestamp), 32);
     assert_eq!(offset_of!(PingTokenData, source_address), 40);
@@ -209,7 +209,7 @@ fn test_ping_token_sha256_deterministic() {
 
     let hash: [u8; 32] = sha2::Sha256::digest(token_bytes).into();
 
-    // Re-hash the same data — must be identical
+    // Re-hash the same data - must be identical
     let hash2: [u8; 32] = sha2::Sha256::digest(token_bytes).into();
 
     assert_eq!(hash, hash2);

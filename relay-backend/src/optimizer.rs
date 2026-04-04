@@ -150,7 +150,7 @@ impl RouteManager {
                 }
             }
         } else {
-            // Full — only insert if better than worst
+            // Full - only insert if better than worst
             if cost >= self.route_cost[self.num_routes - 1] {
                 return;
             }

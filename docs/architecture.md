@@ -41,10 +41,9 @@
 
 ## Overview
 
-Complete Rust rewrite of a C-based XDP relay. The relay routes UDP game
-traffic at the NIC driver level (XDP) for minimal latency, while running a
-userspace control plane for state management. The only remaining C code is a
-Linux kernel module that exposes crypto primitives to eBPF.
+UDP game relay that processes packets at the NIC driver level (XDP) for
+minimal latency, while running a userspace control plane for state management.
+The only C code is a Linux kernel module that exposes crypto primitives to eBPF.
 
 Two planes, strictly separated:
 
@@ -82,22 +81,22 @@ relay-xdp/
 |       |-- wire_compat.rs         Struct layout + crypto tests (~320 lines)
 |       +-- func_parity.rs         Functional parity tests (~782 lines)
 |
-|-- relay-backend/                 Route optimization backend (Rust port of Go relay_backend)
+|-- relay-backend/                 Route optimization backend
 |   |-- Cargo.toml                 axum, tokio, redis, serde, uuid
 |   |-- ARCHITECTURE.md            Detailed backend architecture + wire format docs
 |   |-- src/
 |   |   |-- lib.rs                 Re-exports for integration tests (~15 lines)
 |   |   |-- main.rs                Entry point, background tasks, axum server (~310 lines)
 |   |   |-- config.rs              Env vars → Config struct (~101 lines)
-|   |   |-- constants.rs           Constants ported from Go (~65 lines)
-|   |   |-- state.rs               AppState — shared state (~23 lines)
+|   |   |-- constants.rs           Relay protocol constants (~65 lines)
+|   |   |-- state.rs               AppState - shared state (~23 lines)
 |   |   |-- handlers.rs            HTTP handlers (axum Router, 15 routes) (~423 lines)
 |   |   |-- encoding.rs            Bitpacked + Simple LE encoding (~870 lines)
 |   |   |-- relay_update.rs        Parse RelayUpdateRequest, build response (~218 lines)
 |   |   |-- relay_manager.rs       In-memory relay pair state tracker (~435 lines)
 |   |   |-- cost_matrix.rs         Cost matrix bitpacked serialization (~137 lines)
 |   |   |-- route_matrix.rs        Route matrix bitpacked serialization (~347 lines)
-|   |   |-- optimizer.rs           Optimize2 — multi-threaded route finding (~455 lines)
+|   |   |-- optimizer.rs           Optimize2 - multi-threaded route finding (~455 lines)
 |   |   |-- database.rs            RelayData loaded from .bin file (~41 lines)
 |   |   +-- redis_client.rs        Redis leader election + data store (~226 lines)
 |   +-- tests/
@@ -166,7 +165,7 @@ flowchart TB
 
 `#![no_std]` crate compiled for both userspace (`x86_64-unknown-linux-gnu`)
 and eBPF (`bpfel-unknown-none`). All structs are `#[repr(C)]` to guarantee
-binary layout compatibility with the original C implementation.
+binary layout compatibility across userspace and eBPF targets.
 
 | Struct | Size | Repr | BPF Map | Purpose |
 |--------|------|------|---------|---------|
@@ -264,7 +263,7 @@ Key helpers:
 
 ### relay-backend - Route Optimization Backend
 
-Rust port of the Go `relay_backend` service. Receives latency data from all
+Route optimization backend. Receives latency data from all
 relay nodes, builds cost matrices, computes optimal routes, and serves results
 to `server_backend`. Runs as a separate async binary (tokio + axum).
 
@@ -275,22 +274,22 @@ to `server_backend`. Runs as a separate async binary (tokio + axum).
 |--------|-------|---------|
 | `main.rs` | ~310 | Entry point, 4 background tasks (tokio), axum web server |
 | `config.rs` | ~101 | Environment variables → Config struct |
-| `constants.rs` | ~65 | Constants ported from Go `modules/constants/` |
-| `state.rs` | ~23 | AppState — shared state between handlers + background tasks |
+| `constants.rs` | ~65 | Relay protocol constants |
+| `state.rs` | ~23 | AppState - shared state between handlers + background tasks |
 | `handlers.rs` | ~423 | HTTP handlers (15 routes: relay_update, route_matrix, costs, health, etc.) |
 | `encoding.rs` | ~870 | Bitpacked (WriteStream/ReadStream) + Simple LE (SimpleWriter/SimpleReader) |
 | `relay_update.rs` | ~218 | Parse RelayUpdateRequest, build RelayUpdateResponse, FNV-1a relay ID |
 | `relay_manager.rs` | ~435 | In-memory 2-level state: SourceEntry → DestEntry (RTT/jitter/loss per pair) |
 | `cost_matrix.rs` | ~137 | Triangular cost matrix bitpacked serialization (version 2) |
 | `route_matrix.rs` | ~347 | Route matrix bitpacked serialization (version 4) + analysis |
-| `optimizer.rs` | ~455 | Optimize2 — multi-threaded route finding via `std::thread::scope` |
-| `database.rs` | ~41 | RelayData — relay config loaded from .bin file |
+| `optimizer.rs` | ~455 | Optimize2 - multi-threaded route finding via `std::thread::scope` |
+| `database.rs` | ~41 | RelayData - relay config loaded from .bin file |
 | `redis_client.rs` | ~226 | Redis leader election + data store/load for horizontal scaling |
 
 Key design decisions:
 - **Parallelism**: Optimizer uses `std::thread::scope` with manual segment slicing
   (not rayon) for Phase 1 (indirect matrix) and Phase 2 (route building).
-- **Encoding**: Two separate systems — Simple LE for relay update packets (relay-xdp
+- **Encoding**: Two separate systems - Simple LE for relay update packets (relay-xdp
   ↔ relay-backend), Bitpacked for cost/route matrices (relay-backend → server_backend).
 - **Leader election**: Multiple instances can run simultaneously; leader writes to
   Redis, all instances read from leader's data to serve consistent route matrices.
@@ -370,9 +369,9 @@ Every packet (eBPF):
 ### BPF Map Schema
 
 All structs live in `relay-xdp-common/src/lib.rs`. Sizes include alignment
-padding — the `wire_compat` tests assert exact byte counts.
+padding - the `wire_compat` tests assert exact byte counts.
 
-#### `config_map` — `RelayConfig` (88 bytes, `#[repr(C)]`)
+#### `config_map` - `RelayConfig` (88 bytes, `#[repr(C)]`)
 
 | Offset | Field | Type | Byte order |
 |--------|-------|------|------------|
@@ -380,40 +379,40 @@ padding — the `wire_compat` tests assert exact byte counts.
 | 4 | `relay_public_address` | `u32` | **big-endian** |
 | 8 | `relay_internal_address` | `u32` | **big-endian** |
 | 12 | `relay_port` | `u16` | **big-endian** |
-| 14 | `relay_secret_key` | `[u8; 32]` | — |
-| 46 | `relay_backend_public_key` | `[u8; 32]` | — |
-| 78 | `gateway_ethernet_address` | `[u8; 6]` | — |
-| 84 | `use_gateway_ethernet_address` | `u8` | — |
+| 14 | `relay_secret_key` | `[u8; 32]` | - |
+| 46 | `relay_backend_public_key` | `[u8; 32]` | - |
+| 78 | `gateway_ethernet_address` | `[u8; 6]` | - |
+| 84 | `use_gateway_ethernet_address` | `u8` | - |
 
-#### `state_map` — `RelayState` (64 bytes, `#[repr(C)]`)
+#### `state_map` - `RelayState` (64 bytes, `#[repr(C)]`)
 
 | Offset | Field | Type | Notes |
 |--------|-------|------|-------|
 | 0 | `current_timestamp` | `u64` | from backend |
 | 8 | `current_magic` | `[u8; 8]` | pittle/chonkle generation |
-| 16 | `previous_magic` | `[u8; 8]` | — |
-| 24 | `next_magic` | `[u8; 8]` | — |
+| 16 | `previous_magic` | `[u8; 8]` | - |
+| 24 | `next_magic` | `[u8; 8]` | - |
 | 32 | `ping_key` | `[u8; 32]` | SHA-256 ping token key |
 
-#### `stats_map` — `RelayStats` (1200 bytes, `#[repr(C)]`)
+#### `stats_map` - `RelayStats` (1200 bytes, `#[repr(C)]`)
 
-Single field: `counters: [u64; 150]`. Per-CPU array — userspace sums across
+Single field: `counters: [u64; 150]`. Per-CPU array - userspace sums across
 CPUs. Counter indices are `RELAY_COUNTER_*` constants (0–149).
 
-#### `session_map` — `SessionKey` (16B) → `SessionData` (104B)
+#### `session_map` - `SessionKey` (16B) → `SessionData` (104B)
 
 **Key** (`#[repr(C)]`):
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `session_id` | `u64` | — |
+| `session_id` | `u64` | - |
 | `session_version` | `u64` | must be `u64` not `u8` (alignment, per C comment) |
 
 **Value** (`#[repr(C)]`, 104 bytes):
 
 | Offset | Field | Type | Byte order |
 |--------|-------|------|------------|
-| 0 | `session_private_key` | `[u8; 32]` | — |
+| 0 | `session_private_key` | `[u8; 32]` | - |
 | 32 | `expire_timestamp` | `u64` | native |
 | 40 | `session_id` | `u64` | native |
 | 48 | `payload_client_to_server_sequence` | `u64` | native |
@@ -426,17 +425,17 @@ CPUs. Counter indices are `RELAY_COUNTER_*` constants (0–149).
 | 92 | `prev_address` | `u32` | **big-endian** |
 | 96 | `next_port` | `u16` | **big-endian** |
 | 98 | `prev_port` | `u16` | **big-endian** |
-| 100 | `session_version` | `u8` | — |
-| 101 | `next_internal` | `u8` | — |
-| 102 | `prev_internal` | `u8` | — |
-| 103 | `first_hop` | `u8` | — |
+| 100 | `session_version` | `u8` | - |
+| 101 | `next_internal` | `u8` | - |
+| 102 | `prev_internal` | `u8` | - |
+| 103 | `first_hop` | `u8` | - |
 
-#### `relay_map` — `u64` → `u64`
+#### `relay_map` - `u64` → `u64`
 
 Key and value are both opaque `u64` relay identifiers. Used to check whether a
 sender is a known peer relay (for pong handling).
 
-#### `whitelist_map` — `WhitelistKey` (8B) → `WhitelistValue` (24B)
+#### `whitelist_map` - `WhitelistKey` (8B) → `WhitelistValue` (24B)
 
 **Key** (`#[repr(C)]`):
 

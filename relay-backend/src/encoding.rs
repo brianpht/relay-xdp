@@ -284,7 +284,7 @@ impl BitReader {
 }
 
 // -------------------------------------------------------
-// WriteStream — high-level serialization (write mode)
+// WriteStream - high-level serialization (write mode)
 // -------------------------------------------------------
 
 pub struct WriteStream {
@@ -425,7 +425,7 @@ impl WriteStream {
 }
 
 // -------------------------------------------------------
-// ReadStream — high-level serialization (read mode)
+// ReadStream - high-level serialization (read mode)
 // -------------------------------------------------------
 
 pub struct ReadStream {

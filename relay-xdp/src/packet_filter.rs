@@ -118,7 +118,7 @@ mod tests {
         let to = [10, 0, 0, 1];
         let c = generate_chonkle(&magic, &from, &to, 200);
 
-        // Validate ranges match the basic packet filter in relay_xdp.c
+        // Validate ranges match the basic packet filter in relay-xdp-ebpf
         assert!((0x2A..=0x2D).contains(&c[0]));
         assert!((0xC8..=0xE7).contains(&c[1]));
         assert!((0x05..=0x44).contains(&c[2]));

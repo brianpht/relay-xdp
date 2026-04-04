@@ -1,4 +1,4 @@
-//! Network Next XDP Relay — Rust implementation using Aya.
+//! Network Next XDP Relay - Rust implementation using Aya.
 //!
 //! Loads the C-compiled relay_xdp.o eBPF program and runs the userspace
 //! control plane (main thread + ping thread).

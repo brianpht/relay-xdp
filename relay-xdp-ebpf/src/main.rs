@@ -1,6 +1,6 @@
-//! Network Next Relay XDP eBPF program — Rust port using aya-ebpf.
+//! Relay XDP eBPF program using aya-ebpf.
 //!
-//! Full port of `relay_xdp.c` (~2831 lines). Runs in the kernel at the NIC
+//! Runs in the kernel at the NIC
 //! driver level, processing UDP packets for relay routing.
 //!
 //! Build: `cargo +nightly build --target bpfel-unknown-none -Z build-std=core --release`
@@ -66,7 +66,7 @@ struct UdpHdr {
 }
 
 // =====================================================================
-// BPF Maps — lowercase names to match userspace expectations
+// BPF Maps - lowercase names to match userspace expectations
 // =====================================================================
 
 #[map]
@@ -90,7 +90,7 @@ static whitelist_map: LruHashMap<WhitelistKey, WhitelistValue> =
     LruHashMap::with_max_entries(MAX_SESSIONS as u32 * 2, 0);
 
 // =====================================================================
-// Kfunc declarations — provided by relay_module.ko
+// Kfunc declarations - provided by relay_module.ko
 // =====================================================================
 
 extern "C" {
@@ -165,7 +165,7 @@ unsafe fn count_drop(stats: *mut RelayStats, pkt_size: usize) -> u32 {
 }
 
 // =====================================================================
-// Profiling helpers (D2) — compile-time feature flag
+// Profiling helpers (D2) - compile-time feature flag
 // =====================================================================
 
 /// Get monotonic nanosecond timestamp for profiling.
@@ -1551,7 +1551,7 @@ unsafe fn try_relay_xdp_filter(ctx: &XdpContext) -> Result<u32, ()> {
 
     if (*eth).h_proto == (ETH_P_IP as u16).to_be() {
         // === Parse IPv4 header ===
-        let t0 = profile_now(); // D2: profiling — start of parse
+        let t0 = profile_now(); // D2: profiling - start of parse
 
         let ip = (data + ETH_HLEN) as *mut IpHdr;
         if data + ETH_HLEN + IPV4_HLEN > data_end {
@@ -1613,7 +1613,7 @@ unsafe fn try_relay_xdp_filter(ctx: &XdpContext) -> Result<u32, ()> {
             return Ok(count_drop(stats, data_end - data));
         }
 
-        let t1 = profile_now(); // D2: profiling — after parse
+        let t1 = profile_now(); // D2: profiling - after parse
         profile_record(stats, RELAY_COUNTER_PROFILE_PARSE_NS, t0, t1);
 
         // === Basic packet filter ===
@@ -1642,7 +1642,7 @@ unsafe fn try_relay_xdp_filter(ctx: &XdpContext) -> Result<u32, ()> {
             return Ok(count_drop(stats, data_end - data));
         }
 
-        let t2 = profile_now(); // D2: profiling — after DDoS filter
+        let t2 = profile_now(); // D2: profiling - after DDoS filter
         profile_record(stats, RELAY_COUNTER_PROFILE_FILTER_NS, t1, t2);
 
         // === Get relay state ===
@@ -1667,7 +1667,7 @@ unsafe fn try_relay_xdp_filter(ctx: &XdpContext) -> Result<u32, ()> {
 
         // === Whitelist check ===
 
-        let t3 = profile_now(); // D2: profiling — before map lookup
+        let t3 = profile_now(); // D2: profiling - before map lookup
 
         let wl_key = WhitelistKey {
             address: (*ip).saddr,
@@ -1680,7 +1680,7 @@ unsafe fn try_relay_xdp_filter(ctx: &XdpContext) -> Result<u32, ()> {
         }
         let whitelist = whitelist.unwrap();
 
-        let t4 = profile_now(); // D2: profiling — after map lookup
+        let t4 = profile_now(); // D2: profiling - after map lookup
         profile_record(stats, RELAY_COUNTER_PROFILE_MAP_LOOKUP_NS, t3, t4);
 
         // === Second switch: remaining packet types ===
@@ -1698,7 +1698,7 @@ unsafe fn try_relay_xdp_filter(ctx: &XdpContext) -> Result<u32, ()> {
             _ => Ok(count_drop(stats, data_end - data)),
         };
 
-        // D2: profiling — record total time and sample count
+        // D2: profiling - record total time and sample count
         let t_end = profile_now();
         profile_record(stats, RELAY_COUNTER_PROFILE_TOTAL_NS, t0, t_end);
         increment_counter(stats, RELAY_COUNTER_PROFILE_SAMPLES);

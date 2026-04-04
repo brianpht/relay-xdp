@@ -1,4 +1,4 @@
-//! Relay backend — Rust implementation.
+//! Relay backend - Rust implementation.
 //! Port of `cmd/relay_backend/relay_backend.go`.
 
 mod config;
@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
     let config = config::read_config()?;
     let http_port = config.http_port;
 
-    // Load relay data (empty for now — will be loaded from .bin file)
+    // Load relay data (empty for now - will be loaded from .bin file)
     let relay_data = Arc::new(RelayData::empty());
 
     // Create relay manager

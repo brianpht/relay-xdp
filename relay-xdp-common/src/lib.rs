@@ -47,7 +47,7 @@ pub const RELAY_VERSION_LENGTH: usize = 32;
 pub const WHITELIST_TIMEOUT: u64 = 1000;
 pub const RELAY_ETHERNET_ADDRESS_BYTES: usize = 6;
 
-// Crypto constants (from relay_xdp.c / relay_module.c)
+// Crypto constants (from relay_module.c kfuncs)
 pub const XCHACHA20POLY1305_NONCE_SIZE: usize = 24;
 pub const CHACHA20POLY1305_KEY_SIZE: usize = 32;
 
@@ -180,7 +180,7 @@ pub const RELAY_COUNTER_SESSIONS: usize = 130;
 pub const RELAY_COUNTER_ENVELOPE_KBPS_UP: usize = 131;
 pub const RELAY_COUNTER_ENVELOPE_KBPS_DOWN: usize = 132;
 
-// Profiling counters (D2) — cumulative nanoseconds per hot-path stage.
+// Profiling counters (D2) - cumulative nanoseconds per hot-path stage.
 // Written by eBPF only when profiling is enabled (`--features profiling`).
 pub const RELAY_COUNTER_PROFILE_PARSE_NS: usize = 133;
 pub const RELAY_COUNTER_PROFILE_FILTER_NS: usize = 134;
@@ -196,7 +196,7 @@ pub const RELAY_NUM_COUNTERS: usize = 150;
 // Shared structs from relay_shared.h
 // -------------------------------------------------------
 
-/// Relay configuration — written by userspace into config_map (BPF_MAP_TYPE_ARRAY, 1 entry).
+/// Relay configuration - written by userspace into config_map (BPF_MAP_TYPE_ARRAY, 1 entry).
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct RelayConfig {
@@ -213,7 +213,7 @@ pub struct RelayConfig {
     pub use_gateway_ethernet_address: u8,
 }
 
-/// Relay runtime state — written by userspace into state_map (BPF_MAP_TYPE_ARRAY, 1 entry).
+/// Relay runtime state - written by userspace into state_map (BPF_MAP_TYPE_ARRAY, 1 entry).
 /// Updated every second with magic values, timestamp, and ping key from relay_backend response.
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -264,7 +264,7 @@ pub struct SessionData {
 #[derive(Copy, Clone, Debug)]
 pub struct PingTokenData {
     pub ping_key: [u8; RELAY_PING_KEY_BYTES],
-    /// Native byte order (NOT big endian — C code stores this directly without htonl)
+    /// Native byte order (NOT big endian - C code stores this directly without htonl)
     pub expire_timestamp: u64,
     /// Big endian
     pub source_address: u32,

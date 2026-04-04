@@ -1,4 +1,4 @@
-//! Ping thread — relay-to-relay pinging via UDP.
+//! Ping thread - relay-to-relay pinging via UDP.
 //! Port of `relay_ping.c`.
 
 use anyhow::Result;

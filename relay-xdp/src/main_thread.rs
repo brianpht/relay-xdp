@@ -1,4 +1,4 @@
-//! Main thread — HTTP POST relay update loop + BPF map management.
+//! Main thread - HTTP POST relay update loop + BPF map management.
 //! Port of `relay_main.c`.
 
 use anyhow::{bail, Context, Result};
@@ -141,7 +141,7 @@ impl MainThread {
         })
     }
 
-    /// Main loop — runs until quit signal.
+    /// Main loop - runs until quit signal.
     pub fn run(&mut self) -> Result<()> {
         log::info!("Starting main thread");
 

@@ -7,7 +7,7 @@
 //!    parsed by relay-backend's SimpleReader.
 //! 2. Relay update response packets (built by relay-backend's SimpleWriter) are
 //!    correctly parsed by relay-xdp's Reader format.
-//! 3. FNV-1a relay ID hashing is compatible with Go's implementation.
+//! 3. FNV-1a relay ID hashing produces correct values.
 //! 4. Cost matrix and route matrix bitpacked serialization round-trips correctly.
 //! 5. The optimizer produces valid routes from realistic cost data.
 //! 6. The relay manager correctly aggregates ping data and produces costs.
@@ -23,11 +23,11 @@ mod helpers;
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 // ===================================================================
-// Test 1: FNV-1a relay ID compatibility with Go
+// Test 1: FNV-1a relay ID correctness
 // ===================================================================
 
-/// Go's hash/fnv.New64a() computes FNV-1a on the byte string.
-/// We verify our Rust fnv1a_64 produces the same values.
+/// FNV-1a 64-bit hash computes the relay ID from the address string.
+/// We verify our Rust fnv1a_64 produces the expected values.
 #[test]
 fn test_fnv1a_relay_id_matches_go() {
     // FNV-1a constants
@@ -43,8 +43,8 @@ fn test_fnv1a_relay_id_matches_go() {
         hash
     }
 
-    // Known test vectors — these match Go's output for hash/fnv.New64a()
-    // go: hash := fnv.New64a(); hash.Write([]byte("10.0.0.1:40000")); hash.Sum64()
+    // Known test vectors for FNV-1a 64-bit hash
+    // fnv1a_64(b"10.0.0.1:40000") should produce a deterministic u64
     let test_cases = vec![
         ("10.0.0.1:40000", fnv1a_64(b"10.0.0.1:40000")),
         ("192.168.1.100:50000", fnv1a_64(b"192.168.1.100:50000")),
@@ -57,7 +57,7 @@ fn test_fnv1a_relay_id_matches_go() {
     }
 
     // Verify FNV-1a offset basis for empty string
-    // Go: fnv.New64a().Sum64() on empty = FNV_OFFSET (14695981039346656037)
+    // fnv1a_64(b"") == FNV_OFFSET (14695981039346656037)
     assert_eq!(fnv1a_64(b""), FNV_OFFSET);
 }
 
@@ -107,7 +107,7 @@ fn test_relay_update_request_wire_format() {
     buf.push(version);
 
     // Write address: type(1) + ip octets(4) + port(2 LE)
-    // Go's encoding.WriteAddress writes: type byte, then 4 IP octets, then LE u16 port.
+    // Wire format: type byte, then 4 IP octets, then LE u16 port.
     // relay-backend's SimpleReader::read_address reads the same way.
     buf.push(1u8); // RELAY_ADDRESS_IPV4
     buf.extend_from_slice(&relay_address.octets()); // IP octets directly
@@ -455,7 +455,7 @@ fn test_route_matrix_roundtrip() {
 }
 
 // ===================================================================
-// Test 6: Relay manager — process updates and compute costs
+// Test 6: Relay manager - process updates and compute costs
 // ===================================================================
 
 #[test]
@@ -788,7 +788,7 @@ fn test_tri_matrix_index_symmetry() {
 
 #[test]
 fn test_tri_matrix_index_values() {
-    // Verify known indices match Go's TriMatrixIndex
+    // Verify known indices match expected TriMatrixIndex values
     assert_eq!(helpers::tri_matrix_index(1, 0), 0);
     assert_eq!(helpers::tri_matrix_index(2, 0), 1);
     assert_eq!(helpers::tri_matrix_index(2, 1), 2);
@@ -1174,12 +1174,12 @@ fn test_route_hash_determinism() {
 }
 
 // ===================================================================
-// Test 16: SimpleWriter address encoding matches Go's WriteAddress
+// Test 16: SimpleWriter address encoding matches expected wire format
 // ===================================================================
 
 #[test]
 fn test_simple_writer_address_encoding_matches_go() {
-    // Go's WriteAddress for IPv4: [type=1, ip[0], ip[1], ip[2], ip[3], port_lo, port_hi]
+    // Wire format for IPv4: [type=1, ip[0], ip[1], ip[2], ip[3], port_lo, port_hi]
     let addr = SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 40000);
     let bytes = helpers::simple_write_address(&addr);
 

@@ -279,20 +279,20 @@ second.
 ### 14. Unsafe Policy
 
 **eBPF** (`relay-xdp-ebpf`):
-- `unsafe` for packet pointer access, kfunc FFI, `copy_bytes`, `read_u64_le` — all required
+- `unsafe` for packet pointer access, kfunc FFI, `copy_bytes`, `read_u64_le` - all required
 - Document bounds check before each unsafe block
 - Every `unsafe` must have a preceding verifier-visible bounds check
 
 **Userspace** (`relay-xdp`):
-- `unsafe` for libc calls (`geteuid`, `setsockopt`) and `PingTokenData` raw pointer cast — allowed
-- `unwrap()` in production paths — **forbidden**
-- `unwrap()` in tests — allowed
+- `unsafe` for libc calls (`geteuid`, `setsockopt`) and `PingTokenData` raw pointer cast - allowed
+- `unwrap()` in production paths - **forbidden**
+- `unwrap()` in tests - allowed
 
 **Kernel module** (`module/`):
 - All code is inherently unsafe (kernel C)
-- `memzero_explicit` after crypto operations — required
-- Error checking on `crypto_alloc_shash` — required
-- Self-test in `module_init` — required
+- `memzero_explicit` after crypto operations - required
+- Error checking on `crypto_alloc_shash` - required
+- Self-test in `module_init` - required
 
 ---
 

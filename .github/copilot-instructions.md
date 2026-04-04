@@ -8,11 +8,12 @@ UDP game relay, XDP packet processing at NIC driver level. Rust + eBPF + C kerne
 
 ## Workspace
 
-- `relay-xdp/` — Rust, x86_64, userspace control plane
-- `relay-xdp-common/` — Rust, `#![no_std]`, shared types (both targets)
-- `relay-xdp-ebpf/` — Rust, `bpfel-unknown-none`, eBPF data plane (**NOT a workspace member**)
-- `module/` — C, Linux kernel module (SHA-256 + XChaCha20-Poly1305 kfuncs)
-- `xtask/` — Rust, x86_64, build helper
+- `relay-xdp/` - Rust, x86_64, userspace control plane
+- `relay-xdp-common/` - Rust, `#![no_std]`, shared types (both targets)
+- `relay-xdp-ebpf/` - Rust, `bpfel-unknown-none`, eBPF data plane (**NOT a workspace member**)
+- `relay-backend/` - Rust, x86_64, route optimization backend (tokio + axum)
+- `module/` - C, Linux kernel module (SHA-256 + XChaCha20-Poly1305 kfuncs)
+- `xtask/` - Rust, x86_64, build helper
 
 ## Threading Model
 
@@ -37,10 +38,10 @@ Field layouts + byte offsets: [`docs/architecture.md` § BPF Map Schema](../docs
 
 ## Rules: `relay-xdp-common`
 
-- MUST stay `#![no_std]` — no std, no alloc, no heap
-- MUST use `#[repr(C)]` on all structs — binary layout shared with eBPF
-- MUST use fixed-size primitives only (u8–u64, fixed arrays). NEVER String, Vec, Option, pointers
-- MUST feature-gate userspace deps — `user` feature enables aya derives
+- MUST stay `#![no_std]` - no std, no alloc, no heap
+- MUST use `#[repr(C)]` on all structs - binary layout shared with eBPF
+- MUST use fixed-size primitives only (u8-u64, fixed arrays). NEVER String, Vec, Option, pointers
+- MUST feature-gate userspace deps - `user` feature enables aya derives
 - MUST run `cargo test` after any struct change (wire_compat tests verify sizes + offsets)
 
 ## Rules: `relay-xdp-ebpf`
@@ -53,7 +54,7 @@ Field layouts + byte offsets: [`docs/architecture.md` § BPF Map Schema](../docs
 - ALL pointer access: bounds-check against `ctx.data_end()` before every dereference
 - Crypto: kfuncs only (`bpf_relay_sha256`, `bpf_relay_xchacha20poly1305_decrypt`). Signatures in `relay-xdp-ebpf/src/main.rs` extern block.
 - Byte order: network headers = big-endian (`from_be()`/`to_be()`), relay payload = little-endian (byte-level reads)
-- XDP actions by cost: XDP_DROP (cheapest) → XDP_TX (reflect) → XDP_PASS (kernel stack, expensive — minimize)
+- XDP actions by cost: XDP_DROP (cheapest) → XDP_TX (reflect) → XDP_PASS (kernel stack, expensive - minimize)
 - Build: `cargo xtask build-ebpf-rust` (nightly required)
 
 ## Rules: `module/` (C kernel module)
@@ -66,21 +67,22 @@ Field layouts + byte offsets: [`docs/architecture.md` § BPF Map Schema](../docs
 ## Rules: Cross-Cutting
 
 - DDoS filter (pittle/chonkle): implemented in BOTH eBPF AND userspace (`packet_filter.rs`). MUST produce identical output. Change one → change both.
-- 14 packet types (1–14) in relay-xdp-common. Full table: [`docs/architecture.md` § Packet Handlers](../docs/architecture.md#packet-handlers)
+- 14 packet types (1-14) in relay-xdp-common. Full table: [`docs/architecture.md` § Packet Handlers](../docs/architecture.md#packet-handlers)
 - Processing order (NEVER reorder): parse → size check → DDoS filter → whitelist → session lookup → crypto → forward
 - NEVER add map lookups or crypto before DDoS filter
+- NEVER use em-dashes (—) in code comments, docs, or markdown. Use ` - ` instead.
 
 ## Conventions: Rust Userspace
 
 - Pure Rust, no C deps. Crypto: sha2, crypto_box, x25519-dalek, blake2, getrandom
 - Errors: `anyhow::Result`. NEVER `unwrap()` in production paths.
 - Config: env vars in `config.rs`, read once at startup
-- Wire encoding: `encoding::Writer`/`Reader` (little-endian). Must match C relay byte-for-byte.
+- Wire encoding: `encoding::Writer`/`Reader` (little-endian). Must match wire format byte-for-byte.
 - BPF map access: Aya typed API only
 
 ## Conventions: Rust eBPF
 
-- `unsafe` expected — document safety invariants when non-obvious
+- `unsafe` expected - document safety invariants when non-obvious
 - All helpers: small, `#[inline(always)]`
 - Handler pattern: parse → validate → map lookup → crypto verify → rewrite headers → XDP action
 - All events tracked via `increment_counter`/`add_counter` through stats_map
@@ -88,7 +90,7 @@ Field layouts + byte offsets: [`docs/architecture.md` § BPF Map Schema](../docs
 ## Conventions: C Module
 
 - Linux kernel coding style (tabs, K&R braces)
-- Minimal scope — only crypto eBPF cannot do itself
+- Minimal scope - only crypto eBPF cannot do itself
 - Self-test in `module_init`
 
 ## Build Commands
@@ -107,6 +109,8 @@ cargo xtask func-test                # functional parity (RELAY_NO_BPF=1)
 relay-xdp-common → relay-xdp (userspace)
 relay-xdp-common → relay-xdp-ebpf (eBPF) ← loads via Aya ← relay-xdp
 relay-xdp-ebpf → relay_module.ko (C) via kfuncs
+relay-xdp ↔ relay-backend (HTTP POST /relay_update, 1 Hz)
+relay-backend ← server_backend (GET /route_matrix)
 ```
 
 Change shared types or kfunc signatures → trace + rebuild across all layers.
@@ -115,3 +119,4 @@ Change shared types or kfunc signatures → trace + rebuild across all layers.
 
 - Struct layouts, data flows, crypto stack: [`docs/architecture.md`](../docs/architecture.md)
 - Performance principles, targets, budgets: [`docs/performance_design.md`](../docs/performance_design.md)
+- Relay backend architecture, wire format, encoding: [`relay-backend/ARCHITECTURE.md`](../relay-backend/ARCHITECTURE.md)

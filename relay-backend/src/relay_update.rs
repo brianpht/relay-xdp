@@ -199,7 +199,7 @@ impl RelayUpdateResponse {
     }
 }
 
-/// Compute relay ID from address string (same as Go common.RelayId).
+/// Compute relay ID from address string using FNV-1a hash.
 /// Uses FNV-1a hash of the address string.
 pub fn relay_id(address: &str) -> u64 {
     fnv1a_64(address.as_bytes())

@@ -30,7 +30,7 @@
 Currently always tries `relay_public_address` first, then falls back to
 `relay_internal_address` on failure. Each `bpf_relay_sha256` kfunc call
 costs ~200–500ns. When the ping arrives on the internal address, the first
-SHA-256 always fails — wasting one full kfunc call.
+SHA-256 always fails - wasting one full kfunc call.
 
 **Fix**: Check `(*ip).daddr` against `(*config).relay_internal_address`
 before choosing which address to try first. Most packets will verify on the
@@ -52,7 +52,7 @@ After:  match daddr → try matching first (1 SHA-256 in common case)
 
 The 32-byte SHA-256 hash comparison currently runs byte-by-byte (32
 iterations). Since both buffers are stack-allocated and naturally aligned,
-compare as `*const u64` — 4 word comparisons instead of 32 byte
+compare as `*const u64` - 4 word comparisons instead of 32 byte
 comparisons.
 
 ```rust
@@ -115,7 +115,7 @@ only checks `.is_none()` and never reads the value. Switch to
 
 ### A5. 🟢 Remove redundant bounds check in exact-size validation
 
-- **File**: `relay-xdp-ebpf/src/main.rs` — 8 occurrences
+- **File**: `relay-xdp-ebpf/src/main.rs` - 8 occurrences
 - **Lines**: 646, 720, 798, 862, 1001, 1283, 1349, 1413
 - **Savings**: 1 fewer comparison per packet handler entry
 - **Difficulty**: Low
@@ -195,10 +195,10 @@ is a bottleneck.**
 
 `bpf.lock().unwrap()` holds the mutex while iterating up to 200K sessions +
 200K whitelist entries. During this time the ping thread is **completely
-blocked** — it cannot send pings, receive pongs, or update `relay_map`.
+blocked** - it cannot send pings, receive pongs, or update `relay_map`.
 This causes periodic jitter spikes in RTT measurements.
 
-**Fix option 1** — Split lock acquisition:
+**Fix option 1** - Split lock acquisition:
 ```
 Phase 1: lock → iterate session_map → collect expired keys → unlock
 Phase 2: lock → batch delete expired sessions → unlock
@@ -206,7 +206,7 @@ Phase 3: lock → iterate whitelist_map → collect expired keys → unlock
 Phase 4: lock → batch delete expired whitelist → unlock
 ```
 
-**Fix option 2** — Separate mutexes per map:
+**Fix option 2** - Separate mutexes per map:
 Replace single `Arc<Mutex<BpfContext>>` with per-map accessors that don't
 require the global lock. The ping thread only needs `relay_map`; the main
 thread needs `state_map`, `stats_map`, `session_map`, `whitelist_map`.
@@ -476,7 +476,7 @@ cold counters on demand.
 
 **Only implement if profiling shows stats_map read is a bottleneck.** The
 schema change affects `relay-xdp-common`, `relay-xdp-ebpf`, and
-`relay-xdp` — all three must be rebuilt and tested.
+`relay-xdp` - all three must be rebuilt and tested.
 
 ---
 
@@ -530,34 +530,34 @@ decisions on which optimizations to prioritize.
 
 ## Recommended Execution Order
 
-### Batch 1 — Low-hanging fruit (no schema changes, low risk)
+### Batch 1 - Low-hanging fruit (no schema changes, low risk)
 
 All items are independent and can be done in any order.
 
-- [x] A1 — Smart address selection in `verify_ping_token`
-- [x] A2 — `bytes_equal_32` u64-word comparison
-- [x] A3 — `copy_bytes_32` u64-word copy
-- [x] A4 — `relay_map.get_ptr` instead of `.get`
-- [x] A5 — Remove redundant bounds checks (8 sites)
-- [x] A6 — Optimize MAC swap in reflect
-- [x] B2 — Stack buffer or reusable Vec in `send_ping`
-- [x] B3 — HashMap index in `process_pong`
-- [x] B4 — Single-pass `PingHistory::get_stats`
-- [x] B5 — Reuse `PingStats` vectors
-- [x] B6 — HashSet relay delta
-- [x] B7 — Reuse `update_data` Vec
-- [x] B8 — Add `Reader::skip`
-- [x] D2 — Add profiling instrumentation
+- [x] A1 - Smart address selection in `verify_ping_token`
+- [x] A2 - `bytes_equal_32` u64-word comparison
+- [x] A3 - `copy_bytes_32` u64-word copy
+- [x] A4 - `relay_map.get_ptr` instead of `.get`
+- [x] A5 - Remove redundant bounds checks (8 sites)
+- [x] A6 - Optimize MAC swap in reflect
+- [x] B2 - Stack buffer or reusable Vec in `send_ping`
+- [x] B3 - HashMap index in `process_pong`
+- [x] B4 - Single-pass `PingHistory::get_stats`
+- [x] B5 - Reuse `PingStats` vectors
+- [x] B6 - HashSet relay delta
+- [x] B7 - Reuse `update_data` Vec
+- [x] B8 - Add `Reader::skip`
+- [x] D2 - Add profiling instrumentation
 
-### Batch 2 — Medium effort, needs testing
+### Batch 2 - Medium effort, needs testing
 
-- [x] B1 — Split BPF mutex hold time
-- [x] B9 — Increase socket buffer sizes
-- [x] B10 — HTTP connection reuse with `ureq::Agent`
+- [x] B1 - Split BPF mutex hold time
+- [x] B9 - Increase socket buffer sizes
+- [x] B10 - HTTP connection reuse with `ureq::Agent`
 
-### Batch 3 — Only after profiling data confirms need
+### Batch 3 - Only after profiling data confirms need
 
-- [ ] A7 — Cache MAC in SessionData (schema change)
-- [ ] C1 — Per-CPU shash_desc in kernel module
-- [ ] D1 — Split RelayStats hot/cold (schema change)
+- [ ] A7 - Cache MAC in SessionData (schema change)
+- [ ] C1 - Per-CPU shash_desc in kernel module
+- [ ] D1 - Split RelayStats hot/cold (schema change)
 

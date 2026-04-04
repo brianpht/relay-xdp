@@ -1,4 +1,4 @@
-//! Configuration — read from environment variables.
+//! Configuration - read from environment variables.
 //! Port of `relay_config.c`.
 
 use anyhow::{bail, Context, Result};

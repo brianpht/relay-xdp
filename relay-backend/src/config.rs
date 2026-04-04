@@ -69,10 +69,10 @@ pub fn read_config() -> Result<Config> {
         .unwrap_or_default();
 
     if relay_backend_public_key.is_empty() {
-        log::warn!("RELAY_BACKEND_PUBLIC_KEY not set — relay update crypto disabled");
+        log::warn!("RELAY_BACKEND_PUBLIC_KEY not set - relay update crypto disabled");
     }
     if relay_backend_private_key.is_empty() {
-        log::warn!("RELAY_BACKEND_PRIVATE_KEY not set — relay update crypto disabled");
+        log::warn!("RELAY_BACKEND_PRIVATE_KEY not set - relay update crypto disabled");
     }
 
     log::info!("max_jitter: {}", max_jitter);

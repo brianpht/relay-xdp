@@ -1,4 +1,4 @@
-//! BPF loader — load/attach XDP program, manage BPF maps.
+//! BPF loader - load/attach XDP program, manage BPF maps.
 //! Port of `relay_bpf.c`.
 
 use anyhow::{bail, Context, Result};

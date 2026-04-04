@@ -1,4 +1,4 @@
-//! Functional parity tests — verify the Rust relay userspace behaves identically
+//! Functional parity tests - verify the Rust relay userspace behaves identically
 //! to the C XDP relay when talking to the relay_backend.
 //!
 //! These tests run in RELAY_NO_BPF=1 mode and do NOT require root or BPF.
@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-// Test keys matching Go func_test_relay.go
+// Test keys for functional parity tests
 const TEST_RELAY_PUBLIC_KEY: &str = "1nTj7bQmo8gfIDqG+o//GFsak/g1TRo4hl6XXw1JkyI=";
 const TEST_RELAY_PRIVATE_KEY: &str = "cwvK44Pr5aHI3vE3siODS7CUgdPI/l1VwjVZ2FvEyAo=";
 const TEST_RELAY_BACKEND_PUBLIC_KEY: &str = "IsjRpWEz9H7qslhWWupW4A9LIpVh+PzWoLleuXL1NUE=";
@@ -489,7 +489,7 @@ fn test_ping_history_integration() {
 #[test]
 #[ignore]
 fn test_encoding_update_payload_format() {
-    // Verify the update payload format matches what the Go backend expects
+    // Verify the update payload format matches the relay backend wire format
     let mut buf = Vec::new();
     let mut w = relay_xdp::encoding::Writer::new(&mut buf);
 
@@ -549,7 +549,7 @@ fn test_relay_manager_add_remove() {
 // ---------------------------------------------------------------------------
 
 /// A minimal mock relay_backend that accepts POST /relay_update and returns
-/// a valid response. Used to test the full update cycle without the real Go backend.
+/// a valid response. Used to test the full update cycle without a real relay-backend instance.
 fn start_mock_backend(
     relay_public_address: u32,
     relay_port: u16,
@@ -665,7 +665,7 @@ fn test_full_update_cycle_with_mock_backend() {
     )
     .unwrap();
 
-    // Run one update cycle — this will POST to our mock backend and parse the response
+    // Run one update cycle - this will POST to our mock backend and parse the response
     // We need to trigger the quit after the update so it doesn't loop
     quit.store(true, Ordering::Relaxed);
     let result = main_thread.run();

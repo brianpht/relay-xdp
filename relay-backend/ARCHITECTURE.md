@@ -2,8 +2,7 @@
 
 ## Overview
 
-`relay-backend` is a Rust port of the Go service `cmd/relay_backend/relay_backend.go`.
-It is the **route computation brain** for the entire relay network: it ingests
+`relay-backend` is the **route computation brain** for the entire relay network: it ingests
 latency data from all relay nodes, builds a cost matrix, computes optimal routes
 (route matrix), and serves the results to `server_backend`.
 
@@ -69,7 +68,7 @@ relay-backend/
 │   ├── main.rs              # Entry point, background tasks, web server (axum + tokio)
 │   ├── lib.rs               # Re-export modules for integration tests
 │   ├── config.rs            # Read env vars into Config struct
-│   ├── constants.rs         # Constants ported from modules/constants/constants.go
+│   ├── constants.rs         # Relay protocol constants
 │   ├── state.rs             # AppState: shared state between handlers + background tasks
 │   ├── handlers.rs          # HTTP handlers (axum Router)
 │   ├── encoding.rs          # Two encoding systems: Bitpacked (WriteStream/ReadStream) + Simple LE (SimpleWriter/SimpleReader)
@@ -145,7 +144,7 @@ pub struct AppState {
 
 | Route | Method | Description | Consumer |
 |---|---|---|---|
-| `/relay_update` | POST | Receive relay update packet, feed into RelayManager | relay_gateway / relay-xdp |
+| `/relay_update` | POST | Receive relay update packet, feed into RelayManager | relay-xdp |
 | `/route_matrix` | GET | Binary route matrix (bitpacked) | server_backend |
 | `/cost_matrix` | GET | Binary cost matrix (bitpacked) | debug/monitoring |
 | `/relays` | GET | CSV relay list (name, status, sessions) | debug |
@@ -162,7 +161,7 @@ pub struct AppState {
 > **Note**: The `/relay_update` handler currently only parses the request and returns
 > `200 OK` **with no response body**. The `RelayUpdateResponse` struct and `write()` method
 > are implemented but **not yet called** from the handler.
-> In production, the Go `relay_gateway` proxy receives requests from relay-xdp, decrypts them,
+> In production, a gateway proxy receives requests from relay-xdp, decrypts them,
 > forwards the decrypted payload to relay-backend, and builds the response itself.
 > When relay-xdp sends directly to relay-backend (bypassing the gateway), the handler
 > needs to be updated to build and return the response.
@@ -198,7 +197,7 @@ Example: `10.0.0.1:40000` -> `[0x01, 0x0A, 0x00, 0x00, 0x01, 0x40, 0x9C]`
 
 #### 4.2 Bitpacked Encoding - for cost matrix and route matrix
 
-`WriteStream` / `ReadStream`: bitpacked serialization compatible with Go `modules/encoding/`.
+`WriteStream` / `ReadStream`: bitpacked serialization for cost/route matrices.
 Used for large data structures (cost matrix, route matrix) transmitted to `server_backend`.
 
 ```
@@ -472,7 +471,7 @@ pub fn read_address(&mut self) -> (u32, u16) {
 
 **relay-backend** (`encoding.rs`):
 ```rust
-// SimpleWriter: writes 4 raw octets directly (Go-compatible)
+// SimpleWriter: writes 4 raw octets directly
 pub fn write_address(&mut self, addr: &SocketAddrV4) {
     self.write_uint8(1);                   // IPv4
     let octets = ip.octets();
@@ -492,13 +491,13 @@ pub fn read_address(&mut self) -> Option<SocketAddrV4> {
 }
 ```
 
-**Result**: relay-backend (SimpleWriter/SimpleReader) uses the Go-compatible format, writing
-IP octets directly. relay-xdp (Writer/Reader) writes the BE address via `write_uint32`
+**Result**: relay-backend (SimpleWriter/SimpleReader) writes IP octets directly in network
+byte order. relay-xdp (Writer/Reader) writes the BE address via `write_uint32`
 (LE storage), producing reversed byte order.
 
-**In production**, relay-xdp sends requests to relay_gateway (Go), which decrypts and
-forwards (decrypted) to relay-backend. Since relay_gateway is a Go service using Go
-encoding, the request arriving at relay-backend is already in the correct Go format.
+**In production**, relay-xdp sends requests through a gateway proxy, which decrypts and
+forwards the decrypted payload to relay-backend. The request arriving at relay-backend
+is already in the expected raw-octets format.
 
 However, **relay-xdp reads the response directly** from relay-backend. relay-backend's
 SimpleWriter writes `[0x0A, 0x00, 0x00, 0x01]` (raw octets), and relay-xdp's Reader reads
@@ -638,7 +637,6 @@ fn fnv1a_64(data: &[u8]) -> u64 {
 }
 ```
 
-100% compatible with Go `hash/fnv.New64a()`.
 
 ---
 
@@ -701,7 +699,7 @@ All configuration via environment variables:
 
 | Test | Description |
 |---|---|
-| `test_fnv1a_relay_id_matches_go` | FNV-1a hash matches Go output |
+| `test_fnv1a_relay_id_matches_go` | FNV-1a hash matches expected test vectors |
 | `test_relay_update_request_wire_format` | Parse relay update request from raw bytes |
 | `test_relay_update_request_shutting_down` | Request with relay_flags=1 |
 | `test_relay_update_response_wire_format` | Build + parse response roundtrip |
@@ -727,7 +725,7 @@ All configuration via environment variables:
 | `test_bitpacked_stream_roundtrip` | Bitpacked encoding roundtrip |
 | `test_route_matrix_analysis_basic` | Route matrix analysis metrics |
 | `test_end_to_end_relay_update_to_cost_pipeline` | Full pipeline: 4 relays -> costs -> optimize |
-| `test_simple_writer_address_encoding_matches_go` | SimpleWriter address matches Go format |
+| `test_simple_writer_address_encoding_matches_go` | SimpleWriter address matches expected wire format |
 | `test_simple_writer_none_address` | SimpleWriter NONE address encoding |
 | `test_route_hash_determinism` | Route hash is deterministic and order-dependent |
 | `test_relay_update_request_max_samples` | Request with 100 samples stress test |
