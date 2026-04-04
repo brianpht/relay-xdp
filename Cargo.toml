@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "relay-xdp-common",
     "relay-xdp",
+    "relay-backend",
     "xtask",
 ]
 exclude = [
