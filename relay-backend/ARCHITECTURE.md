@@ -11,11 +11,10 @@ flowchart LR
     RX["relay-xdp\n(N nodes)"]
     RB["relay-backend\n(Rust)"]
     SB["server_backend"]
-
-    RX -->|"HTTP POST /relay_update\n(every 1s per node)"| RB
-    RB -->|"HTTP 200 [response]"| RX
-    SB -->|"GET /route_matrix"| RB
-    RB -->|"binary route matrix"| SB
+    RX -->|" HTTP POST /relay_update\n(every 1s per node) "| RB
+    RB -->|" HTTP 200 [response] "| RX
+    SB -->|" GET /route_matrix "| RB
+    RB -->|" binary route matrix "| SB
 
     subgraph RB_INNER ["relay-backend internals"]
         direction TB
@@ -35,22 +34,22 @@ flowchart LR
 - [Overview](#overview)
 - [Module Structure](#module-structure)
 - [Component Details](#component-details)
-  - [1. Entry Point and Background Tasks](#1-entry-point-and-background-tasks-mainrs)
-  - [2. Shared State](#2-shared-state-staters)
-  - [3. HTTP Handlers](#3-http-handlers-handlersrs)
-  - [4. Encoding](#4-encoding-encodingrs)
-  - [5. Relay Update Protocol](#5-relay-update-protocol-relay_updaters)
-  - [6. Relay Manager](#6-relay-manager-relay_managerrs)
-  - [7. Cost Matrix](#7-cost-matrix-cost_matrixrs)
-  - [8. Optimizer](#8-optimizer-optimizerrs)
-  - [9. Route Matrix](#9-route-matrix-route_matrixrs)
-  - [10. Redis Leader Election](#10-redis-leader-election-redis_clientrs)
+    - [1. Entry Point and Background Tasks](#1-entry-point-and-background-tasks-mainrs)
+    - [2. Shared State](#2-shared-state-staters)
+    - [3. HTTP Handlers](#3-http-handlers-handlersrs)
+    - [4. Encoding](#4-encoding-encodingrs)
+    - [5. Relay Update Protocol](#5-relay-update-protocol-relay_updaters)
+    - [6. Relay Manager](#6-relay-manager-relay_managerrs)
+    - [7. Cost Matrix](#7-cost-matrix-cost_matrixrs)
+    - [8. Optimizer](#8-optimizer-optimizerrs)
+    - [9. Route Matrix](#9-route-matrix-route_matrixrs)
+    - [10. Redis Leader Election](#10-redis-leader-election-redis_clientrs)
 - [Interaction with relay-xdp](#interaction-with-relay-xdp)
-  - [Communication Flow Overview](#communication-flow-overview)
-  - [Wire Format: Address Encoding Mismatch](#wire-format-address-encoding-mismatch)
-  - [Relay Update Flow - Detail](#relay-update-flow---detail)
-  - [Relay Ping Flow](#relay-ping-flow-data-source-for-cost-matrix)
-  - [Relay ID Computation](#relay-id-computation)
+    - [Communication Flow Overview](#communication-flow-overview)
+    - [Wire Format: Address Encoding Mismatch](#wire-format-address-encoding-mismatch)
+    - [Relay Update Flow - Detail](#relay-update-flow---detail)
+    - [Relay Ping Flow](#relay-ping-flow-data-source-for-cost-matrix)
+    - [Relay ID Computation](#relay-id-computation)
 - [Triangular Matrix](#triangular-matrix)
 - [Configuration](#configuration)
 - [Testing](#testing)
@@ -142,29 +141,31 @@ pub struct AppState {
 
 ### 3. HTTP Handlers (`handlers.rs`)
 
-| Route | Method | Description | Consumer |
-|---|---|---|---|
-| `/relay_update` | POST | Receive relay update packet, feed into RelayManager | relay-xdp |
-| `/route_matrix` | GET | Binary route matrix (bitpacked) | server_backend |
-| `/cost_matrix` | GET | Binary cost matrix (bitpacked) | debug/monitoring |
-| `/relays` | GET | CSV relay list (name, status, sessions) | debug |
-| `/relay_data` | GET | JSON relay metadata (ids, lat/lng, datacenter) | debug |
-| `/relay_counters/{name}` | GET | HTML auto-refresh counters per relay | debug |
-| `/relay_history/{src}/{dest}` | GET | RTT/jitter/loss history between 2 relays | debug |
-| `/costs` | GET | Text costs between active relay pairs | debug |
-| `/active_relays` | GET | List of online relays | debug |
-| `/health`, `/vm_health` | GET | "OK" | load balancer |
-| `/lb_health` | GET | OK if route matrix exists and initial delay completed | load balancer |
-| `/ready` | GET | OK if delay completed and leader election ready | load balancer |
-| `/status` | GET | "relay_backend (rust)" | debug |
+| Route                         | Method | Description                                           | Consumer         |
+|-------------------------------|--------|-------------------------------------------------------|------------------|
+| `/relay_update`               | POST   | Receive relay update packet, feed into RelayManager   | relay-xdp        |
+| `/route_matrix`               | GET    | Binary route matrix (bitpacked)                       | server_backend   |
+| `/cost_matrix`                | GET    | Binary cost matrix (bitpacked)                        | debug/monitoring |
+| `/relays`                     | GET    | CSV relay list (name, status, sessions)               | debug            |
+| `/relay_data`                 | GET    | JSON relay metadata (ids, lat/lng, datacenter)        | debug            |
+| `/relay_counters/{name}`      | GET    | HTML auto-refresh counters per relay                  | debug            |
+| `/relay_history/{src}/{dest}` | GET    | RTT/jitter/loss history between 2 relays              | debug            |
+| `/costs`                      | GET    | Text costs between active relay pairs                 | debug            |
+| `/active_relays`              | GET    | List of online relays                                 | debug            |
+| `/health`, `/vm_health`       | GET    | "OK"                                                  | load balancer    |
+| `/lb_health`                  | GET    | OK if route matrix exists and initial delay completed | load balancer    |
+| `/ready`                      | GET    | OK if delay completed and leader election ready       | load balancer    |
+| `/status`                     | GET    | "relay_backend (rust)"                                | debug            |
 
-> **Note**: The `/relay_update` handler currently only parses the request and returns
-> `200 OK` **with no response body**. The `RelayUpdateResponse` struct and `write()` method
-> are implemented but **not yet called** from the handler.
-> In production, a gateway proxy receives requests from relay-xdp, decrypts them,
-> forwards the decrypted payload to relay-backend, and builds the response itself.
-> When relay-xdp sends directly to relay-backend (bypassing the gateway), the handler
-> needs to be updated to build and return the response.
+> The `/relay_update` handler supports two modes:
+> - **Direct mode** (`RELAY_BACKEND_PRIVATE_KEY` set): decrypts NaCl crypto_box request
+>   from relay-xdp, parses it, feeds into RelayManager, and returns a full
+>   `RelayUpdateResponse` body (relay list, magic bytes, ping key, keys).
+> - **Legacy mode** (no private key): receives plaintext from a gateway proxy,
+>   parses it, feeds into RelayManager, and returns a `RelayUpdateResponse` body.
+>
+> Magic bytes and ping key are generated and rotated by `MagicRotator` (every 10s).
+> See `magic.rs`.
 
 ### 4. Encoding (`encoding.rs`)
 
@@ -188,6 +189,7 @@ SimpleReader::read_address():
 ```
 
 **Wire format address (IPv4):**
+
 ```
 Byte:  [0]     [1]    [2]    [3]    [4]    [5]     [6]
        type=1  ip[0]  ip[1]  ip[2]  ip[3]  port_lo port_hi
@@ -289,6 +291,7 @@ RelayManager
 ```
 
 **`process_relay_update()`**: For each sample (relay A pings relay B with X ms RTT):
+
 - Create or update `SourceEntry` for relay A
 - Time out stale `DestEntry` records (> 30 seconds without update)
 - Write to ring buffer history for `DestEntry[B]`
@@ -296,6 +299,7 @@ RelayManager
 - Otherwise: use the latest value directly
 
 **`get_costs()`**: Builds a **triangular matrix** (n*(n-1)/2 entries):
+
 - Only computes for active relay pairs (not timed out, not shutting down)
 - rtt(i,j) = MAX(rtt(i->j), rtt(j->i)), conservative worst-case
 - jitter(i,j) = MAX(jitter(i->j), jitter(j->i))
@@ -350,6 +354,7 @@ Phase 2: Build routes (parallel per segment)
 ```
 
 Output: `Vec<RouteEntry>`, one entry per relay pair in the triangular matrix:
+
 ```rust
 pub struct RouteEntry {
     pub direct_cost: i32,                                    // Direct cost
@@ -426,11 +431,11 @@ sequenceDiagram
         Note over RX: 1. Collect BPF stats (150 counters),<br/>ping stats from ping thread,<br/>session count
         Note over RX: 2. Build binary payload<br/>(Simple LE encoding)
         Note over RX: 3. Encrypt (NaCl box)
-        RX->>RB: HTTP POST /relay_update<br/>[version + address (plaintext)]<br/>[MAC(16) + encrypted_body + nonce(24)]
+        RX ->> RB: HTTP POST /relay_update<br/>[version + address (plaintext)]<br/>[MAC(16) + encrypted_body + nonce(24)]
         Note over RB: 4. Parse request (SimpleReader)
         Note over RB: 5. Lookup relay by FNV-1a(address)
         Note over RB: 6. RelayManager.process_relay_update()
-        RB-->>RX: HTTP 200 [binary response body]
+        RB -->> RX: HTTP 200 [binary response body]
         Note over RX: 8. Parse response (relay-xdp Reader)
         Note over RX: 9. Verify address + keys
         Note over RX: 10. Update BPF state_map<br/>(magic, timestamp, ping_key)
@@ -445,13 +450,14 @@ sequenceDiagram
 
 The two crates use **different IP address representations**:
 
-| | relay-backend (SimpleWriter/SimpleReader) | relay-xdp (Writer/Reader) |
-|---|---|---|
-| **IP storage** | 4 raw octets `[10, 0, 0, 1]` | u32 host-order, written via `write_uint32(addr.to_be())` |
-| **Wire format** | `[type, ip[0], ip[1], ip[2], ip[3], port_lo, port_hi]` | `[type, LE(addr_be), port_lo, port_hi]` |
-| **Example 10.0.0.1** | `[0x01, 0x0A, 0x00, 0x00, 0x01, 0x40, 0x9C]` | `[0x01, 0x01, 0x00, 0x00, 0x0A, 0x40, 0x9C]` (reversed!) |
+|                      | relay-backend (SimpleWriter/SimpleReader)              | relay-xdp (Writer/Reader)                                |
+|----------------------|--------------------------------------------------------|----------------------------------------------------------|
+| **IP storage**       | 4 raw octets `[10, 0, 0, 1]`                           | u32 host-order, written via `write_uint32(addr.to_be())` |
+| **Wire format**      | `[type, ip[0], ip[1], ip[2], ip[3], port_lo, port_hi]` | `[type, LE(addr_be), port_lo, port_hi]`                  |
+| **Example 10.0.0.1** | `[0x01, 0x0A, 0x00, 0x00, 0x01, 0x40, 0x9C]`           | `[0x01, 0x01, 0x00, 0x00, 0x0A, 0x40, 0x9C]` (reversed!) |
 
 **relay-xdp** (`encoding.rs`):
+
 ```rust
 // Writer: writes address as BE u32 -> stored as LE bytes
 pub fn write_address_ipv4(&mut self, address_be: u32, port: u16) {
@@ -470,6 +476,7 @@ pub fn read_address(&mut self) -> (u32, u16) {
 ```
 
 **relay-backend** (`encoding.rs`):
+
 ```rust
 // SimpleWriter: writes 4 raw octets directly
 pub fn write_address(&mut self, addr: &SocketAddrV4) {
@@ -512,22 +519,22 @@ reading them as a LE u32 and then calling `from_be` yields the correct result.
 ```rust
 // relay-xdp main_thread.rs::update()
 let mut update_data = Vec::with_capacity(10 * 1024 * 1024);
-let mut w = Writer::new(&mut update_data);
+let mut w = Writer::new( & mut update_data);
 
 w.write_uint8(1);                           // version
 w.write_uint8(RELAY_ADDRESS_IPV4);           // address type
-w.write_uint32(self.config.relay_public_address.to_be());  // IP (BE -> LE storage)
-w.write_uint16(self.config.relay_port);      // port (LE)
+w.write_uint32( self .config.relay_public_address.to_be());  // IP (BE -> LE storage)
+w.write_uint16( self .config.relay_port);      // port (LE)
 
 w.write_uint64(local_timestamp);             // current_time
-w.write_uint64(self.start_time);             // start_time
+w.write_uint64( self .start_time);             // start_time
 
 w.write_uint32(ping_stats.num_relays as u32);  // num_samples
 for i in 0..ping_stats.num_relays {
-    w.write_uint64(ping_stats.relay_ids[i]);
-    w.write_uint8(rtt);                      // ceil, clamped 0..255
-    w.write_uint8(jitter);                   // ceil, clamped 0..255
-    w.write_uint16(packet_loss);             // (loss/100) * 65535, clamped 0..65535
+w.write_uint64(ping_stats.relay_ids[i]);
+w.write_uint8(rtt);                      // ceil, clamped 0..255
+w.write_uint8(jitter);                   // ceil, clamped 0..255
+w.write_uint16(packet_loss);             // (loss/100) * 65535, clamped 0..65535
 }
 
 // ... counters, flags, version, 150 counters ...
@@ -540,16 +547,16 @@ for i in 0..ping_stats.num_relays {
 
 ```rust
 // handlers.rs: relay_update_handler()
-let request = RelayUpdateRequest::read(&body)?;
+let request = RelayUpdateRequest::read( & body) ?;
 let addr_str = format!("{}", request.address);     // "10.0.0.1:40000"
-let rid = relay_id(&addr_str);                     // FNV-1a hash
-let relay_index = relay_data.relay_id_to_index.get(&rid)?;
+let rid = relay_id( & addr_str);                     // FNV-1a hash
+let relay_index = relay_data.relay_id_to_index.get( & rid) ?;
 
 state.relay_manager.process_relay_update(
-    current_time, rid, relay_name, relay_address,
-    request.session_count, &request.relay_version, request.relay_flags,
-    num_samples, &request.sample_relay_id, &request.sample_rtt,
-    &request.sample_jitter, &request.sample_packet_loss, &request.relay_counters,
+current_time, rid, relay_name, relay_address,
+request.session_count, & request.relay_version, request.relay_flags,
+num_samples, & request.sample_relay_id, & request.sample_rtt,
+& request.sample_jitter, & request.sample_packet_loss, & request.relay_counters,
 );
 ```
 
@@ -564,21 +571,21 @@ let backend_timestamp = r.read_uint64();
 
 let num_relays = r.read_uint32() as usize;
 for _ in 0..num_relays {
-    let id = r.read_uint64();
-    let addr_type = r.read_uint8();          // must be 1 (IPv4)
-    let addr_be = r.read_uint32();           // LE -> value = octets as LE u32
-    let addr = u32::from_be(addr_be);        // convert -> host order
-    let port = r.read_uint16();
-    let internal = r.read_uint8();
-    relay_ping_set.push(id, addr, port, internal);
+let id = r.read_uint64();
+let addr_type = r.read_uint8();          // must be 1 (IPv4)
+let addr_be = r.read_uint32();           // LE -> value = octets as LE u32
+let addr = u32::from_be(addr_be);        // convert -> host order
+let port = r.read_uint16();
+let internal = r.read_uint8();
+relay_ping_set.push(id, addr, port, internal);
 }
 
 let _target_version = r.read_string(RELAY_VERSION_LENGTH);
 
 // Magic values (raw bytes, no endian conversion needed)
-r.read_bytes_into(&mut next_magic);          // 8 bytes
-r.read_bytes_into(&mut current_magic);       // 8 bytes
-r.read_bytes_into(&mut previous_magic);      // 8 bytes
+r.read_bytes_into( & mut next_magic);          // 8 bytes
+r.read_bytes_into( & mut current_magic);       // 8 bytes
+r.read_bytes_into( & mut previous_magic);      // 8 bytes
 
 // Expected address verification
 let (expected_public_address, expected_port) = r.read_address();
@@ -586,15 +593,15 @@ assert!(self.config.relay_public_address == expected_public_address);
 assert!(self.config.relay_port == expected_port);
 
 // Keys + tokens
-r.read_bytes_into(&mut expected_relay_pk);   // 32 bytes
-r.read_bytes_into(&mut _expected_backend_pk); // 32 bytes
+r.read_bytes_into( & mut expected_relay_pk);   // 32 bytes
+r.read_bytes_into( & mut _expected_backend_pk); // 32 bytes
 let _dummy = r.read_bytes(RELAY_ENCRYPTED_ROUTE_TOKEN_BYTES);  // 111 bytes
-r.read_bytes_into(&mut ping_key);            // 32 bytes
+r.read_bytes_into( & mut ping_key);            // 32 bytes
 
 // Update BPF state
 state_map.set(0, RelayState {
-    current_timestamp: backend_timestamp,
-    current_magic, previous_magic, next_magic, ping_key,
+current_timestamp: backend_timestamp,
+current_magic, previous_magic, next_magic, ping_key,
 });
 ```
 
@@ -605,13 +612,11 @@ sequenceDiagram
     participant A as relay-xdp A<br/>(ping_thread)
     participant B as relay-xdp B<br/>(eBPF/XDP)
     participant RB as relay-backend
-
-    A->>B: PING (67B UDP) type=11<br/>pittle(2) + chonkle(15)<br/>sequence(8), expire_timestamp(8)<br/>internal_flag(1), SHA-256 token(32)
+    A ->> B: PING (67B UDP) type=11<br/>pittle(2) + chonkle(15)<br/>sequence(8), expire_timestamp(8)<br/>internal_flag(1), SHA-256 token(32)
     Note over B: 1. Basic packet filter (pittle/chonkle)<br/>2. SHA-256(PingTokenData) == token<br/>3. expire > current_timestamp
-    B-->>A: PONG (26B UDP) type=12<br/>pittle(2) + chonkle(15), sequence(8)<br/>[XDP_TX: swap src/dst MAC, IP, UDP]
-
+    B -->> A: PONG (26B UDP) type=12<br/>pittle(2) + chonkle(15), sequence(8)<br/>[XDP_TX: swap src/dst MAC, IP, UDP]
     Note over A: process_pong():<br/>PingHistory.pong_received(seq, t)<br/>RTT = t_recv - t_send<br/>compute jitter, packet_loss<br/>PingStats -> StatsMessage -> main_thread
-    A->>RB: (via main_thread HTTP POST /relay_update)
+    A ->> RB: (via main_thread HTTP POST /relay_update)
     Note over RB: RelayManager.process_relay_update()<br/>SourceEntry[A].DestEntry[B].rtt = X ms<br/>get_costs(): cost(A,B) = MAX(rtt(A->B), rtt(B->A))<br/>Optimize2(): best routes through A, B, and other relays
 ```
 
@@ -636,7 +641,6 @@ fn fnv1a_64(data: &[u8]) -> u64 {
     hash
 }
 ```
-
 
 ---
 
@@ -675,19 +679,19 @@ tri_matrix_index(i, j):
 
 All configuration via environment variables:
 
-| Env Var | Type | Default | Purpose |
-|---|---|---|---|
-| `HTTP_PORT` | u16 | 80 | HTTP server port |
-| `MAX_JITTER` | i32 | 1000 | Maximum jitter threshold (ms) |
-| `MAX_PACKET_LOSS` | f32 | 100.0 | Maximum packet loss threshold (%) |
-| `ROUTE_MATRIX_INTERVAL_MS` | u64 | 1000 | Route matrix computation interval (ms) |
-| `INITIAL_DELAY` | u64 | 15 | Delay before service becomes ready (s) |
-| `ENABLE_RELAY_HISTORY` | bool | false | Use ring buffer history for RTT |
-| `REDIS_HOSTNAME` | string | 127.0.0.1:6379 | Redis address |
-| `INTERNAL_ADDRESS` | string | 127.0.0.1 | Internal address for Redis registration |
-| `INTERNAL_PORT` | string | = HTTP_PORT | Internal port for Redis registration |
-| `RELAY_BACKEND_PUBLIC_KEY` | base64 | none | Public key for crypto (optional) |
-| `RELAY_BACKEND_PRIVATE_KEY` | base64 | none | Private key for crypto (optional) |
+| Env Var                     | Type   | Default        | Purpose                                 |
+|-----------------------------|--------|----------------|-----------------------------------------|
+| `HTTP_PORT`                 | u16    | 80             | HTTP server port                        |
+| `MAX_JITTER`                | i32    | 1000           | Maximum jitter threshold (ms)           |
+| `MAX_PACKET_LOSS`           | f32    | 100.0          | Maximum packet loss threshold (%)       |
+| `ROUTE_MATRIX_INTERVAL_MS`  | u64    | 1000           | Route matrix computation interval (ms)  |
+| `INITIAL_DELAY`             | u64    | 15             | Delay before service becomes ready (s)  |
+| `ENABLE_RELAY_HISTORY`      | bool   | false          | Use ring buffer history for RTT         |
+| `REDIS_HOSTNAME`            | string | 127.0.0.1:6379 | Redis address                           |
+| `INTERNAL_ADDRESS`          | string | 127.0.0.1      | Internal address for Redis registration |
+| `INTERNAL_PORT`             | string | = HTTP_PORT    | Internal port for Redis registration    |
+| `RELAY_BACKEND_PUBLIC_KEY`  | base64 | none           | Public key for crypto (optional)        |
+| `RELAY_BACKEND_PRIVATE_KEY` | base64 | none           | Private key for crypto (optional)       |
 
 ---
 
@@ -697,38 +701,38 @@ All configuration via environment variables:
 
 18 test groups, **30 `#[test]` functions** verifying wire format compatibility and correctness:
 
-| Test | Description |
-|---|---|
-| `test_fnv1a_relay_id_matches_go` | FNV-1a hash matches expected test vectors |
-| `test_relay_update_request_wire_format` | Parse relay update request from raw bytes |
-| `test_relay_update_request_shutting_down` | Request with relay_flags=1 |
-| `test_relay_update_response_wire_format` | Build + parse response roundtrip |
-| `test_relay_update_response_with_internal_address` | Response with internal address |
-| `test_cost_matrix_roundtrip` | Cost matrix write/read roundtrip |
-| `test_cost_matrix_empty_relays` | Cost matrix with no relays |
-| `test_route_matrix_roundtrip` | Route matrix write/read roundtrip |
-| `test_relay_manager_process_update_and_get_costs` | RelayManager cost computation |
-| `test_relay_manager_shutting_down_excludes_from_active` | Shutting-down relay filtered out |
-| `test_relay_manager_timeout_expired_entries` | Expired relay timeout (30s) |
-| `test_relay_manager_with_history_enabled` | History ring buffer mode |
-| `test_relay_manager_packet_loss_filtering` | Filter relay pairs with high packet loss |
-| `test_relay_manager_jitter_filtering` | Filter relay pairs with high jitter |
-| `test_optimizer_no_relays` | Optimize2 with empty input |
-| `test_optimizer_two_relays_direct_only` | Optimize2 direct route (2 relays) |
-| `test_optimizer_three_relays_finds_indirect_route` | Optimize2 finds indirect route |
-| `test_optimizer_no_improvement_skips_indirect` | Optimize2 skips when no improvement |
-| `test_optimizer_stress_20_relays` | Optimize2 stress test with 20 relays, multi-segment |
-| `test_tri_matrix_length` | Triangular matrix length formula |
-| `test_tri_matrix_index_symmetry` | tri_matrix_index(i,j) == tri_matrix_index(j,i) |
-| `test_tri_matrix_index_values` | Triangular matrix known index values |
-| `test_relays_csv_format` | CSV output format verification |
-| `test_bitpacked_stream_roundtrip` | Bitpacked encoding roundtrip |
-| `test_route_matrix_analysis_basic` | Route matrix analysis metrics |
-| `test_end_to_end_relay_update_to_cost_pipeline` | Full pipeline: 4 relays -> costs -> optimize |
-| `test_simple_writer_address_encoding_matches_go` | SimpleWriter address matches expected wire format |
-| `test_simple_writer_none_address` | SimpleWriter NONE address encoding |
-| `test_route_hash_determinism` | Route hash is deterministic and order-dependent |
-| `test_relay_update_request_max_samples` | Request with 100 samples stress test |
+| Test                                                    | Description                                         |
+|---------------------------------------------------------|-----------------------------------------------------|
+| `test_fnv1a_relay_id_matches_go`                        | FNV-1a hash matches expected test vectors           |
+| `test_relay_update_request_wire_format`                 | Parse relay update request from raw bytes           |
+| `test_relay_update_request_shutting_down`               | Request with relay_flags=1                          |
+| `test_relay_update_response_wire_format`                | Build + parse response roundtrip                    |
+| `test_relay_update_response_with_internal_address`      | Response with internal address                      |
+| `test_cost_matrix_roundtrip`                            | Cost matrix write/read roundtrip                    |
+| `test_cost_matrix_empty_relays`                         | Cost matrix with no relays                          |
+| `test_route_matrix_roundtrip`                           | Route matrix write/read roundtrip                   |
+| `test_relay_manager_process_update_and_get_costs`       | RelayManager cost computation                       |
+| `test_relay_manager_shutting_down_excludes_from_active` | Shutting-down relay filtered out                    |
+| `test_relay_manager_timeout_expired_entries`            | Expired relay timeout (30s)                         |
+| `test_relay_manager_with_history_enabled`               | History ring buffer mode                            |
+| `test_relay_manager_packet_loss_filtering`              | Filter relay pairs with high packet loss            |
+| `test_relay_manager_jitter_filtering`                   | Filter relay pairs with high jitter                 |
+| `test_optimizer_no_relays`                              | Optimize2 with empty input                          |
+| `test_optimizer_two_relays_direct_only`                 | Optimize2 direct route (2 relays)                   |
+| `test_optimizer_three_relays_finds_indirect_route`      | Optimize2 finds indirect route                      |
+| `test_optimizer_no_improvement_skips_indirect`          | Optimize2 skips when no improvement                 |
+| `test_optimizer_stress_20_relays`                       | Optimize2 stress test with 20 relays, multi-segment |
+| `test_tri_matrix_length`                                | Triangular matrix length formula                    |
+| `test_tri_matrix_index_symmetry`                        | tri_matrix_index(i,j) == tri_matrix_index(j,i)      |
+| `test_tri_matrix_index_values`                          | Triangular matrix known index values                |
+| `test_relays_csv_format`                                | CSV output format verification                      |
+| `test_bitpacked_stream_roundtrip`                       | Bitpacked encoding roundtrip                        |
+| `test_route_matrix_analysis_basic`                      | Route matrix analysis metrics                       |
+| `test_end_to_end_relay_update_to_cost_pipeline`         | Full pipeline: 4 relays -> costs -> optimize        |
+| `test_simple_writer_address_encoding_matches_go`        | SimpleWriter address matches expected wire format   |
+| `test_simple_writer_none_address`                       | SimpleWriter NONE address encoding                  |
+| `test_route_hash_determinism`                           | Route hash is deterministic and order-dependent     |
+| `test_relay_update_request_max_samples`                 | Request with 100 samples stress test                |
 
 ### Unit Tests (`src/encoding.rs`)
 
@@ -747,18 +751,18 @@ cargo test -p relay-backend -- --test-threads=1  # Sequential (if needed)
 
 ## Dependencies
 
-| Crate | Version | Purpose |
-|---|---|---|
-| `axum` | 0.8 | HTTP web framework |
-| `tokio` | 1 (full) | Async runtime |
-| `tower-http` | 0.6 | HTTP middleware (trace) |
-| `redis` | 0.27 | Redis client (tokio-comp) |
-| `serde` + `serde_json` | 1 | JSON serialization (relay_data endpoint) |
-| `base64` | 0.22 | Decode env var keys |
-| `uuid` | 1 (v4) | Instance ID for leader election |
-| `env_logger` + `log` | 0.11 / 0.4 | Logging |
-| `anyhow` | 1 | Error handling |
-| `num_cpus` | 1 | Detect CPU count for parallelism |
+| Crate                  | Version    | Purpose                                  |
+|------------------------|------------|------------------------------------------|
+| `axum`                 | 0.8        | HTTP web framework                       |
+| `tokio`                | 1 (full)   | Async runtime                            |
+| `tower-http`           | 0.6        | HTTP middleware (trace)                  |
+| `redis`                | 0.27       | Redis client (tokio-comp)                |
+| `serde` + `serde_json` | 1          | JSON serialization (relay_data endpoint) |
+| `base64`               | 0.22       | Decode env var keys                      |
+| `uuid`                 | 1 (v4)     | Instance ID for leader election          |
+| `env_logger` + `log`   | 0.11 / 0.4 | Logging                                  |
+| `anyhow`               | 1          | Error handling                           |
+| `num_cpus`             | 1          | Detect CPU count for parallelism         |
 
 > **Note**: The optimizer uses `std::thread::scope` (standard library) for parallel
 > processing, not rayon.

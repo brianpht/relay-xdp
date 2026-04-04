@@ -1,6 +1,7 @@
 //! HTTP handlers for the relay backend.
 //! Port of `cmd/relay_backend/relay_backend.go` handler functions.
 
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 
 use axum::{
@@ -11,7 +12,9 @@ use axum::{
     Router,
 };
 
-use crate::relay_update::{relay_id, RelayUpdateRequest};
+use crate::constants::*;
+use crate::magic::MagicSnapshot;
+use crate::relay_update::{relay_id, RelayUpdateRequest, RelayUpdateResponse};
 use crate::route_matrix::RouteMatrix;
 use crate::state::AppState;
 
@@ -50,7 +53,22 @@ async fn relay_update_handler(
         return StatusCode::BAD_REQUEST.into_response();
     }
 
-    let request = match RelayUpdateRequest::read(&body) {
+    // Decrypt if backend private key is configured (direct mode).
+    // Otherwise pass through plaintext (legacy gateway proxy mode).
+    let has_crypto = state.config.relay_backend_private_key.len() == 32;
+    let plaintext = if has_crypto {
+        match decrypt_relay_request(&state, &body) {
+            Ok(p) => p,
+            Err(e) => {
+                log::error!("could not decrypt relay update: {}", e);
+                return StatusCode::BAD_REQUEST.into_response();
+            }
+        }
+    } else {
+        body.to_vec()
+    };
+
+    let request = match RelayUpdateRequest::read(&plaintext) {
         Ok(r) => r,
         Err(e) => {
             log::error!("could not read relay update: {}", e);
@@ -103,7 +121,171 @@ async fn relay_update_handler(
         &request.relay_counters,
     );
 
-    StatusCode::OK.into_response()
+    // Rotate magic bytes (cheap check, actual rotation every 10s)
+    state.magic_rotator.rotate_if_needed();
+
+    // Build response body
+    let magic = state.magic_rotator.get();
+    let response_bytes = build_relay_response(&state, relay_index, &request, &magic);
+
+    (StatusCode::OK, response_bytes).into_response()
+}
+
+// -------------------------------------------------------
+// Request decryption (NaCl crypto_box / SalsaBox)
+// -------------------------------------------------------
+
+/// Decrypt an encrypted relay update request.
+///
+/// Wire format from relay-xdp:
+///   [header 8B plaintext] + [MAC 16B] + [ciphertext] + [nonce 24B]
+///
+/// Header: version(1) + addr_type(1) + ip(4) + port(2)
+fn decrypt_relay_request(state: &AppState, body: &[u8]) -> Result<Vec<u8>, String> {
+    const HEADER_SIZE: usize = 8; // version(1) + addr_type(1) + ip(4) + port(2)
+    const MAC_SIZE: usize = 16;
+    const NONCE_SIZE: usize = 24;
+    const MIN_ENCRYPTED_SIZE: usize = HEADER_SIZE + MAC_SIZE + NONCE_SIZE + 1;
+
+    if body.len() < MIN_ENCRYPTED_SIZE {
+        return Err(format!(
+            "body too small for encrypted request: {} < {}",
+            body.len(),
+            MIN_ENCRYPTED_SIZE
+        ));
+    }
+
+    let header = &body[..HEADER_SIZE];
+    let mac = &body[HEADER_SIZE..HEADER_SIZE + MAC_SIZE];
+    let nonce_start = body.len() - NONCE_SIZE;
+    let ciphertext = &body[HEADER_SIZE + MAC_SIZE..nonce_start];
+    let nonce_bytes = &body[nonce_start..];
+
+    // Parse address from plaintext header to look up relay's public key.
+    // Header bytes: [version, addr_type, ip[0], ip[1], ip[2], ip[3], port_lo, port_hi]
+    // On LE machines, relay-xdp's LE(BE(host)) produces raw IP octets (network order).
+    let addr_type = header[1];
+    if addr_type != IP_ADDRESS_IPV4 as u8 {
+        return Err(format!("unsupported address type in header: {}", addr_type));
+    }
+
+    let ip = Ipv4Addr::new(header[2], header[3], header[4], header[5]);
+    let port = u16::from_le_bytes([header[6], header[7]]);
+    let addr = SocketAddrV4::new(ip, port);
+    let addr_str = format!("{}", addr);
+    let rid = relay_id(&addr_str);
+
+    let relay_index = state
+        .relay_data
+        .relay_id_to_index
+        .get(&rid)
+        .ok_or_else(|| format!("unknown relay for decrypt: {:016x} ({})", rid, addr_str))?;
+
+    if *relay_index >= state.relay_data.relay_public_keys.len() {
+        return Err(format!(
+            "no public key for relay index {} ({})",
+            relay_index, addr_str
+        ));
+    }
+
+    let relay_pk_bytes = state.relay_data.relay_public_keys[*relay_index];
+    let backend_sk_bytes: [u8; 32] = state.config.relay_backend_private_key[..32]
+        .try_into()
+        .map_err(|_| "invalid backend private key length".to_string())?;
+
+    // Build SalsaBox: server (backend) decrypts using client (relay) public key
+    let relay_pk = crypto_box::PublicKey::from(relay_pk_bytes);
+    let backend_sk = crypto_box::SecretKey::from(backend_sk_bytes);
+    let salsa_box = crypto_box::SalsaBox::new(&relay_pk, &backend_sk);
+
+    let nonce = crypto_box::Nonce::from_slice(nonce_bytes);
+    let tag = crypto_box::aead::Tag::<crypto_box::SalsaBox>::from_slice(mac);
+
+    let mut plaintext_body = ciphertext.to_vec();
+
+    use crypto_box::aead::AeadInPlace;
+    salsa_box
+        .decrypt_in_place_detached(nonce, b"", &mut plaintext_body, tag)
+        .map_err(|_| "crypto_box decrypt failed - invalid key or corrupted data".to_string())?;
+
+    // Reconstruct full plaintext: header + decrypted body
+    let mut full = Vec::with_capacity(HEADER_SIZE + plaintext_body.len());
+    full.extend_from_slice(header);
+    full.extend_from_slice(&plaintext_body);
+    Ok(full)
+}
+
+// -------------------------------------------------------
+// Response building
+// -------------------------------------------------------
+
+/// Build a RelayUpdateResponse for the requesting relay.
+fn build_relay_response(
+    state: &AppState,
+    relay_index: usize,
+    request: &RelayUpdateRequest,
+    magic: &MagicSnapshot,
+) -> Vec<u8> {
+    let relay_data = &state.relay_data;
+    let current_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_secs() as i64;
+
+    // Build relay list: all active relays except the requesting relay.
+    let active_relays = state.relay_manager.get_active_relays(current_time);
+    let requesting_rid = relay_id(&format!("{}", request.address));
+
+    let mut relay_ids = Vec::new();
+    let mut relay_addresses = Vec::new();
+    let mut relay_internal = Vec::new();
+
+    for relay in &active_relays {
+        if relay.id == requesting_rid {
+            continue;
+        }
+        relay_ids.push(relay.id);
+        relay_addresses.push(relay.address);
+        // Internal flag not tracked per-relay yet; default to 0 (external).
+        relay_internal.push(0u8);
+    }
+
+    // Relay public key: use stored key if available, otherwise zeros.
+    let expected_relay_pk = if relay_index < relay_data.relay_public_keys.len() {
+        relay_data.relay_public_keys[relay_index]
+    } else {
+        [0u8; 32]
+    };
+
+    // Backend public key
+    let mut expected_backend_pk = [0u8; 32];
+    if state.config.relay_backend_public_key.len() == 32 {
+        expected_backend_pk.copy_from_slice(&state.config.relay_backend_public_key);
+    }
+
+    let response = RelayUpdateResponse {
+        version: 1,
+        timestamp: current_time as u64,
+        num_relays: relay_ids.len() as u32,
+        relay_ids,
+        relay_addresses,
+        relay_internal,
+        target_version: String::new(),
+        upcoming_magic: magic.upcoming_magic,
+        current_magic: magic.current_magic,
+        previous_magic: magic.previous_magic,
+        expected_public_address: request.address,
+        // Internal address not tracked per-relay yet. relay-xdp only
+        // validates when has_internal != 0, so 0 is safe.
+        expected_has_internal_address: 0,
+        expected_internal_address: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0),
+        expected_relay_public_key: expected_relay_pk,
+        expected_relay_backend_public_key: expected_backend_pk,
+        test_token: [0u8; ENCRYPTED_ROUTE_TOKEN_BYTES],
+        ping_key: magic.ping_key,
+    };
+
+    response.write()
 }
 
 async fn relays_handler(State(state): State<Arc<AppState>>) -> Response {

@@ -32,3 +32,6 @@ x25519-dalek = { version = "2", features = ["static_secrets"] }
 blake2 = "0.10"
 getrandom = "0.4.2"
 
+[dev-dependencies]
+relay-backend = { path = "../relay-backend" }
+

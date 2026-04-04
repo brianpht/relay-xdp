@@ -7,6 +7,7 @@ mod cost_matrix;
 mod database;
 mod encoding;
 mod handlers;
+mod magic;
 mod optimizer;
 mod redis_client;
 mod relay_manager;
@@ -20,6 +21,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::cost_matrix::{CostMatrix, COST_MATRIX_VERSION_WRITE};
 use crate::database::RelayData;
+use crate::magic::MagicRotator;
 use crate::redis_client::RedisLeaderElection;
 use crate::relay_manager::RelayManager;
 use crate::route_matrix::{RouteMatrix, ROUTE_MATRIX_VERSION_WRITE};
@@ -47,6 +49,9 @@ async fn main() -> anyhow::Result<()> {
         config.initial_delay,
     ));
 
+    // Create magic rotator (generates magic bytes + ping key for DDoS filter)
+    let magic_rotator = Arc::new(MagicRotator::new());
+
     // Create shared state
     let state = Arc::new(AppState {
         config: Arc::new(config),
@@ -58,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
         start_time: SystemTime::now(),
         delay_completed: AtomicBool::new(false),
         leader_election: leader_election.clone(),
+        magic_rotator,
     });
 
     // Spawn background tasks

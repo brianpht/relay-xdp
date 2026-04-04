@@ -11,26 +11,26 @@
 - [Workspace Layout](#workspace-layout)
 - [System Diagram](#system-diagram)
 - [Crate Structure](#crate-structure)
-  - [relay-xdp-common - Shared Types](#relay-xdp-common---shared-types)
-  - [relay-xdp - Userspace Control Plane](#relay-xdp---userspace-control-plane)
-  - [relay-xdp-ebpf - eBPF Data Plane](#relay-xdp-ebpf---ebpf-data-plane)
-  - [relay-backend - Route Optimization Backend](#relay-backend---route-optimization-backend)
-  - [module - Kernel Module (C)](#module---kernel-module-c)
-  - [xtask - Build Helper](#xtask---build-helper)
+    - [relay-xdp-common - Shared Types](#relay-xdp-common---shared-types)
+    - [relay-xdp - Userspace Control Plane](#relay-xdp---userspace-control-plane)
+    - [relay-xdp-ebpf - eBPF Data Plane](#relay-xdp-ebpf---ebpf-data-plane)
+    - [relay-backend - Route Optimization Backend](#relay-backend---route-optimization-backend)
+    - [module - Kernel Module (C)](#module---kernel-module-c)
+    - [xtask - Build Helper](#xtask---build-helper)
 - [BPF Maps](#bpf-maps)
-  - [Map Overview](#map-overview)
-  - [Map Lifecycle](#map-lifecycle)
-  - [BPF Map Schema](#bpf-map-schema)
+    - [Map Overview](#map-overview)
+    - [Map Lifecycle](#map-lifecycle)
+    - [BPF Map Schema](#bpf-map-schema)
 - [Data Flows](#data-flows)
-  - [Flow 1 - Relay Registration and Health](#flow-1---relay-registration-and-health)
-  - [Flow 2 - Relay-to-Relay Ping](#flow-2---relay-to-relay-ping)
-  - [Flow 3 - Game Traffic Routing](#flow-3---game-traffic-routing)
-  - [Flow 4 - Session Lifecycle](#flow-4---session-lifecycle)
+    - [Flow 1 - Relay Registration and Health](#flow-1---relay-registration-and-health)
+    - [Flow 2 - Relay-to-Relay Ping](#flow-2---relay-to-relay-ping)
+    - [Flow 3 - Game Traffic Routing](#flow-3---game-traffic-routing)
+    - [Flow 4 - Session Lifecycle](#flow-4---session-lifecycle)
 - [Packet Processing Pipeline](#packet-processing-pipeline)
-  - [XDP Entry Point](#xdp-entry-point)
-  - [DDoS Filter](#ddos-filter)
-  - [Packet Handlers](#packet-handlers)
-  - [XDP Actions](#xdp-actions)
+    - [XDP Entry Point](#xdp-entry-point)
+    - [DDoS Filter](#ddos-filter)
+    - [Packet Handlers](#packet-handlers)
+    - [XDP Actions](#xdp-actions)
 - [Crypto Stack](#crypto-stack)
 - [Inter-Thread Communication](#inter-thread-communication)
 - [Configuration](#configuration)
@@ -129,10 +129,10 @@ flowchart TB
         direction TB
         MT["Main Thread\n(main_thread)\n1 Hz HTTP, BPF maps"]
         PT["Ping Thread\n(ping_thread)\n10 Hz UDP ping"]
-        MT <-.->|"ControlMessage / StatsMessage\nMutex‹VecDeque›"| PT
+        MT <-.->|" ControlMessage / StatsMessage\nMutex‹VecDeque› "| PT
         BC["BpfContext (Aya)\nOption‹Arc‹Mutex‹BpfContext›››"]
-        MT -->|"BPF map read/write"| BC
-        PT -->|"BPF relay_map\nUDP socket"| BC
+        MT -->|" BPF map read/write "| BC
+        PT -->|" BPF relay_map\nUDP socket "| BC
     end
     subgraph BE["relay-backend (Rust)"]
         direction TB
@@ -148,13 +148,13 @@ flowchart TB
         direction TB
         EBPF["relay-xdp-ebpf (relay_xdp_rust.o)\nruns at NIC driver, per-packet"]
         MOD["relay_module.ko (kernel module C)\nkfuncs: SHA-256, XChaCha20-Poly1305"]
-        EBPF -->|"calls kfuncs"| MOD
+        EBPF -->|" calls kfuncs "| MOD
     end
     SB["server_backend\n(external)"]
-    MT -->|"HTTP POST /relay_update\n(1 Hz, encrypted)"| BH
-    BH -->|"HTTP 200\n(relay set, magic, keys)"| MT
-    SB -->|"GET /route_matrix"| BH
-    BC ==>|"BPF maps\n(shared memory)"| EBPF
+    MT -->|" HTTP POST /relay_update\n(1 Hz, encrypted) "| BH
+    BH -->|" HTTP 200\n(relay set, magic, keys) "| MT
+    SB -->|" GET /route_matrix "| BH
+    BC ==>|" BPF maps\n(shared memory) "| EBPF
 ```
 
 ---
@@ -167,20 +167,20 @@ flowchart TB
 and eBPF (`bpfel-unknown-none`). All structs are `#[repr(C)]` to guarantee
 binary layout compatibility across userspace and eBPF targets.
 
-| Struct | Size | Repr | BPF Map | Purpose |
-|--------|------|------|---------|---------|
-| `RelayConfig` | 88B | `repr(C)` | `config_map` Array[1] | Relay address, secret key, backend public key |
-| `RelayState` | 64B | `repr(C)` | `state_map` Array[1] | Timestamp, 3 magic values, ping key |
-| `RelayStats` | 1200B | `repr(C)` | `stats_map` PerCpuArray[1] | 150 counters (per-CPU, summed in userspace) |
-| `SessionData` | 104B | `repr(C)` | `session_map` value | Session key, addresses, sequence numbers |
-| `SessionKey` | 16B | `repr(C)` | `session_map` key | session_id(u64) + session_version(u64) |
-| `WhitelistKey` | 8B | `repr(C)` | `whitelist_map` key | IPv4 address(u32) + port(u32), both big-endian |
-| `WhitelistValue` | 24B | `repr(C)` | `whitelist_map` value | Expire timestamp, ethernet MAC pair |
-| `PingTokenData` | 52B | `repr(C, packed)` | - | SHA-256 input for ping token verify |
-| `HeaderData` | 50B | `repr(C, packed)` | - | SHA-256 input for header verify |
-| `RouteToken` | 71B | `repr(C, packed)` | - | Decrypted route token fields |
-| `ContinueToken` | 17B | `repr(C, packed)` | - | Decrypted continue token fields |
-| `Chacha20Poly1305Crypto` | 56B | `repr(C)` | - | Nonce + key passed to kfunc |
+| Struct                   | Size  | Repr              | BPF Map                    | Purpose                                        |
+|--------------------------|-------|-------------------|----------------------------|------------------------------------------------|
+| `RelayConfig`            | 88B   | `repr(C)`         | `config_map` Array[1]      | Relay address, secret key, backend public key  |
+| `RelayState`             | 64B   | `repr(C)`         | `state_map` Array[1]       | Timestamp, 3 magic values, ping key            |
+| `RelayStats`             | 1200B | `repr(C)`         | `stats_map` PerCpuArray[1] | 150 counters (per-CPU, summed in userspace)    |
+| `SessionData`            | 104B  | `repr(C)`         | `session_map` value        | Session key, addresses, sequence numbers       |
+| `SessionKey`             | 16B   | `repr(C)`         | `session_map` key          | session_id(u64) + session_version(u64)         |
+| `WhitelistKey`           | 8B    | `repr(C)`         | `whitelist_map` key        | IPv4 address(u32) + port(u32), both big-endian |
+| `WhitelistValue`         | 24B   | `repr(C)`         | `whitelist_map` value      | Expire timestamp, ethernet MAC pair            |
+| `PingTokenData`          | 52B   | `repr(C, packed)` | -                          | SHA-256 input for ping token verify            |
+| `HeaderData`             | 50B   | `repr(C, packed)` | -                          | SHA-256 input for header verify                |
+| `RouteToken`             | 71B   | `repr(C, packed)` | -                          | Decrypted route token fields                   |
+| `ContinueToken`          | 17B   | `repr(C, packed)` | -                          | Decrypted continue token fields                |
+| `Chacha20Poly1305Crypto` | 56B   | `repr(C)`         | -                          | Nonce + key passed to kfunc                    |
 
 The `user` feature gate enables `aya::Pod` impls for userspace BPF map access.
 eBPF code uses default features (none).
@@ -196,18 +196,18 @@ continue request/response, client/server/relay ping/pong.
 Pure Rust binary with no C dependencies. Crypto uses `sha2`, `crypto_box`,
 `x25519-dalek`, `blake2`, `getrandom`.
 
-| Module | Lines | Purpose |
-|--------|-------|---------|
-| `main.rs` | ~111 | Entry point, signal handling (SIGINT/SIGTERM/SIGHUP), thread orchestration |
-| `config.rs` | ~163 | Read environment variables, derive secret key (X25519 + BLAKE2B) |
-| `bpf.rs` | ~220 | Load XDP program via Aya, attach to NIC, manage 6 BPF maps |
-| `main_thread.rs` | ~622 | 1 Hz HTTP update loop, BPF map management, session timeouts |
-| `ping_thread.rs` | ~269 | 10 Hz UDP relay-to-relay ping/pong |
-| `manager.rs` | ~184 | Relay set tracking, ping history aggregation |
-| `ping_history.rs` | ~207 | Circular buffer (64 entries), RTT/jitter/packet loss computation |
-| `encoding.rs` | ~319 | Little-endian binary `Writer`/`Reader` matching C wire format |
-| `packet_filter.rs` | ~139 | Pittle/chonkle DDoS filter generation (FNV-1a) |
-| `platform.rs` | ~110 | Monotonic time, sleep, UDP socket creation, random bytes |
+| Module             | Lines | Purpose                                                                    |
+|--------------------|-------|----------------------------------------------------------------------------|
+| `main.rs`          | ~111  | Entry point, signal handling (SIGINT/SIGTERM/SIGHUP), thread orchestration |
+| `config.rs`        | ~163  | Read environment variables, derive secret key (X25519 + BLAKE2B)           |
+| `bpf.rs`           | ~220  | Load XDP program via Aya, attach to NIC, manage 6 BPF maps                 |
+| `main_thread.rs`   | ~622  | 1 Hz HTTP update loop, BPF map management, session timeouts                |
+| `ping_thread.rs`   | ~269  | 10 Hz UDP relay-to-relay ping/pong                                         |
+| `manager.rs`       | ~184  | Relay set tracking, ping history aggregation                               |
+| `ping_history.rs`  | ~207  | Circular buffer (64 entries), RTT/jitter/packet loss computation           |
+| `encoding.rs`      | ~319  | Little-endian binary `Writer`/`Reader` matching C wire format              |
+| `packet_filter.rs` | ~139  | Pittle/chonkle DDoS filter generation (FNV-1a)                             |
+| `platform.rs`      | ~110  | Monotonic time, sleep, UDP socket creation, random bytes                   |
 
 #### Startup flow
 
@@ -242,6 +242,7 @@ BpfContext::init(xdp_obj_path, relay_address, internal_address)
 via the XDP hook. Built separately with nightly Rust.
 
 Constraints:
+
 - `#![no_std]` `#![no_main]`
 - No heap allocation, stack limit 512 bytes
 - No external crates beyond `aya-ebpf` and `relay-xdp-common`
@@ -250,6 +251,7 @@ Constraints:
 - Crypto via kfuncs from `relay_module.ko`
 
 Key helpers:
+
 - `read_u64_le()` - byte-by-byte little-endian decode from raw pointer
 - `bytes_equal()` - bounded loop comparison
 - `copy_bytes()` - bounded loop memcpy
@@ -270,23 +272,24 @@ to `server_backend`. Runs as a separate async binary (tokio + axum).
 > **Detailed architecture**: see [`relay-backend/ARCHITECTURE.md`](../relay-backend/ARCHITECTURE.md)
 > for wire format specs, encoding details, and full interaction protocol with relay-xdp.
 
-| Module | Lines | Purpose |
-|--------|-------|---------|
-| `main.rs` | ~310 | Entry point, 4 background tasks (tokio), axum web server |
-| `config.rs` | ~101 | Environment variables → Config struct |
-| `constants.rs` | ~65 | Relay protocol constants |
-| `state.rs` | ~23 | AppState - shared state between handlers + background tasks |
-| `handlers.rs` | ~423 | HTTP handlers (15 routes: relay_update, route_matrix, costs, health, etc.) |
-| `encoding.rs` | ~870 | Bitpacked (WriteStream/ReadStream) + Simple LE (SimpleWriter/SimpleReader) |
-| `relay_update.rs` | ~218 | Parse RelayUpdateRequest, build RelayUpdateResponse, FNV-1a relay ID |
-| `relay_manager.rs` | ~435 | In-memory 2-level state: SourceEntry → DestEntry (RTT/jitter/loss per pair) |
-| `cost_matrix.rs` | ~137 | Triangular cost matrix bitpacked serialization (version 2) |
-| `route_matrix.rs` | ~347 | Route matrix bitpacked serialization (version 4) + analysis |
-| `optimizer.rs` | ~455 | Optimize2 - multi-threaded route finding via `std::thread::scope` |
-| `database.rs` | ~41 | RelayData - relay config loaded from .bin file |
-| `redis_client.rs` | ~226 | Redis leader election + data store/load for horizontal scaling |
+| Module             | Lines | Purpose                                                                     |
+|--------------------|-------|-----------------------------------------------------------------------------|
+| `main.rs`          | ~310  | Entry point, 4 background tasks (tokio), axum web server                    |
+| `config.rs`        | ~101  | Environment variables → Config struct                                       |
+| `constants.rs`     | ~65   | Relay protocol constants                                                    |
+| `state.rs`         | ~23   | AppState - shared state between handlers + background tasks                 |
+| `handlers.rs`      | ~423  | HTTP handlers (15 routes: relay_update, route_matrix, costs, health, etc.)  |
+| `encoding.rs`      | ~870  | Bitpacked (WriteStream/ReadStream) + Simple LE (SimpleWriter/SimpleReader)  |
+| `relay_update.rs`  | ~218  | Parse RelayUpdateRequest, build RelayUpdateResponse, FNV-1a relay ID        |
+| `relay_manager.rs` | ~435  | In-memory 2-level state: SourceEntry → DestEntry (RTT/jitter/loss per pair) |
+| `cost_matrix.rs`   | ~137  | Triangular cost matrix bitpacked serialization (version 2)                  |
+| `route_matrix.rs`  | ~347  | Route matrix bitpacked serialization (version 4) + analysis                 |
+| `optimizer.rs`     | ~455  | Optimize2 - multi-threaded route finding via `std::thread::scope`           |
+| `database.rs`      | ~41   | RelayData - relay config loaded from .bin file                              |
+| `redis_client.rs`  | ~226  | Redis leader election + data store/load for horizontal scaling              |
 
 Key design decisions:
+
 - **Parallelism**: Optimizer uses `std::thread::scope` with manual segment slicing
   (not rayon) for Phase 1 (indirect matrix) and Phase 2 (route building).
 - **Encoding**: Two separate systems - Simple LE for relay update packets (relay-xdp
@@ -310,6 +313,7 @@ __bpf_kfunc int bpf_relay_xchacha20poly1305_decrypt(
 ```
 
 Internals:
+
 - `sha256_hash()` - wraps `crypto_shash_digest` with a pre-allocated `crypto_shash`
 - `xchacha20poly1305_decrypt()` - manual XChaCha20 init + Poly1305 verify + decrypt
 - `relay_init()` - allocates SHA-256 tfm, runs self-test, registers kfuncs
@@ -321,11 +325,11 @@ Requires: Linux kernel 6.5+, loaded modules `chacha20` and `poly1305`.
 
 141 lines. Three commands:
 
-| Command | Action |
-|---------|--------|
-| `cargo xtask build-ebpf` | Build eBPF from C source (legacy) |
+| Command                       | Action                                                                                          |
+|-------------------------------|-------------------------------------------------------------------------------------------------|
+| `cargo xtask build-ebpf`      | Build eBPF from C source (legacy)                                                               |
 | `cargo xtask build-ebpf-rust` | Build Rust eBPF: `cargo +nightly build --target bpfel-unknown-none -Z build-std=core --release` |
-| `cargo xtask func-test` | Run functional parity tests: `cargo test --test func_parity -- --ignored --test-threads=1` |
+| `cargo xtask func-test`       | Run functional parity tests: `cargo test --test func_parity -- --ignored --test-threads=1`      |
 
 ---
 
@@ -333,14 +337,14 @@ Requires: Linux kernel 6.5+, loaded modules `chacha20` and `poly1305`.
 
 ### Map Overview
 
-| Map | Type | Max Entries | Key | Value | Writer | Reader |
-|-----|------|-------------|-----|-------|--------|--------|
-| `config_map` | Array | 1 | u32 | RelayConfig (88B) | Userspace (once) | eBPF |
-| `state_map` | Array | 1 | u32 | RelayState (64B) | Userspace (1 Hz) | eBPF |
-| `stats_map` | PerCpuArray | 1 | u32 | RelayStats (1200B) | eBPF (per-packet) | Userspace (1 Hz) |
-| `relay_map` | LruHashMap | 2048 | u64 | u64 | Userspace (on change) | eBPF (ping/pong) |
-| `session_map` | LruHashMap | 200,000 | SessionKey (16B) | SessionData (104B) | eBPF (create) | Both (lookup/expire) |
-| `whitelist_map` | LruHashMap | 200,000 | WhitelistKey (8B) | WhitelistValue (24B) | eBPF (create) | Both (lookup/expire) |
+| Map             | Type        | Max Entries | Key               | Value                | Writer                | Reader               |
+|-----------------|-------------|-------------|-------------------|----------------------|-----------------------|----------------------|
+| `config_map`    | Array       | 1           | u32               | RelayConfig (88B)    | Userspace (once)      | eBPF                 |
+| `state_map`     | Array       | 1           | u32               | RelayState (64B)     | Userspace (1 Hz)      | eBPF                 |
+| `stats_map`     | PerCpuArray | 1           | u32               | RelayStats (1200B)   | eBPF (per-packet)     | Userspace (1 Hz)     |
+| `relay_map`     | LruHashMap  | 2048        | u64               | u64                  | Userspace (on change) | eBPF (ping/pong)     |
+| `session_map`   | LruHashMap  | 200,000     | SessionKey (16B)  | SessionData (104B)   | eBPF (create)         | Both (lookup/expire) |
+| `whitelist_map` | LruHashMap  | 200,000     | WhitelistKey (8B) | WhitelistValue (24B) | eBPF (create)         | Both (lookup/expire) |
 
 ### Map Lifecycle
 
@@ -373,26 +377,26 @@ padding - the `wire_compat` tests assert exact byte counts.
 
 #### `config_map` - `RelayConfig` (88 bytes, `#[repr(C)]`)
 
-| Offset | Field | Type | Byte order |
-|--------|-------|------|------------|
-| 0 | `dedicated` | `u32` | native |
-| 4 | `relay_public_address` | `u32` | **big-endian** |
-| 8 | `relay_internal_address` | `u32` | **big-endian** |
-| 12 | `relay_port` | `u16` | **big-endian** |
-| 14 | `relay_secret_key` | `[u8; 32]` | - |
-| 46 | `relay_backend_public_key` | `[u8; 32]` | - |
-| 78 | `gateway_ethernet_address` | `[u8; 6]` | - |
-| 84 | `use_gateway_ethernet_address` | `u8` | - |
+| Offset | Field                          | Type       | Byte order     |
+|--------|--------------------------------|------------|----------------|
+| 0      | `dedicated`                    | `u32`      | native         |
+| 4      | `relay_public_address`         | `u32`      | **big-endian** |
+| 8      | `relay_internal_address`       | `u32`      | **big-endian** |
+| 12     | `relay_port`                   | `u16`      | **big-endian** |
+| 14     | `relay_secret_key`             | `[u8; 32]` | -              |
+| 46     | `relay_backend_public_key`     | `[u8; 32]` | -              |
+| 78     | `gateway_ethernet_address`     | `[u8; 6]`  | -              |
+| 84     | `use_gateway_ethernet_address` | `u8`       | -              |
 
 #### `state_map` - `RelayState` (64 bytes, `#[repr(C)]`)
 
-| Offset | Field | Type | Notes |
-|--------|-------|------|-------|
-| 0 | `current_timestamp` | `u64` | from backend |
-| 8 | `current_magic` | `[u8; 8]` | pittle/chonkle generation |
-| 16 | `previous_magic` | `[u8; 8]` | - |
-| 24 | `next_magic` | `[u8; 8]` | - |
-| 32 | `ping_key` | `[u8; 32]` | SHA-256 ping token key |
+| Offset | Field               | Type       | Notes                     |
+|--------|---------------------|------------|---------------------------|
+| 0      | `current_timestamp` | `u64`      | from backend              |
+| 8      | `current_magic`     | `[u8; 8]`  | pittle/chonkle generation |
+| 16     | `previous_magic`    | `[u8; 8]`  | -                         |
+| 24     | `next_magic`        | `[u8; 8]`  | -                         |
+| 32     | `ping_key`          | `[u8; 32]` | SHA-256 ping token key    |
 
 #### `stats_map` - `RelayStats` (1200 bytes, `#[repr(C)]`)
 
@@ -403,32 +407,32 @@ CPUs. Counter indices are `RELAY_COUNTER_*` constants (0–149).
 
 **Key** (`#[repr(C)]`):
 
-| Field | Type | Notes |
-|-------|------|-------|
-| `session_id` | `u64` | - |
+| Field             | Type  | Notes                                             |
+|-------------------|-------|---------------------------------------------------|
+| `session_id`      | `u64` | -                                                 |
 | `session_version` | `u64` | must be `u64` not `u8` (alignment, per C comment) |
 
 **Value** (`#[repr(C)]`, 104 bytes):
 
-| Offset | Field | Type | Byte order |
-|--------|-------|------|------------|
-| 0 | `session_private_key` | `[u8; 32]` | - |
-| 32 | `expire_timestamp` | `u64` | native |
-| 40 | `session_id` | `u64` | native |
-| 48 | `payload_client_to_server_sequence` | `u64` | native |
-| 56 | `payload_server_to_client_sequence` | `u64` | native |
-| 64 | `special_client_to_server_sequence` | `u64` | native |
-| 72 | `special_server_to_client_sequence` | `u64` | native |
-| 80 | `envelope_kbps_up` | `u32` | native |
-| 84 | `envelope_kbps_down` | `u32` | native |
-| 88 | `next_address` | `u32` | **big-endian** |
-| 92 | `prev_address` | `u32` | **big-endian** |
-| 96 | `next_port` | `u16` | **big-endian** |
-| 98 | `prev_port` | `u16` | **big-endian** |
-| 100 | `session_version` | `u8` | - |
-| 101 | `next_internal` | `u8` | - |
-| 102 | `prev_internal` | `u8` | - |
-| 103 | `first_hop` | `u8` | - |
+| Offset | Field                               | Type       | Byte order     |
+|--------|-------------------------------------|------------|----------------|
+| 0      | `session_private_key`               | `[u8; 32]` | -              |
+| 32     | `expire_timestamp`                  | `u64`      | native         |
+| 40     | `session_id`                        | `u64`      | native         |
+| 48     | `payload_client_to_server_sequence` | `u64`      | native         |
+| 56     | `payload_server_to_client_sequence` | `u64`      | native         |
+| 64     | `special_client_to_server_sequence` | `u64`      | native         |
+| 72     | `special_server_to_client_sequence` | `u64`      | native         |
+| 80     | `envelope_kbps_up`                  | `u32`      | native         |
+| 84     | `envelope_kbps_down`                | `u32`      | native         |
+| 88     | `next_address`                      | `u32`      | **big-endian** |
+| 92     | `prev_address`                      | `u32`      | **big-endian** |
+| 96     | `next_port`                         | `u16`      | **big-endian** |
+| 98     | `prev_port`                         | `u16`      | **big-endian** |
+| 100    | `session_version`                   | `u8`       | -              |
+| 101    | `next_internal`                     | `u8`       | -              |
+| 102    | `prev_internal`                     | `u8`       | -              |
+| 103    | `first_hop`                         | `u8`       | -              |
 
 #### `relay_map` - `u64` → `u64`
 
@@ -439,28 +443,28 @@ sender is a known peer relay (for pong handling).
 
 **Key** (`#[repr(C)]`):
 
-| Field | Type | Byte order | Notes |
-|-------|------|------------|-------|
-| `address` | `u32` | **big-endian** | IPv4 address |
-| `port` | `u32` | **big-endian** | must be `u32` not `u16` (alignment, per C comment) |
+| Field     | Type  | Byte order     | Notes                                              |
+|-----------|-------|----------------|----------------------------------------------------|
+| `address` | `u32` | **big-endian** | IPv4 address                                       |
+| `port`    | `u32` | **big-endian** | must be `u32` not `u16` (alignment, per C comment) |
 
 **Value** (`#[repr(C)]`, 24 bytes including padding):
 
-| Offset | Field | Type | Notes |
-|--------|-------|------|-------|
-| 0 | `expire_timestamp` | `u64` | native |
-| 8 | `source_address` | `[u8; 6]` | ethernet MAC |
-| 14 | `dest_address` | `[u8; 6]` | ethernet MAC |
+| Offset | Field              | Type      | Notes        |
+|--------|--------------------|-----------|--------------|
+| 0      | `expire_timestamp` | `u64`     | native       |
+| 8      | `source_address`   | `[u8; 6]` | ethernet MAC |
+| 14     | `dest_address`     | `[u8; 6]` | ethernet MAC |
 
 #### Packed crypto/wire structs (not map values, but shared between planes)
 
-| Struct | Size | Repr | Used for |
-|--------|------|------|----------|
-| `PingTokenData` | 52B | `repr(C, packed)` | SHA-256 input for ping token verify |
-| `HeaderData` | 50B | `repr(C, packed)` | SHA-256 input for header verify |
-| `RouteToken` | 71B | `repr(C, packed)` | Decrypted route token fields |
-| `ContinueToken` | 17B | `repr(C, packed)` | Decrypted continue token fields |
-| `Chacha20Poly1305Crypto` | 56B | `repr(C)` | Nonce + key passed to kfunc |
+| Struct                   | Size | Repr              | Used for                            |
+|--------------------------|------|-------------------|-------------------------------------|
+| `PingTokenData`          | 52B  | `repr(C, packed)` | SHA-256 input for ping token verify |
+| `HeaderData`             | 50B  | `repr(C, packed)` | SHA-256 input for header verify     |
+| `RouteToken`             | 71B  | `repr(C, packed)` | Decrypted route token fields        |
+| `ContinueToken`          | 17B  | `repr(C, packed)` | Decrypted continue token fields     |
+| `Chacha20Poly1305Crypto` | 56B  | `repr(C)`         | Nonce + key passed to kfunc         |
 
 ---
 
@@ -474,11 +478,11 @@ sequenceDiagram
     participant B as relay_backend (Rust)
 
     loop Every 1 second
-        R->>B: HTTP POST /relay_update [encrypted]
+        R ->> B: HTTP POST /relay_update [encrypted]
         Note right of R: relay address, timestamp, start_time<br/>ping stats per peer relay<br/>session/bandwidth counters<br/>traffic rates, relay_flags<br/>version ("relay-rust")<br/>150 performance counters
-        B-->>R: HTTP 200 [binary response]
+        B -->> R: HTTP 200 [binary response]
         Note left of B: backend_timestamp<br/>relay_ping_set (peers)<br/>magic values (3 × 8B)<br/>expected address + keys<br/>encrypted route token (dummy)<br/>ping_key (32B)
-        R->>R: Update BPF state_map<br/>Update relay_ping_set<br/>Notify ping thread
+        R ->> R: Update BPF state_map<br/>Update relay_ping_set<br/>Notify ping thread
     end
 ```
 
@@ -495,13 +499,11 @@ Format: MAC(16) + ciphertext + nonce(24).
 sequenceDiagram
     participant A as relay-xdp (A)<br/>Ping Thread
     participant B as relay-xdp (B)<br/>eBPF (XDP)
-
-    A->>B: PING (67B UDP) type=11<br/>pittle(2) + chonkle(15)<br/>sequence(8), expire_timestamp(8)<br/>internal_flag(1), SHA-256 token(32)
+    A ->> B: PING (67B UDP) type=11<br/>pittle(2) + chonkle(15)<br/>sequence(8), expire_timestamp(8)<br/>internal_flag(1), SHA-256 token(32)
     Note over B: Verify SHA-256 token
-    B-->>A: PONG (26B UDP) type=12<br/>pittle(2) + chonkle(15)<br/>sequence(8)
+    B -->> A: PONG (26B UDP) type=12<br/>pittle(2) + chonkle(15)<br/>sequence(8)
     Note over B: XDP_TX: swap src/dst MAC, IP, UDP
-
-    A->>A: process_pong()<br/>Update PingHistory<br/>Compute RTT, jitter, packet_loss<br/>Post StatsMessage → main thread
+    A ->> A: process_pong()<br/>Update PingHistory<br/>Compute RTT, jitter, packet_loss<br/>Post StatsMessage → main thread
 ```
 
 ### Flow 3 - Game Traffic Routing
@@ -512,22 +514,19 @@ sequenceDiagram
     participant A as relay A (eBPF)
     participant B as relay B (eBPF)
     participant S as game server
-
-    C->>A: Route Request (1) [encrypted route token]
+    C ->> A: Route Request (1) [encrypted route token]
     Note over A: XChaCha20 decrypt<br/>Create session + whitelist
-    A->>B: XDP_TX (redirect)
+    A ->> B: XDP_TX (redirect)
     Note over B: Decrypt next token<br/>Create session
-    B->>S: Redirect to server
-
-    C->>A: Client→Server (3) [25B header + payload]
+    B ->> S: Redirect to server
+    C ->> A: Client→Server (3) [25B header + payload]
     Note over A: SHA-256 verify
-    A->>B: Forward
+    A ->> B: Forward
     Note over B: SHA-256 verify + forward
-    B->>S: Forward
-
-    S->>B: Server→Client (4)
-    B->>A: Reverse path
-    A->>C: Reverse path
+    B ->> S: Forward
+    S ->> B: Server→Client (4)
+    B ->> A: Reverse path
+    A ->> C: Reverse path
 ```
 
 All routing happens in eBPF. Packets go directly from NIC in -> XDP program ->
@@ -537,18 +536,16 @@ header rewrite -> NIC out. No kernel network stack, no userspace involvement.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Created : Route Request (type 1)
-    Created --> Active : Insert session + whitelist
-    Active --> Active : Client / Server (types 3/4)
-    Active --> Active : Continue Request (type 7)
-    Active --> [*] : Session Expire
-
+    [*] --> Created: Route Request (type 1)
+    Created --> Active: Insert session + whitelist
+    Active --> Active: Client / Server (types 3/4)
+    Active --> Active: Continue Request (type 7)
+    Active --> [*]: Session Expire
     note right of Created
         eBPF decrypt route token
         session_map.insert(Key, Data)
         whitelist_map.insert(prev_hop)
     end note
-
     note right of Active
         Lookup, verify, forward
         per-CPU counters track packets
@@ -579,18 +576,18 @@ flowchart TD
     SIZE -- Yes --> FILTER{"Packet filter\npittle / chonkle"}
     FILTER -- Fail --> DROP
     FILTER -- Pass --> TYPE{"Packet type\n(byte 0)"}
-    TYPE -- "Ping (9, 11, 13)" --> PING["Handle ping directly\n(no whitelist)"]
-    TYPE -- "All others" --> WL{"whitelist_map\nlookup"}
+    TYPE -- " Ping (9, 11, 13) " --> PING["Handle ping directly\n(no whitelist)"]
+    TYPE -- " All others " --> WL{"whitelist_map\nlookup"}
     WL -- Miss --> DROP
     WL -- Hit --> D2{"Second dispatch"}
-    D2 --> |"12"| PONG["handle_relay_pong\n→ XDP_PASS"]
-    D2 --> |"1"| RR["handle_route_request"]
-    D2 --> |"2"| RRP["handle_route_response"]
-    D2 --> |"3,4"| CS["handle_client↔server"]
-    D2 --> |"5,6"| SP["handle_session_ping/pong"]
-    D2 --> |"7"| CR["handle_continue_request"]
-    D2 --> |"8"| CRP["handle_continue_response"]
-    D2 --> |"other"| DROP
+    D2 -->|" 12 "| PONG["handle_relay_pong\n→ XDP_PASS"]
+    D2 -->|" 1 "| RR["handle_route_request"]
+    D2 -->|" 2 "| RRP["handle_route_response"]
+    D2 -->|" 3,4 "| CS["handle_client↔server"]
+    D2 -->|" 5,6 "| SP["handle_session_ping/pong"]
+    D2 -->|" 7 "| CR["handle_continue_request"]
+    D2 -->|" 8 "| CRP["handle_continue_response"]
+    D2 -->|" other "| DROP
 ```
 
 ### DDoS Filter
@@ -609,22 +606,23 @@ Both implementations must produce identical output.
 
 ### Packet Handlers
 
-| Handler | Type | Action | Crypto | XDP Result |
-|---------|------|--------|--------|------------|
-| `handle_relay_ping` | 11 | Verify SHA-256 token, reflect as pong (12) | SHA-256 kfunc | XDP_TX |
-| `handle_relay_pong` | 12 | Pass to userspace ping thread | none | XDP_PASS |
-| `handle_client_ping` | 9 | Verify SHA-256 token, reflect as pong (10) | SHA-256 kfunc | XDP_TX |
-| `handle_server_ping` | 13 | Verify SHA-256 token, reflect as pong (14) | SHA-256 kfunc | XDP_TX |
-| `handle_route_request` | 1 | Decrypt route token, create session, forward | XChaCha20-Poly1305 kfunc | XDP_TX |
-| `handle_route_response` | 2 | Lookup session, verify header, forward to prev | SHA-256 kfunc | XDP_TX |
-| `handle_client_to_server` | 3 | Lookup session, verify header, forward to next | SHA-256 kfunc | XDP_TX |
-| `handle_server_to_client` | 4 | Lookup session, verify header, forward to prev | SHA-256 kfunc | XDP_TX |
-| `handle_continue_request` | 7 | Decrypt continue token, update session, forward | XChaCha20-Poly1305 kfunc | XDP_TX |
-| `handle_continue_response` | 8 | Lookup session, verify header, forward to prev | SHA-256 kfunc | XDP_TX |
-| `handle_session_ping` | 5 | Lookup session, verify header, forward to next | SHA-256 kfunc | XDP_TX |
-| `handle_session_pong` | 6 | Lookup session, verify header, forward to prev | SHA-256 kfunc | XDP_TX |
+| Handler                    | Type | Action                                          | Crypto                   | XDP Result |
+|----------------------------|------|-------------------------------------------------|--------------------------|------------|
+| `handle_relay_ping`        | 11   | Verify SHA-256 token, reflect as pong (12)      | SHA-256 kfunc            | XDP_TX     |
+| `handle_relay_pong`        | 12   | Pass to userspace ping thread                   | none                     | XDP_PASS   |
+| `handle_client_ping`       | 9    | Verify SHA-256 token, reflect as pong (10)      | SHA-256 kfunc            | XDP_TX     |
+| `handle_server_ping`       | 13   | Verify SHA-256 token, reflect as pong (14)      | SHA-256 kfunc            | XDP_TX     |
+| `handle_route_request`     | 1    | Decrypt route token, create session, forward    | XChaCha20-Poly1305 kfunc | XDP_TX     |
+| `handle_route_response`    | 2    | Lookup session, verify header, forward to prev  | SHA-256 kfunc            | XDP_TX     |
+| `handle_client_to_server`  | 3    | Lookup session, verify header, forward to next  | SHA-256 kfunc            | XDP_TX     |
+| `handle_server_to_client`  | 4    | Lookup session, verify header, forward to prev  | SHA-256 kfunc            | XDP_TX     |
+| `handle_continue_request`  | 7    | Decrypt continue token, update session, forward | XChaCha20-Poly1305 kfunc | XDP_TX     |
+| `handle_continue_response` | 8    | Lookup session, verify header, forward to prev  | SHA-256 kfunc            | XDP_TX     |
+| `handle_session_ping`      | 5    | Lookup session, verify header, forward to next  | SHA-256 kfunc            | XDP_TX     |
+| `handle_session_pong`      | 6    | Lookup session, verify header, forward to prev  | SHA-256 kfunc            | XDP_TX     |
 
 Every handler follows the same pattern:
+
 1. Increment received counter
 2. Validate packet size
 3. Check expiry / sequence
@@ -636,26 +634,27 @@ Every handler follows the same pattern:
 
 ### XDP Actions
 
-| Action | When | Cost |
-|--------|------|------|
-| `XDP_PASS` | Pong to userspace, non-UDP, non-relay traffic | Expensive (enters kernel stack) |
-| `XDP_DROP` | DDoS filter fail, expired sessions, invalid crypto | Cheapest (packet freed at NIC) |
-| `XDP_TX` | Ping-to-pong reflection, packet forwarding | Cheap (out same NIC) |
+| Action     | When                                               | Cost                            |
+|------------|----------------------------------------------------|---------------------------------|
+| `XDP_PASS` | Pong to userspace, non-UDP, non-relay traffic      | Expensive (enters kernel stack) |
+| `XDP_DROP` | DDoS filter fail, expired sessions, invalid crypto | Cheapest (packet freed at NIC)  |
+| `XDP_TX`   | Ping-to-pong reflection, packet forwarding         | Cheap (out same NIC)            |
 
 ---
 
 ## Crypto Stack
 
-| Operation | Where | Implementation | C Equivalent |
-|-----------|-------|----------------|--------------|
-| Key exchange | `config.rs` | `x25519-dalek` + `blake2` | libsodium `crypto_kx_client_session_keys` |
-| Update encryption | `main_thread.rs` | `crypto_box` (SalsaBox) | libsodium `crypto_box_easy` |
-| Ping token generation | `ping_thread.rs` | `sha2` (SHA-256) | libsodium `crypto_hash_sha256` |
-| Random bytes | `platform.rs` | `getrandom` | libsodium `randombytes_buf` |
-| Header verify (eBPF) | `relay-xdp-ebpf` | `bpf_relay_sha256` kfunc | kernel `crypto_shash` SHA-256 |
-| Token decrypt (eBPF) | `relay-xdp-ebpf` | `bpf_relay_xchacha20poly1305_decrypt` kfunc | kernel `chacha20_crypt` + `poly1305` |
+| Operation             | Where            | Implementation                              | C Equivalent                              |
+|-----------------------|------------------|---------------------------------------------|-------------------------------------------|
+| Key exchange          | `config.rs`      | `x25519-dalek` + `blake2`                   | libsodium `crypto_kx_client_session_keys` |
+| Update encryption     | `main_thread.rs` | `crypto_box` (SalsaBox)                     | libsodium `crypto_box_easy`               |
+| Ping token generation | `ping_thread.rs` | `sha2` (SHA-256)                            | libsodium `crypto_hash_sha256`            |
+| Random bytes          | `platform.rs`    | `getrandom`                                 | libsodium `randombytes_buf`               |
+| Header verify (eBPF)  | `relay-xdp-ebpf` | `bpf_relay_sha256` kfunc                    | kernel `crypto_shash` SHA-256             |
+| Token decrypt (eBPF)  | `relay-xdp-ebpf` | `bpf_relay_xchacha20poly1305_decrypt` kfunc | kernel `chacha20_crypt` + `poly1305`      |
 
 Key derivation (pure Rust, compatible with libsodium `crypto_kx`):
+
 ```
 secret_key = BLAKE2B-512(X25519(relay_sk, backend_pk) || relay_pk || backend_pk)[0..32]
 ```
@@ -671,26 +670,26 @@ Two threads communicate via `Arc<Mutex<VecDeque<T>>>` queues (no channels):
 
 ```mermaid
 flowchart LR
-    MT["Main\nThread"] -->|"ControlMessage\ncontrol_queue"| PT["Ping\nThread"]
-    PT -->|"StatsMessage\nstats_queue"| MT
+    MT["Main\nThread"] -->|" ControlMessage\ncontrol_queue "| PT["Ping\nThread"]
+    PT -->|" StatsMessage\nstats_queue "| MT
 ```
 
 **ControlMessage** (main -> ping):
 
-| Field | Type | Purpose |
-|-------|------|---------|
-| `current_timestamp` | u64 | Backend timestamp |
-| `current_magic` | [u8; 8] | For pittle/chonkle generation |
-| `ping_key` | [u8; 32] | For SHA-256 ping token |
-| `new_relays` | RelaySet | Relays to start pinging |
-| `delete_relays` | RelaySet | Relays to stop pinging |
+| Field               | Type     | Purpose                       |
+|---------------------|----------|-------------------------------|
+| `current_timestamp` | u64      | Backend timestamp             |
+| `current_magic`     | [u8; 8]  | For pittle/chonkle generation |
+| `ping_key`          | [u8; 32] | For SHA-256 ping token        |
+| `new_relays`        | RelaySet | Relays to start pinging       |
+| `delete_relays`     | RelaySet | Relays to stop pinging        |
 
 **StatsMessage** (ping -> main):
 
-| Field | Type | Purpose |
-|-------|------|---------|
-| `pings_sent` | u64 | Total pings sent |
-| `bytes_sent` | u64 | Total bytes sent |
+| Field        | Type      | Purpose                            |
+|--------------|-----------|------------------------------------|
+| `pings_sent` | u64       | Total pings sent                   |
+| `bytes_sent` | u64       | Total bytes sent                   |
 | `ping_stats` | PingStats | Per-relay RTT, jitter, packet loss |
 
 ---
@@ -699,18 +698,18 @@ flowchart LR
 
 All configuration via environment variables (read once at startup):
 
-| Env Var | Type | Required | Purpose |
-|---------|------|----------|---------|
-| `RELAY_NAME` | string | yes | Relay identifier (e.g. `akamai.tokyo.1`) |
-| `RELAY_PUBLIC_ADDRESS` | `ip:port` | yes | Public address (e.g. `1.2.3.4:40000`) |
-| `RELAY_INTERNAL_ADDRESS` | `ip:port` | no | Internal address (default = public) |
-| `RELAY_PUBLIC_KEY` | base64 | yes | X25519 public key (32 bytes) |
-| `RELAY_PRIVATE_KEY` | base64 | yes | X25519 private key (32 bytes) |
-| `RELAY_BACKEND_PUBLIC_KEY` | base64 | yes | Backend public key (32 bytes) |
-| `RELAY_BACKEND_URL` | URL | yes | HTTP endpoint (e.g. `http://10.0.0.5:30000`) |
-| `RELAY_GATEWAY_ETHERNET_ADDRESS` | MAC | no | Gateway MAC for XDP redirect |
-| `RELAY_XDP_OBJ` | path | no | eBPF object file (default: `relay_xdp_rust.o`) |
-| `RELAY_NO_BPF` | `1`/`true` | no | Run without BPF (for testing) |
+| Env Var                          | Type       | Required | Purpose                                        |
+|----------------------------------|------------|----------|------------------------------------------------|
+| `RELAY_NAME`                     | string     | yes      | Relay identifier (e.g. `akamai.tokyo.1`)       |
+| `RELAY_PUBLIC_ADDRESS`           | `ip:port`  | yes      | Public address (e.g. `1.2.3.4:40000`)          |
+| `RELAY_INTERNAL_ADDRESS`         | `ip:port`  | no       | Internal address (default = public)            |
+| `RELAY_PUBLIC_KEY`               | base64     | yes      | X25519 public key (32 bytes)                   |
+| `RELAY_PRIVATE_KEY`              | base64     | yes      | X25519 private key (32 bytes)                  |
+| `RELAY_BACKEND_PUBLIC_KEY`       | base64     | yes      | Backend public key (32 bytes)                  |
+| `RELAY_BACKEND_URL`              | URL        | yes      | HTTP endpoint (e.g. `http://10.0.0.5:30000`)   |
+| `RELAY_GATEWAY_ETHERNET_ADDRESS` | MAC        | no       | Gateway MAC for XDP redirect                   |
+| `RELAY_XDP_OBJ`                  | path       | no       | eBPF object file (default: `relay_xdp_rust.o`) |
+| `RELAY_NO_BPF`                   | `1`/`true` | no       | Run without BPF (for testing)                  |
 
 ---
 
@@ -720,22 +719,22 @@ All configuration via environment variables (read once at startup):
 
 52 tests total (37 run with `cargo test`, 15 functional tests require `--ignored`):
 
-| Test File | Count | Type | What It Covers |
-|-----------|-------|------|----------------|
-| `encoding` (unit) | 9 | Unit | LE encoding roundtrip, string, address format |
-| `packet_filter` (unit) | 2 | Unit | Pittle symmetry, chonkle byte ranges |
-| `ping_history` (unit) | 6 | Unit | RTT/jitter/loss, circular buffer, wraparound |
-| `wire_compat.rs` | 20 | Integration | Struct sizes, field offsets, SHA-256, crypto_box, crypto_kx |
-| `func_parity.rs` | 15 | Integration | Config errors, update protocol, mock backend, crypto roundtrip |
+| Test File              | Count | Type        | What It Covers                                                 |
+|------------------------|-------|-------------|----------------------------------------------------------------|
+| `encoding` (unit)      | 9     | Unit        | LE encoding roundtrip, string, address format                  |
+| `packet_filter` (unit) | 2     | Unit        | Pittle symmetry, chonkle byte ranges                           |
+| `ping_history` (unit)  | 6     | Unit        | RTT/jitter/loss, circular buffer, wraparound                   |
+| `wire_compat.rs`       | 20    | Integration | Struct sizes, field offsets, SHA-256, crypto_box, crypto_kx    |
+| `func_parity.rs`       | 15    | Integration | Config errors, update protocol, mock backend, crypto roundtrip |
 
 ### relay-backend tests
 
 33 tests total (30 integration + 3 unit):
 
-| Test File | Count | Type | What It Covers |
-|-----------|-------|------|----------------|
-| `encoding` (unit) | 3 | Unit | bits_required, tri_matrix, WriteStream/ReadStream roundtrip |
-| `integration_xdp.rs` | 30 | Integration | Wire format, optimizer, relay manager, cost/route matrix |
+| Test File            | Count | Type        | What It Covers                                              |
+|----------------------|-------|-------------|-------------------------------------------------------------|
+| `encoding` (unit)    | 3     | Unit        | bits_required, tri_matrix, WriteStream/ReadStream roundtrip |
+| `integration_xdp.rs` | 30    | Integration | Wire format, optimizer, relay manager, cost/route matrix    |
 
 The 30 integration tests are organized in 18 test groups covering: FNV-1a
 compatibility, relay update request/response wire format, cost matrix roundtrip,
@@ -788,15 +787,16 @@ Requirements: Linux kernel 6.5+, Ubuntu 22.04+, `relay_module.ko` loaded
 (for relay-xdp only; relay-backend has no kernel requirements).
 
 Dependency chain for changes:
+
 ```mermaid
 flowchart TD
     COM["relay-xdp-common"] --> US["relay-xdp\n(userspace)"]
     COM --> EBPF["relay-xdp-ebpf\n(eBPF)"]
-    US -->|"loads via Aya"| EBPF
-    EBPF -->|"calls kfuncs"| MOD["relay_module.ko\n(C)"]
-    US -->|"HTTP POST /relay_update\n(1 Hz)"| RB["relay-backend\n(route optimization)"]
-    RB -->|"HTTP 200 response\n(relay set, magic, keys)"| US
-    SB["server_backend\n(external)"] -->|"GET /route_matrix"| RB
+    US -->|" loads via Aya "| EBPF
+    EBPF -->|" calls kfuncs "| MOD["relay_module.ko\n(C)"]
+    US -->|" HTTP POST /relay_update\n(1 Hz) "| RB["relay-backend\n(route optimization)"]
+    RB -->|" HTTP 200 response\n(relay set, magic, keys) "| US
+    SB["server_backend\n(external)"] -->|" GET /route_matrix "| RB
 ```
 
 Any change to shared types or kfunc signatures requires rebuilding across

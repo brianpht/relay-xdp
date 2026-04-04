@@ -18,6 +18,9 @@ pub struct RelayData {
     pub relay_id_to_index: HashMap<u64, usize>,
     pub dest_relays: Vec<bool>,
     pub database_bin_file: Vec<u8>,
+    /// Per-relay public keys (32 bytes each). Used to decrypt relay-xdp update
+    /// requests and echo back in responses for relay self-verification.
+    pub relay_public_keys: Vec<[u8; 32]>,
 }
 
 impl RelayData {
@@ -35,6 +38,7 @@ impl RelayData {
             relay_id_to_index: HashMap::new(),
             dest_relays: vec![],
             database_bin_file: vec![],
+            relay_public_keys: vec![],
         }
     }
 }
