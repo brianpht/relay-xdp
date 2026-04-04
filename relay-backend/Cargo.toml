@@ -42,4 +42,6 @@ relay-xdp = { path = "../relay-xdp" }
 relay-xdp-common = { path = "../relay-xdp-common" }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+crypto_box = "0.9"
+getrandom = "0.2"
 

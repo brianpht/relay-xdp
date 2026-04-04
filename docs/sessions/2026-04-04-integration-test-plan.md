@@ -35,7 +35,7 @@
 
 ### Integration Test Plan Design
 
-Designed 5 new test files with ~24 total tests across 4 categories:
+Designed 5 new test files with ~35 total tests across 5 categories:
 
 1. **Cross-crate wire format** (`relay-backend/tests/cross_crate_wire.rs`, ~10 tests)
    - relay-xdp Writer builds request -> relay-backend SimpleReader parses
@@ -57,6 +57,15 @@ Designed 5 new test files with ~24 total tests across 4 categories:
    - Indirect route discovery verification
    - Shutting-down relay exclusion
 
+5. **Encrypted request** (`relay-backend/tests/e2e_encrypted.rs`, ~11 tests)
+   - End-to-end NaCl crypto_box encryption/decryption using real keypairs
+   - relay-xdp Writer builds request, encrypts with SalsaBox (relay_sk + backend_pk)
+   - relay-backend handler decrypts with (relay_pk + backend_sk), parses, returns RelayUpdateResponse
+   - Response parsed with relay-xdp Reader to verify cross-crate compatibility
+   - Negative cases: wrong key, tampered MAC, tampered ciphertext, tampered nonce, truncated body, unknown relay
+   - Plaintext fallback when no crypto keys configured (legacy gateway proxy mode)
+   - Multiple sequential encrypted requests from same relay
+
 ## Decisions Made
 
 | Decision | Rationale | ADR |
@@ -69,7 +78,7 @@ Designed 5 new test files with ~24 total tests across 4 categories:
 
 ## Tests Added/Modified
 
-All 24 integration tests implemented and passing.
+All 35 integration tests implemented and passing.
 
 ### Planned Test Summary
 
@@ -79,6 +88,7 @@ All 24 integration tests implemented and passing.
 | `relay-backend/tests/http_handler_integration.rs` | 6 | Integration (HTTP handler) | Done |
 | `relay-xdp/tests/backend_response_integration.rs` | 5 | Integration (response parsing) | Done |
 | `relay-backend/tests/pipeline_integration.rs` | 3 | Integration (full data pipeline) | Done |
+| `relay-backend/tests/e2e_encrypted.rs` | 11 | Integration (NaCl crypto_box encrypt/decrypt) | Done |
 
 ## Issues Encountered
 
@@ -100,11 +110,12 @@ All 24 integration tests implemented and passing.
 
 | Status | File |
 |--------|------|
-| M | `relay-backend/Cargo.toml` (added relay-xdp, relay-xdp-common, tower, http-body-util to dev-dependencies) |
+| M | `relay-backend/Cargo.toml` (added relay-xdp, relay-xdp-common, tower, http-body-util, crypto_box, getrandom to dev-dependencies) |
 | M | `relay-xdp/Cargo.toml` (added relay-backend to dev-dependencies) |
 | A | `relay-backend/tests/cross_crate_wire.rs` (10 tests) |
 | A | `relay-backend/tests/http_handler_integration.rs` (6 tests) |
 | A | `relay-backend/tests/pipeline_integration.rs` (3 tests) |
+| A | `relay-backend/tests/e2e_encrypted.rs` (11 tests) |
 | A | `relay-xdp/tests/backend_response_integration.rs` (5 tests) |
 
 ## Reference
