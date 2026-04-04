@@ -502,9 +502,12 @@ pub fn read_address(&mut self) -> Option<SocketAddrV4> {
 byte order. relay-xdp (Writer/Reader) writes the BE address via `write_uint32`
 (LE storage), producing reversed byte order.
 
-**In production**, relay-xdp sends requests through a gateway proxy, which decrypts and
-forwards the decrypted payload to relay-backend. The request arriving at relay-backend
-is already in the expected raw-octets format.
+**In direct mode** (`RELAY_BACKEND_PRIVATE_KEY` set), relay-xdp sends encrypted requests
+directly to relay-backend, which decrypts them via NaCl crypto_box. The handler parses
+the relay address from the plaintext header (bytes 2-5 are raw IP octets due to the
+`LE(BE(host)) = network order` identity on little-endian machines), looks up the relay's
+public key, and decrypts the body. In **legacy mode** (no private key), a gateway proxy
+decrypts and forwards the plaintext payload to relay-backend.
 
 However, **relay-xdp reads the response directly** from relay-backend. relay-backend's
 SimpleWriter writes `[0x0A, 0x00, 0x00, 0x01]` (raw octets), and relay-xdp's Reader reads

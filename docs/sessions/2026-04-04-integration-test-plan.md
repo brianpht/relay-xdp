@@ -84,8 +84,8 @@ All 24 integration tests implemented and passing.
 
 | Issue | Resolution | Blocking |
 |-------|------------|----------|
-| Address encoding mismatch between crates | Documented in ARCHITECTURE.md; response path is compatible but request path goes through gateway proxy in production. Tests need byte-level assertions to document and verify this. | No |
-| `/relay_update` handler returns empty 200 (no response body) | Handler currently only parses request and feeds RelayManager. Response building exists in `RelayUpdateResponse::write()` but not called from handler. HTTP handler tests will test current behavior (200 OK, RelayManager state). | No |
+| Address encoding mismatch between crates | Documented in ARCHITECTURE.md; response path is compatible. Request path now supports both direct mode (relay-backend decrypts NaCl box) and legacy gateway proxy mode. Tests verify byte-level compatibility. | No |
+| `/relay_update` handler returns empty 200 (no response body) | **Resolved**: handler now builds and returns a full `RelayUpdateResponse` body in both direct and legacy modes. Added `MagicRotator` for magic bytes and ping key rotation. | No |
 | `func_parity.rs` tests use `#[ignore]` and modify env vars | New tests will NOT use env vars or `#[ignore]` - they directly construct Config structs and pass them in. func_parity tests remain separate for crypto testing. | No |
 
 ## Next Steps
