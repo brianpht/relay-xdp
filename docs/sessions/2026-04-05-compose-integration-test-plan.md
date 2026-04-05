@@ -125,10 +125,10 @@ No code changes in this planning session. Expected deliverables:
 
 ## Next Steps
 
-1. **High:** Generate test X25519 keypairs and create `tests/fixtures/test-relays.json`
-2. **High:** Create `relay-xdp/Dockerfile.nobpf` (2-stage, no eBPF)
-3. **High:** Create `docker-compose.test.yml` with 5 services + static IPs
-4. **High:** Create `tests/compose-test.sh` with 9 assertions
+1. ~~**High:** Generate test X25519 keypairs and create `tests/fixtures/test-relays.json`~~ DONE
+2. ~~**High:** Create `relay-xdp/Dockerfile.nobpf` (2-stage, no eBPF)~~ DONE
+3. ~~**High:** Create `docker-compose.test.yml` with 5 services + static IPs~~ DONE
+4. ~~**High:** Create `tests/compose-test.sh` with 9 assertions~~ DONE
 5. **Medium:** Add `compose-test` job to `.github/workflows/rust.yml`
 6. **Low:** Consider adding a second backend instance to test Redis leader election failover
 
@@ -137,4 +137,10 @@ No code changes in this planning session. Expected deliverables:
 | Status | File |
 |--------|------|
 | A | `docs/sessions/2026-04-05-compose-integration-test-plan.md` - this session summary |
+| A | `tests/fixtures/test-relays.json` - 3 test relays with X25519 public keys |
+| A | `tests/gen-test-keys.sh` - documents deterministic test keypair derivation |
+| A | `tests/compose-test.sh` - test runner with 9 curl assertions |
+| A | `relay-xdp/Dockerfile.nobpf` - 2-stage build (no eBPF nightly) |
+| A | `docker-compose.test.yml` - 5-service topology with static IPs |
+| M | `relay-backend/Dockerfile` - added curl to runtime for healthcheck |
 

@@ -1,0 +1,32 @@
+{
+  "relays": [
+    {
+      "name": "relay-a",
+      "address": "172.28.0.10:40000",
+      "latitude": 32.78,
+      "longitude": -96.80,
+      "datacenter_id": 1,
+      "dest": true,
+      "public_key": "PzdO4BakLhxG5B9REqJkcwb0DZSh4PYH3wdV8FGH8DQ="
+    },
+    {
+      "name": "relay-b",
+      "address": "172.28.0.11:40000",
+      "latitude": 52.37,
+      "longitude": 4.90,
+      "datacenter_id": 2,
+      "dest": true,
+      "public_key": "+H8U9M1i36CnRt09I97/XuJXoEYowLIFbjQPcZ+rkFY="
+    },
+    {
+      "name": "relay-c",
+      "address": "172.28.0.12:40000",
+      "latitude": 35.68,
+      "longitude": 139.69,
+      "datacenter_id": 3,
+      "dest": true,
+      "public_key": "gX0jT3+lgWASRX9Whw3m8oChi+sFQvwZUnWMIFatsWQ="
+    }
+  ]
+}
+

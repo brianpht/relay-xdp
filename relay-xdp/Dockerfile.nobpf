@@ -1,0 +1,56 @@
+# relay-xdp Dockerfile (no-BPF mode)
+# Two-stage build: skips eBPF nightly stage for faster CI builds.
+# For use with RELAY_NO_BPF=1 (userspace-only mode).
+#
+# Build from workspace root:
+#   docker build -f relay-xdp/Dockerfile.nobpf -t relay-xdp-nobpf .
+#
+# Run (no --privileged needed):
+#   docker run \
+#     -e RELAY_NO_BPF=1 \
+#     -e RELAY_PUBLIC_ADDRESS=10.0.0.1:40000 \
+#     -e RELAY_NAME=my-relay \
+#     -e RELAY_BACKEND_URL=http://backend:80 \
+#     -e RELAY_PUBLIC_KEY=<b64> \
+#     -e RELAY_PRIVATE_KEY=<b64> \
+#     -e RELAY_BACKEND_PUBLIC_KEY=<b64> \
+#     relay-xdp-nobpf
+
+# -------------------------------------------------------
+# Stage 1: Build userspace binary (stable)
+# -------------------------------------------------------
+FROM rust:1.86-bookworm AS builder
+
+WORKDIR /build
+
+# Copy workspace-level files
+COPY Cargo.toml Cargo.lock ./
+
+# Copy crates needed for relay-xdp
+COPY relay-xdp-common/ relay-xdp-common/
+COPY relay-xdp/ relay-xdp/
+
+# Stub crates for workspace resolution
+RUN mkdir -p relay-backend/src xtask/src && \
+    echo 'fn main() {}' > relay-backend/src/main.rs && \
+    echo '' > relay-backend/src/lib.rs && \
+    echo 'fn main() {}' > xtask/src/main.rs
+COPY relay-backend/Cargo.toml relay-backend/Cargo.toml
+COPY xtask/Cargo.toml xtask/Cargo.toml
+
+# Build release binary (no eBPF .o file needed - RELAY_NO_BPF=1 skips loading)
+RUN cargo build --release -p relay-xdp
+
+# -------------------------------------------------------
+# Stage 2: Runtime
+# -------------------------------------------------------
+FROM debian:bookworm-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/relay-xdp /usr/local/bin/relay-xdp
+
+ENTRYPOINT ["relay-xdp"]
+
