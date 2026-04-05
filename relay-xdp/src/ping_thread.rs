@@ -82,17 +82,17 @@ impl PingThread {
 
         while !self.quit.load(Ordering::Relaxed) {
             // Receive packets (blocking with 100ms timeout)
-            if let Ok((bytes, addr)) = self.socket.recv_from(&mut packet_buf) {
-                if let std::net::SocketAddr::V4(v4) = addr {
-                    let from_address = u32::from_be_bytes(v4.ip().octets());
-                    let from_port = v4.port();
+            if let Ok((bytes, std::net::SocketAddr::V4(v4))) =
+                self.socket.recv_from(&mut packet_buf)
+            {
+                let from_address = u32::from_be_bytes(v4.ip().octets());
+                let from_port = v4.port();
 
-                    // Process relay pong packets
-                    if bytes == 18 + 8 && packet_buf[0] == RELAY_PONG_PACKET {
-                        let r = &packet_buf[18..];
-                        let sequence = u64::from_le_bytes(r[..8].try_into().unwrap());
-                        self.manager.process_pong(from_address, from_port, sequence);
-                    }
+                // Process relay pong packets
+                if bytes == 18 + 8 && packet_buf[0] == RELAY_PONG_PACKET {
+                    let r = &packet_buf[18..];
+                    let sequence = u64::from_le_bytes(r[..8].try_into().unwrap());
+                    self.manager.process_pong(from_address, from_port, sequence);
                 }
             }
 
@@ -125,7 +125,8 @@ impl PingThread {
                                         for i in 0..msg.new_relays.num_relays {
                                             let addr_be = msg.new_relays.address[i].to_be();
                                             let port_be = (msg.new_relays.port[i] as u32).to_be();
-                                            let key = ((addr_be as u64) << 32) | (port_be as u64 & 0xFFFF);
+                                            let key = ((addr_be as u64) << 32)
+                                                | (port_be as u64 & 0xFFFF);
                                             let _ = relay_map.insert(key, 1u64, 0);
                                         }
                                     }
@@ -147,8 +148,10 @@ impl PingThread {
                                     if let Ok(mut relay_map) = bpf_guard.relay_map() {
                                         for i in 0..msg.delete_relays.num_relays {
                                             let addr_be = msg.delete_relays.address[i].to_be();
-                                            let port_be = (msg.delete_relays.port[i] as u32).to_be();
-                                            let key = ((addr_be as u64) << 32) | (port_be as u64 & 0xFFFF);
+                                            let port_be =
+                                                (msg.delete_relays.port[i] as u32).to_be();
+                                            let key = ((addr_be as u64) << 32)
+                                                | (port_be as u64 & 0xFFFF);
                                             let _ = relay_map.remove(&key);
                                         }
                                     }
@@ -163,8 +166,7 @@ impl PingThread {
                                 println!("-------------------------------------------------------");
                             }
 
-                            self.manager
-                                .update(&msg.new_relays, &msg.delete_relays);
+                            self.manager.update(&msg.new_relays, &msg.delete_relays);
                         }
                     }
                 }
@@ -222,8 +224,12 @@ impl PingThread {
         };
 
         // SHA-256 the token data
-        let token_bytes =
-            unsafe { std::slice::from_raw_parts(&token_data as *const _ as *const u8, std::mem::size_of::<PingTokenData>()) };
+        let token_bytes = unsafe {
+            std::slice::from_raw_parts(
+                &token_data as *const _ as *const u8,
+                std::mem::size_of::<PingTokenData>(),
+            )
+        };
         let ping_token = sha256(token_bytes);
 
         // Build packet (reuse buffer to avoid per-ping heap allocation)
@@ -247,8 +253,12 @@ impl PingThread {
         let to_bytes = packet_filter::address_to_bytes(relay_addr);
 
         let pittle = packet_filter::generate_pittle(&from_bytes, &to_bytes, packet_length);
-        let chonkle =
-            packet_filter::generate_chonkle(&self.current_magic, &from_bytes, &to_bytes, packet_length);
+        let chonkle = packet_filter::generate_chonkle(
+            &self.current_magic,
+            &from_bytes,
+            &to_bytes,
+            packet_length,
+        );
 
         self.ping_buf[1] = pittle[0];
         self.ping_buf[2] = pittle[1];
@@ -266,4 +276,3 @@ impl PingThread {
         self.pings_sent += 1;
     }
 }
-

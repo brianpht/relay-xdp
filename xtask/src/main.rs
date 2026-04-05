@@ -39,7 +39,10 @@ fn build_ebpf() -> anyhow::Result<()> {
         .unwrap()
         .join("xdp");
 
-    println!("Building relay_xdp.o from C source in {}", xdp_dir.display());
+    println!(
+        "Building relay_xdp.o from C source in {}",
+        xdp_dir.display()
+    );
 
     let status = Command::new("make")
         .arg("relay_xdp.o")
@@ -70,10 +73,7 @@ fn build_ebpf_rust() -> anyhow::Result<()> {
         .unwrap()
         .join("relay-xdp-ebpf");
 
-    println!(
-        "Building Rust eBPF program in {}",
-        ebpf_dir.display()
-    );
+    println!("Building Rust eBPF program in {}", ebpf_dir.display());
 
     let status = Command::new("cargo")
         .args([
@@ -119,12 +119,16 @@ fn func_test() -> anyhow::Result<()> {
         .parent()
         .unwrap();
 
-    println!("Running functional parity tests in {}", workspace_dir.display());
+    println!(
+        "Running functional parity tests in {}",
+        workspace_dir.display()
+    );
 
     let status = Command::new("cargo")
         .args([
             "test",
-            "--test", "func_parity",
+            "--test",
+            "func_parity",
             "--",
             "--ignored",
             "--test-threads=1",
@@ -138,4 +142,3 @@ fn func_test() -> anyhow::Result<()> {
 
     Ok(())
 }
-

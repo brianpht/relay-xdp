@@ -78,7 +78,7 @@ impl CostMatrix {
         let mut rs = ReadStream::new(buffer);
 
         let version = rs.serialize_uint32();
-        if version < COST_MATRIX_VERSION_MIN || version > COST_MATRIX_VERSION_MAX {
+        if !(COST_MATRIX_VERSION_MIN..=COST_MATRIX_VERSION_MAX).contains(&version) {
             return Err(format!("invalid cost matrix version: {}", version));
         }
 
@@ -112,8 +112,8 @@ impl CostMatrix {
         }
 
         let mut dest_relays = vec![false; num_relays];
-        for i in 0..num_relays {
-            dest_relays[i] = rs.serialize_bool();
+        for item in dest_relays.iter_mut().take(num_relays) {
+            *item = rs.serialize_bool();
         }
 
         if let Some(e) = rs.error() {
@@ -134,4 +134,3 @@ impl CostMatrix {
         })
     }
 }
-

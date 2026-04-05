@@ -115,6 +115,7 @@ impl RelayManager {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn process_relay_update(
         &self,
         current_time: i64,
@@ -174,7 +175,6 @@ impl RelayManager {
         source_entry.relay_version = relay_version.to_string();
         source_entry.shutting_down = shutting_down;
 
-
         for i in 0..num_samples {
             let dest_relay_id = sample_relay_id[i];
             let dest_entry = source_entry
@@ -192,8 +192,10 @@ impl RelayManager {
 
             if enable_history {
                 dest_entry.rtt = history_max(&dest_entry.history_rtt, dest_entry.history_count);
-                dest_entry.jitter = history_mean(&dest_entry.history_jitter, dest_entry.history_count);
-                dest_entry.packet_loss = history_mean(&dest_entry.history_packet_loss, dest_entry.history_count);
+                dest_entry.jitter =
+                    history_mean(&dest_entry.history_jitter, dest_entry.history_count);
+                dest_entry.packet_loss =
+                    history_mean(&dest_entry.history_packet_loss, dest_entry.history_count);
             } else {
                 dest_entry.rtt = rtt;
                 dest_entry.jitter = jitter;
@@ -274,8 +276,7 @@ impl RelayManager {
             if !active_set.contains(&source_relay_id) {
                 continue;
             }
-            for j in 0..i {
-                let dest_relay_id = relay_ids[j];
+            for (j, &dest_relay_id) in relay_ids.iter().enumerate().take(i) {
                 if !active_set.contains(&dest_relay_id) {
                     continue;
                 }
@@ -432,4 +433,3 @@ impl RelayManager {
         (rtt, jitter, packet_loss)
     }
 }
-

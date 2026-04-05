@@ -4,9 +4,9 @@
 use anyhow::{bail, Context, Result};
 use relay_xdp_common::*;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::collections::VecDeque;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::bpf::BpfContext;
@@ -37,7 +37,6 @@ pub type MessageQueue<T> = Arc<Mutex<VecDeque<T>>>;
 pub fn new_queue<T>() -> MessageQueue<T> {
     Arc::new(Mutex::new(VecDeque::new()))
 }
-
 
 pub struct MainThread {
     config: Arc<Config>,
@@ -213,8 +212,9 @@ impl MainThread {
             if let Ok(stats_map) = bpf_guard.stats_map() {
                 if let Ok(values) = stats_map.get(&0, 0) {
                     for per_cpu_stats in values.iter() {
-                        for j in 0..RELAY_NUM_COUNTERS {
-                            counters[j] += per_cpu_stats.counters[j];
+                        for (j, counter) in counters.iter_mut().enumerate().take(RELAY_NUM_COUNTERS)
+                        {
+                            *counter += per_cpu_stats.counters[j];
                         }
                     }
                 }
@@ -243,17 +243,36 @@ impl MainThread {
         let time_since_last = current_time - self.last_stats_time;
         self.last_stats_time = current_time;
 
-        let delta = |cur: u64, last: u64| -> u64 {
-            if cur > last { cur - last } else { 0 }
-        };
+        let delta = |cur: u64, last: u64| -> u64 { cur.saturating_sub(last) };
 
-        let pkts_sent_delta = delta(counters[RELAY_COUNTER_PACKETS_SENT], self.last_stats_packets_sent);
-        let pkts_recv_delta = delta(counters[RELAY_COUNTER_PACKETS_RECEIVED], self.last_stats_packets_received);
-        let bytes_sent_delta = delta(counters[RELAY_COUNTER_BYTES_SENT], self.last_stats_bytes_sent);
-        let bytes_recv_delta = delta(counters[RELAY_COUNTER_BYTES_RECEIVED], self.last_stats_bytes_received);
-        let client_pings_delta = delta(counters[RELAY_COUNTER_CLIENT_PING_PACKET_RECEIVED], self.last_stats_client_pings_received);
-        let server_pings_delta = delta(counters[RELAY_COUNTER_SERVER_PING_PACKET_RECEIVED], self.last_stats_server_pings_received);
-        let relay_pings_delta = delta(counters[RELAY_COUNTER_RELAY_PING_PACKET_RECEIVED], self.last_stats_relay_pings_received);
+        let pkts_sent_delta = delta(
+            counters[RELAY_COUNTER_PACKETS_SENT],
+            self.last_stats_packets_sent,
+        );
+        let pkts_recv_delta = delta(
+            counters[RELAY_COUNTER_PACKETS_RECEIVED],
+            self.last_stats_packets_received,
+        );
+        let bytes_sent_delta = delta(
+            counters[RELAY_COUNTER_BYTES_SENT],
+            self.last_stats_bytes_sent,
+        );
+        let bytes_recv_delta = delta(
+            counters[RELAY_COUNTER_BYTES_RECEIVED],
+            self.last_stats_bytes_received,
+        );
+        let client_pings_delta = delta(
+            counters[RELAY_COUNTER_CLIENT_PING_PACKET_RECEIVED],
+            self.last_stats_client_pings_received,
+        );
+        let server_pings_delta = delta(
+            counters[RELAY_COUNTER_SERVER_PING_PACKET_RECEIVED],
+            self.last_stats_server_pings_received,
+        );
+        let relay_pings_delta = delta(
+            counters[RELAY_COUNTER_RELAY_PING_PACKET_RECEIVED],
+            self.last_stats_relay_pings_received,
+        );
 
         let (pps_sent, pps_recv, bw_sent, bw_recv, client_pps, server_pps, relay_pps) =
             if time_since_last > 0.0 {
@@ -332,8 +351,8 @@ impl MainThread {
         w.write_string(RELAY_VERSION, RELAY_VERSION_LENGTH);
 
         w.write_uint32(RELAY_NUM_COUNTERS as u32);
-        for i in 0..RELAY_NUM_COUNTERS {
-            w.write_uint64(counters[i]);
+        for counter in counters.iter().take(RELAY_NUM_COUNTERS) {
+            w.write_uint64(*counter);
         }
 
         // Encrypt the data after the relay address header using crypto_box
@@ -368,7 +387,9 @@ impl MainThread {
         let update_url = format!("{}/relay_update", self.config.relay_backend_url);
 
         // POST the update (B10: reuse persistent HTTP agent for connection keep-alive)
-        let response = self.http_agent.post(&update_url)
+        let response = self
+            .http_agent
+            .post(&update_url)
             .header("Content-Type", "application/octet-stream")
             .header("User-Agent", "network next relay")
             .send(&self.update_data)
@@ -398,7 +419,9 @@ impl MainThread {
             bail!("bad relay update response version: expected 1, got {version}");
         }
 
-        let backend_timestamp = r.read_uint64().context("failed to read backend timestamp")?;
+        let backend_timestamp = r
+            .read_uint64()
+            .context("failed to read backend timestamp")?;
 
         if !self.initialized {
             log::info!("Relay initialized");
@@ -415,27 +438,38 @@ impl MainThread {
         let mut relay_ping_set = RelaySet::new();
         for _ in 0..num_relays {
             let id = r.read_uint64().context("failed to read relay id")?;
-            let addr_type = r.read_uint8().context("failed to read relay address type")?;
+            let addr_type = r
+                .read_uint8()
+                .context("failed to read relay address type")?;
             if addr_type != RELAY_ADDRESS_IPV4 {
                 bail!("only ipv4 relay addresses are supported");
             }
             let addr_be = r.read_uint32().context("failed to read relay address")?;
             let addr = u32::from_be(addr_be);
             let port = r.read_uint16().context("failed to read relay port")?;
-            let internal = r.read_uint8().context("failed to read relay internal flag")?;
+            let internal = r
+                .read_uint8()
+                .context("failed to read relay internal flag")?;
             relay_ping_set.push(id, addr, port, internal);
         }
 
-        let _target_version = r.read_string(RELAY_VERSION_LENGTH).context("failed to read target version")?;
+        let _target_version = r
+            .read_string(RELAY_VERSION_LENGTH)
+            .context("failed to read target version")?;
 
         let mut next_magic = [0u8; 8];
         let mut current_magic = [0u8; 8];
         let mut previous_magic = [0u8; 8];
-        r.read_bytes_into(&mut next_magic).context("failed to read next magic")?;
-        r.read_bytes_into(&mut current_magic).context("failed to read current magic")?;
-        r.read_bytes_into(&mut previous_magic).context("failed to read previous magic")?;
+        r.read_bytes_into(&mut next_magic)
+            .context("failed to read next magic")?;
+        r.read_bytes_into(&mut current_magic)
+            .context("failed to read current magic")?;
+        r.read_bytes_into(&mut previous_magic)
+            .context("failed to read previous magic")?;
 
-        let (expected_public_address, expected_port) = r.read_address().context("failed to read expected address")?;
+        let (expected_public_address, expected_port) = r
+            .read_address()
+            .context("failed to read expected address")?;
         if self.config.relay_public_address != expected_public_address {
             bail!("relay public address mismatch");
         }
@@ -445,7 +479,9 @@ impl MainThread {
 
         let has_internal = r.read_uint8().context("failed to read has_internal flag")?;
         if has_internal != 0 {
-            let (expected_internal, _) = r.read_address().context("failed to read internal address")?;
+            let (expected_internal, _) = r
+                .read_address()
+                .context("failed to read internal address")?;
             if self.config.relay_internal_address != expected_internal {
                 bail!("relay internal address mismatch");
             }
@@ -453,18 +489,22 @@ impl MainThread {
 
         let mut expected_relay_pk = [0u8; RELAY_PUBLIC_KEY_BYTES];
         let mut _expected_backend_pk = [0u8; RELAY_BACKEND_PUBLIC_KEY_BYTES];
-        r.read_bytes_into(&mut expected_relay_pk).context("failed to read relay public key")?;
-        r.read_bytes_into(&mut _expected_backend_pk).context("failed to read backend public key")?;
+        r.read_bytes_into(&mut expected_relay_pk)
+            .context("failed to read relay public key")?;
+        r.read_bytes_into(&mut _expected_backend_pk)
+            .context("failed to read backend public key")?;
 
         if expected_relay_pk != self.config.relay_public_key {
             bail!("relay public key does not match expected value");
         }
 
         // Skip dummy route token
-        r.skip(RELAY_ENCRYPTED_ROUTE_TOKEN_BYTES).context("failed to skip dummy route token")?;
+        r.skip(RELAY_ENCRYPTED_ROUTE_TOKEN_BYTES)
+            .context("failed to skip dummy route token")?;
 
         let mut ping_key = [0u8; RELAY_PING_KEY_BYTES];
-        r.read_bytes_into(&mut ping_key).context("failed to read ping key")?;
+        r.read_bytes_into(&mut ping_key)
+            .context("failed to read ping key")?;
 
         // Update BPF state
         if let Some(ref bpf) = self.bpf {
@@ -619,4 +659,3 @@ struct SessionStats {
     envelope_kbps_up: u64,
     envelope_kbps_down: u64,
 }
-

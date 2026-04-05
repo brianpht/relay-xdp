@@ -10,6 +10,7 @@ use crate::encoding::{SimpleReader, SimpleWriter};
 // RelayUpdateRequest
 // -------------------------------------------------------
 
+#[allow(dead_code)]
 pub struct RelayUpdateRequest {
     pub version: u8,
     pub address: SocketAddrV4,
@@ -41,7 +42,7 @@ impl RelayUpdateRequest {
         let mut r = SimpleReader::new(buffer);
 
         let version = r.read_uint8().ok_or("could not read version")?;
-        if version < 1 || version > 1 {
+        if version != 1 {
             return Err("invalid relay update request packet version".into());
         }
 
@@ -74,15 +75,15 @@ impl RelayUpdateRequest {
             .read_uint32()
             .ok_or("could not read envelope bandwidth down")?;
         let packets_sent_per_second = r.read_float32().ok_or("could not read packets sent/s")?;
-        let packets_received_per_second =
-            r.read_float32().ok_or("could not read packets received/s")?;
+        let packets_received_per_second = r
+            .read_float32()
+            .ok_or("could not read packets received/s")?;
         let bandwidth_sent_kbps = r.read_float32().ok_or("could not read bandwidth sent")?;
-        let bandwidth_received_kbps =
-            r.read_float32().ok_or("could not read bandwidth received")?;
-        let client_pings_per_second =
-            r.read_float32().ok_or("could not read client pings/s")?;
-        let server_pings_per_second =
-            r.read_float32().ok_or("could not read server pings/s")?;
+        let bandwidth_received_kbps = r
+            .read_float32()
+            .ok_or("could not read bandwidth received")?;
+        let client_pings_per_second = r.read_float32().ok_or("could not read client pings/s")?;
+        let server_pings_per_second = r.read_float32().ok_or("could not read server pings/s")?;
         let relay_pings_per_second = r.read_float32().ok_or("could not read relay pings/s")?;
         let relay_flags = r.read_uint64().ok_or("could not read relay flags")?;
         let relay_version = r
@@ -98,8 +99,8 @@ impl RelayUpdateRequest {
         }
 
         let mut relay_counters = vec![0u64; NUM_RELAY_COUNTERS];
-        for i in 0..NUM_RELAY_COUNTERS {
-            relay_counters[i] = r.read_uint64().ok_or("could not read relay counter")?;
+        for counter in relay_counters.iter_mut().take(NUM_RELAY_COUNTERS) {
+            *counter = r.read_uint64().ok_or("could not read relay counter")?;
         }
 
         Ok(RelayUpdateRequest {
@@ -215,4 +216,3 @@ fn fnv1a_64(data: &[u8]) -> u64 {
     }
     hash
 }
-

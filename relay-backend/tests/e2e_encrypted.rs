@@ -276,7 +276,11 @@ async fn test_e2e_encrypted_request_updates_relay_manager() {
         .as_secs() as i64;
 
     let active = state.relay_manager.get_active_relays(current_time);
-    assert_eq!(active.len(), 1, "relay should be active after encrypted update");
+    assert_eq!(
+        active.len(),
+        1,
+        "relay should be active after encrypted update"
+    );
     assert_eq!(active[0].name, "relay-test");
     assert_eq!(active[0].sessions, 5);
 }
@@ -539,7 +543,7 @@ async fn test_e2e_plaintext_mode_when_no_crypto_keys() {
         redis_hostname: "127.0.0.1:6379".to_string(),
         internal_address: "127.0.0.1".to_string(),
         internal_port: "0".to_string(),
-        relay_backend_public_key: vec![], // empty = no crypto
+        relay_backend_public_key: vec![],  // empty = no crypto
         relay_backend_private_key: vec![], // empty = no crypto
         relay_data_file: None,
     };
@@ -617,4 +621,3 @@ async fn test_e2e_multiple_encrypted_requests_succeed() {
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].name, "relay-test");
 }
-

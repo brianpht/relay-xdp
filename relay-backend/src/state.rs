@@ -22,4 +22,3 @@ pub struct AppState {
     pub leader_election: Arc<RedisLeaderElection>,
     pub magic_rotator: Arc<MagicRotator>,
 }
-

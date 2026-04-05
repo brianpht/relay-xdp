@@ -65,12 +65,12 @@ pub fn read_config() -> Result<Config> {
     let internal_address = get_env_string("INTERNAL_ADDRESS", "127.0.0.1");
     let internal_port = get_env_string("INTERNAL_PORT", &http_port.to_string());
 
-    let relay_backend_public_key = get_env_base64("RELAY_BACKEND_PUBLIC_KEY")
-        .unwrap_or_default();
-    let relay_backend_private_key = get_env_base64("RELAY_BACKEND_PRIVATE_KEY")
-        .unwrap_or_default();
+    let relay_backend_public_key = get_env_base64("RELAY_BACKEND_PUBLIC_KEY").unwrap_or_default();
+    let relay_backend_private_key = get_env_base64("RELAY_BACKEND_PRIVATE_KEY").unwrap_or_default();
 
-    let relay_data_file = std::env::var("RELAY_DATA_FILE").ok().filter(|v| !v.is_empty());
+    let relay_data_file = std::env::var("RELAY_DATA_FILE")
+        .ok()
+        .filter(|v| !v.is_empty());
 
     if relay_backend_public_key.is_empty() {
         log::warn!("RELAY_BACKEND_PUBLIC_KEY not set - relay update crypto disabled");
@@ -107,4 +107,3 @@ pub fn read_config() -> Result<Config> {
         relay_data_file,
     })
 }
-

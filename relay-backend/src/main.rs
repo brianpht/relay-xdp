@@ -283,10 +283,7 @@ async fn update_route_matrix(state: Arc<AppState>) {
         };
 
         // Store in Redis
-        state
-            .leader_election
-            .store("relays", &relays_csv)
-            .await;
+        state.leader_election.store("relays", &relays_csv).await;
         state
             .leader_election
             .store("cost_matrix", &cost_matrix_data)
@@ -306,10 +303,16 @@ async fn update_route_matrix(state: Arc<AppState>) {
             *state.relays_csv.write().expect("relays_csv lock poisoned") = d;
         }
         if let Some(d) = cost_matrix_final {
-            *state.cost_matrix_data.write().expect("cost_matrix lock poisoned") = d;
+            *state
+                .cost_matrix_data
+                .write()
+                .expect("cost_matrix lock poisoned") = d;
         }
         if let Some(d) = route_matrix_final {
-            *state.route_matrix_data.write().expect("route_matrix lock poisoned") = d;
+            *state
+                .route_matrix_data
+                .write()
+                .expect("route_matrix lock poisoned") = d;
         }
 
         // Analyze
@@ -322,4 +325,3 @@ async fn update_route_matrix(state: Arc<AppState>) {
         );
     }
 }
-

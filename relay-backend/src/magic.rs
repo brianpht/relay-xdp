@@ -50,6 +50,12 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
+impl Default for MagicRotator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MagicRotator {
     pub fn new() -> Self {
         MagicRotator {
@@ -89,4 +95,3 @@ impl MagicRotator {
         }
     }
 }
-

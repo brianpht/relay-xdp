@@ -2,7 +2,6 @@
 
 #![allow(dead_code)]
 
-
 /// Writer: appends little-endian values to a byte buffer.
 pub struct Writer<'a> {
     buf: &'a mut Vec<u8>,

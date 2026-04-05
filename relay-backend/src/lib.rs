@@ -13,4 +13,3 @@ pub mod relay_manager;
 pub mod relay_update;
 pub mod route_matrix;
 pub mod state;
-

@@ -304,11 +304,15 @@ fn test_indirect_route_discovery_pipeline() {
     let dest_relays = vec![true; 3];
     let relay_price = vec![0u8; 3];
 
-    let route_entries = helpers::optimize2(3, 1, &costs, &relay_price, &relay_datacenter, &dest_relays);
+    let route_entries =
+        helpers::optimize2(3, 1, &costs, &relay_price, &relay_datacenter, &dest_relays);
 
     // Check A-C pair (index 1 in triangular matrix for relays 0,2)
     let idx_ac = helpers::tri_matrix_index(0, 2);
-    assert!(idx_ac < route_entries.len(), "should have route entry for A-C pair");
+    assert!(
+        idx_ac < route_entries.len(),
+        "should have route entry for A-C pair"
+    );
 
     let entry = &route_entries[idx_ac];
     assert_eq!(entry.direct_cost, 100, "direct A-C cost should be 100");
@@ -356,7 +360,11 @@ fn test_shutting_down_relay_excluded_from_costs() {
         let sample_losses = vec![0u16; sample_ids.len()];
 
         // Relay C (index 2) is shutting down
-        let flags = if src == 2 { RELAY_FLAGS_SHUTTING_DOWN } else { 0 };
+        let flags = if src == 2 {
+            RELAY_FLAGS_SHUTTING_DOWN
+        } else {
+            0
+        };
 
         let buf = build_xdp_relay_update(
             relays[src].host_addr,
@@ -392,9 +400,16 @@ fn test_shutting_down_relay_excluded_from_costs() {
 
     // Verify relay C is NOT in active relays
     let active = rm.get_active_relays(current_time);
-    assert_eq!(active.len(), 2, "only 2 non-shutting-down relays should be active");
+    assert_eq!(
+        active.len(),
+        2,
+        "only 2 non-shutting-down relays should be active"
+    );
     for r in &active {
-        assert_ne!(r.name, "relay-c", "shutting-down relay should not be active");
+        assert_ne!(
+            r.name, "relay-c",
+            "shutting-down relay should not be active"
+        );
     }
 
     // Get costs - pairs involving relay-c should be 255 (unreachable)
@@ -407,7 +422,12 @@ fn test_shutting_down_relay_excluded_from_costs() {
     // A-C and B-C should be 255 (unreachable because C is shutting down)
     let idx_ac = helpers::tri_matrix_index(0, 2);
     let idx_bc = helpers::tri_matrix_index(1, 2);
-    assert_eq!(costs[idx_ac], 255, "A-C should be unreachable (C shutting down)");
-    assert_eq!(costs[idx_bc], 255, "B-C should be unreachable (C shutting down)");
+    assert_eq!(
+        costs[idx_ac], 255,
+        "A-C should be unreachable (C shutting down)"
+    );
+    assert_eq!(
+        costs[idx_bc], 255,
+        "B-C should be unreachable (C shutting down)"
+    );
 }
-

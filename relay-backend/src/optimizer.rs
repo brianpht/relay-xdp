@@ -1,7 +1,6 @@
 //! Route optimization (Optimize2).
 //! Port of `modules/core/core.go` Optimize2 function.
 
-
 use crate::constants::*;
 use crate::encoding::{tri_matrix_index, tri_matrix_length};
 
@@ -422,9 +421,11 @@ pub fn optimize2(
                         }
 
                         // Collect result
-                        let mut entry = RouteEntry::default();
-                        entry.direct_cost = cost_ref[index] as i32;
-                        entry.num_routes = rm.num_routes as i32;
+                        let mut entry = RouteEntry {
+                            direct_cost: cost_ref[index] as i32,
+                            num_routes: rm.num_routes as i32,
+                            ..Default::default()
+                        };
                         for u in 0..rm.num_routes {
                             entry.route_cost[u] = rm.route_cost[u];
                             entry.route_price[u] = rm.route_price[u];
@@ -452,4 +453,3 @@ pub fn optimize2(
 
     routes
 }
-

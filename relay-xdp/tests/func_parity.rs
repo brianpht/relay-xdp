@@ -478,8 +478,16 @@ fn test_ping_history_integration() {
 
     let stats = history.get_stats(0.0, 2.0, 0.5);
     assert!(stats.packet_loss < 1.0, "should have ~0% loss");
-    assert!((stats.rtt - 5.0).abs() < 0.5, "RTT should be ~5ms, got {}", stats.rtt);
-    assert!(stats.jitter < 1.0, "jitter should be ~0ms, got {}", stats.jitter);
+    assert!(
+        (stats.rtt - 5.0).abs() < 0.5,
+        "RTT should be ~5ms, got {}",
+        stats.rtt
+    );
+    assert!(
+        stats.jitter < 1.0,
+        "jitter should be ~0ms, got {}",
+        stats.jitter
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -501,7 +509,11 @@ fn test_encoding_update_payload_format() {
     w.write_uint32(0x7F000001u32.to_be()); // 127.0.0.1 in BE
     w.write_uint16(40000);
 
-    assert_eq!(buf.len(), 8, "header should be 8 bytes (1 version + 7 address)");
+    assert_eq!(
+        buf.len(),
+        8,
+        "header should be 8 bytes (1 version + 7 address)"
+    );
 
     // Verify the address bytes
     assert_eq!(buf[0], 1); // version
@@ -573,9 +585,7 @@ fn start_mock_backend(
                     // Read the HTTP request (simplified: just read until we have the body)
                     let mut request = Vec::new();
                     let mut buf = [0u8; 16384];
-                    stream
-                        .set_read_timeout(Some(Duration::from_secs(2)))
-                        .ok();
+                    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
                     loop {
                         match stream.read(&mut buf) {
                             Ok(0) => break,
@@ -630,13 +640,8 @@ fn test_full_update_cycle_with_mock_backend() {
     let relay_address: u32 = 0x7F000001; // 127.0.0.1
     let relay_port: u16 = 40000;
 
-    let (backend_handle, backend_port, stop) = start_mock_backend(
-        relay_address,
-        relay_port,
-        relay_pk,
-        backend_pk,
-        backend_sk,
-    );
+    let (backend_handle, backend_port, stop) =
+        start_mock_backend(relay_address, relay_port, relay_pk, backend_pk, backend_sk);
 
     // Configure the relay
     std::env::set_var("RELAY_NAME", "test.mock");
@@ -728,7 +733,12 @@ fn test_parse_update_response_with_relay_set() {
     let mut w = relay_xdp::encoding::Writer::new(&mut buf);
 
     w.write_uint8(1); // version
-    w.write_uint64(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs());
+    w.write_uint64(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    );
 
     // 2 relays
     w.write_uint32(2);
@@ -779,4 +789,3 @@ fn test_parse_update_response_with_relay_set() {
     std::env::remove_var("RELAY_BACKEND_PUBLIC_KEY");
     std::env::remove_var("RELAY_BACKEND_URL");
 }
-

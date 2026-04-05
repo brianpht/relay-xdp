@@ -1,5 +1,7 @@
 //! Relay protocol constants.
 
+#![allow(dead_code)]
+
 pub const MAJOR_VERSION: u32 = 1;
 pub const MINOR_VERSION: u32 = 0;
 pub const PATCH_VERSION: u32 = 0;
@@ -62,4 +64,3 @@ pub const NUM_BUCKETS: usize = MAX_SCORE + 1;
 pub const IP_ADDRESS_NONE: u32 = 0;
 pub const IP_ADDRESS_IPV4: u32 = 1;
 pub const IP_ADDRESS_IPV6: u32 = 2;
-

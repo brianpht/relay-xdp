@@ -463,8 +463,7 @@ async fn test_json_loaded_two_relays_see_each_other_as_peers() {
     assert_eq!(peer_port, 40000);
 
     // Verify the relay ID matches what we expect from amsterdam's address
-    let expected_peer_id =
-        relay_backend::relay_update::relay_id("10.0.0.2:40000");
+    let expected_peer_id = relay_backend::relay_update::relay_id("10.0.0.2:40000");
     assert_eq!(peer_id, expected_peer_id);
 }
 
@@ -546,4 +545,3 @@ async fn test_json_file_load_then_encrypted_request() {
     // Cleanup
     let _ = std::fs::remove_dir_all(&dir);
 }
-

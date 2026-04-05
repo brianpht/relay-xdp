@@ -20,7 +20,10 @@ pub struct BpfContext {
 
 impl BpfContext {
     /// Find the network interface matching the relay address.
-    fn find_interface(relay_public_address: u32, relay_internal_address: u32) -> Result<(String, u32)> {
+    fn find_interface(
+        relay_public_address: u32,
+        relay_internal_address: u32,
+    ) -> Result<(String, u32)> {
         // Use nix to enumerate interfaces, or fall back to parsing /proc
         // For simplicity, iterate over interfaces using libc getifaddrs
 
@@ -59,8 +62,9 @@ impl BpfContext {
 
         // Load BPF program
         info!("Loading relay_xdp from {}", xdp_obj_path.display());
-        let mut bpf = Ebpf::load_file(xdp_obj_path)
-            .with_context(|| format!("failed to load BPF program from {}", xdp_obj_path.display()))?;
+        let mut bpf = Ebpf::load_file(xdp_obj_path).with_context(|| {
+            format!("failed to load BPF program from {}", xdp_obj_path.display())
+        })?;
 
         // Attach XDP program
         let program: &mut Xdp = bpf
@@ -217,4 +221,3 @@ fn cleanup_bpf_pins() {
         let _ = std::fs::remove_file(&path);
     }
 }
-

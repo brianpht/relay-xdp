@@ -1,6 +1,8 @@
 //! Binary serialization with bitpacking.
 //! Port of `modules/encoding/` (bitpacker.go, read_stream.go, write_stream.go, encoding.go).
 
+#![allow(dead_code)]
+
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use crate::constants::*;
@@ -51,11 +53,11 @@ pub fn tri_matrix_index(i: usize, j: usize) -> usize {
 pub struct BitWriter {
     buffer: Vec<u8>,
     scratch: u64,
-    num_bits: usize,
+    _num_bits: usize,
     bits_written: usize,
     word_index: usize,
     scratch_bits: usize,
-    num_words: usize,
+    _num_words: usize,
 }
 
 impl BitWriter {
@@ -64,11 +66,11 @@ impl BitWriter {
         BitWriter {
             buffer: vec![0u8; aligned],
             scratch: 0,
-            num_bits: (aligned / 4) * 32,
+            _num_bits: (aligned / 4) * 32,
             bits_written: 0,
             word_index: 0,
             scratch_bits: 0,
-            num_words: aligned / 4,
+            _num_words: aligned / 4,
         }
     }
 
@@ -99,8 +101,8 @@ impl BitWriter {
         let head_bytes = (4 - (self.bits_written % 32) / 8) % 4;
         let head_bytes = head_bytes.min(data.len());
 
-        for i in 0..head_bytes {
-            self.write_bits(data[i] as u32, 8);
+        for &byte in data.iter().take(head_bytes) {
+            self.write_bits(byte as u32, 8);
         }
 
         if head_bytes == data.len() {
@@ -145,7 +147,7 @@ impl BitWriter {
     }
 
     pub fn get_bytes_written(&self) -> usize {
-        (self.bits_written + 7) / 8
+        self.bits_written.div_ceil(8)
     }
 
     pub fn get_bits_written(&self) -> usize {
@@ -176,7 +178,7 @@ impl BitReader {
         BitReader {
             buffer: data.to_vec(),
             num_bits: data.len() * 8,
-            num_words: (data.len() + 3) / 4,
+            num_words: data.len().div_ceil(4),
             bits_read: 0,
             scratch: 0,
             scratch_bits: 0,
@@ -210,9 +212,8 @@ impl BitReader {
             } else {
                 // Partial word at end of buffer
                 let mut bytes = [0u8; 4];
-                for i in 0..(self.buffer.len() - offset).min(4) {
-                    bytes[i] = self.buffer[offset + i];
-                }
+                let len = (self.buffer.len() - offset).min(4);
+                bytes[..len].copy_from_slice(&self.buffer[offset..offset + len]);
                 u32::from_le_bytes(bytes)
             };
             self.scratch |= (word as u64) << self.scratch_bits;
@@ -247,8 +248,8 @@ impl BitReader {
 
         let head_bytes = (4 - (self.bits_read % 32) / 8) % 4;
         let head_bytes = head_bytes.min(buffer.len());
-        for i in 0..head_bytes {
-            buffer[i] = self.read_bits(8)? as u8;
+        for item in buffer.iter_mut().take(head_bytes) {
+            *item = self.read_bits(8)? as u8;
         }
         if head_bytes == buffer.len() {
             return Ok(());
@@ -620,7 +621,7 @@ impl ReadStream {
     }
 
     pub fn get_bytes_processed(&self) -> usize {
-        (self.reader.get_bits_read() + 7) / 8
+        self.reader.get_bits_read().div_ceil(8)
     }
 }
 
@@ -692,8 +693,8 @@ impl<'a> SimpleReader<'a> {
         if self.index + len as usize > self.data.len() {
             return None;
         }
-        let s = String::from_utf8_lossy(&self.data[self.index..self.index + len as usize])
-            .to_string();
+        let s =
+            String::from_utf8_lossy(&self.data[self.index..self.index + len as usize]).to_string();
         self.index += len as usize;
         Some(s)
     }
@@ -713,10 +714,8 @@ impl<'a> SimpleReader<'a> {
                     self.data[self.index + 2],
                     self.data[self.index + 3],
                 );
-                let port = u16::from_le_bytes([
-                    self.data[self.index + 4],
-                    self.data[self.index + 5],
-                ]);
+                let port =
+                    u16::from_le_bytes([self.data[self.index + 4], self.data[self.index + 5]]);
                 self.index += 6;
                 Some(SocketAddrV4::new(ip, port))
             }
@@ -797,8 +796,7 @@ impl SimpleWriter {
             let octets = ip.octets();
             self.data[self.index..self.index + 4].copy_from_slice(&octets);
             self.index += 4;
-            self.data[self.index..self.index + 2]
-                .copy_from_slice(&addr.port().to_le_bytes());
+            self.data[self.index..self.index + 2].copy_from_slice(&addr.port().to_le_bytes());
             self.index += 2;
         }
     }
@@ -867,4 +865,3 @@ mod tests {
         assert!(rs.error().is_none());
     }
 }
-

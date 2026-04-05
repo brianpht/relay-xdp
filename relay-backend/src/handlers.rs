@@ -342,7 +342,10 @@ async fn relay_data_handler(State(state): State<Arc<AppState>>) -> Response {
 }
 
 async fn cost_matrix_handler(State(state): State<Arc<AppState>>) -> Response {
-    let data = state.cost_matrix_data.read().expect("cost_matrix lock poisoned");
+    let data = state
+        .cost_matrix_data
+        .read()
+        .expect("cost_matrix lock poisoned");
     log::debug!("cost matrix handler ({} bytes)", data.len());
     (
         StatusCode::OK,
@@ -353,7 +356,10 @@ async fn cost_matrix_handler(State(state): State<Arc<AppState>>) -> Response {
 }
 
 async fn route_matrix_handler(State(state): State<Arc<AppState>>) -> Response {
-    let data = state.route_matrix_data.read().expect("route_matrix lock poisoned");
+    let data = state
+        .route_matrix_data
+        .read()
+        .expect("route_matrix lock poisoned");
     log::debug!("route matrix handler ({} bytes)", data.len());
     (
         StatusCode::OK,
@@ -423,7 +429,10 @@ async fn relay_history_handler(
     State(state): State<Arc<AppState>>,
     Path((src, dest)): Path<(String, String)>,
 ) -> Response {
-    let rm_data = state.route_matrix_data.read().expect("route_matrix lock poisoned");
+    let rm_data = state
+        .route_matrix_data
+        .read()
+        .expect("route_matrix lock poisoned");
     if rm_data.is_empty() {
         return (StatusCode::INTERNAL_SERVER_ERROR, "no route matrix").into_response();
     }
@@ -474,7 +483,10 @@ async fn costs_handler(State(state): State<Arc<AppState>>) -> Response {
     use crate::cost_matrix::CostMatrix;
     use crate::encoding::tri_matrix_index;
 
-    let cm_data = state.cost_matrix_data.read().expect("cost_matrix lock poisoned");
+    let cm_data = state
+        .cost_matrix_data
+        .read()
+        .expect("cost_matrix lock poisoned");
     if cm_data.is_empty() {
         return (StatusCode::OK, "no cost matrix\n").into_response();
     }
@@ -537,7 +549,11 @@ async fn health_handler() -> &'static str {
 }
 
 async fn lb_health_handler(State(state): State<Arc<AppState>>) -> Response {
-    let has_rm = !state.route_matrix_data.read().expect("route_matrix lock poisoned").is_empty();
+    let has_rm = !state
+        .route_matrix_data
+        .read()
+        .expect("route_matrix lock poisoned")
+        .is_empty();
     let elapsed = std::time::SystemTime::now()
         .duration_since(state.start_time)
         .unwrap_or_default()
@@ -550,7 +566,9 @@ async fn lb_health_handler(State(state): State<Arc<AppState>>) -> Response {
 }
 
 async fn ready_handler(State(state): State<Arc<AppState>>) -> Response {
-    let delay_done = state.delay_completed.load(std::sync::atomic::Ordering::Relaxed);
+    let delay_done = state
+        .delay_completed
+        .load(std::sync::atomic::Ordering::Relaxed);
     let leader_ready = state.leader_election.is_ready();
     if delay_done && leader_ready {
         (StatusCode::OK, "OK").into_response()
@@ -602,4 +620,3 @@ fn get_counter_names() -> Vec<String> {
     names[132] = "RELAY_COUNTER_ENVELOPE_KBPS_DOWN".into();
     names
 }
-

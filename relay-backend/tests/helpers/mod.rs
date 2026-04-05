@@ -193,7 +193,9 @@ pub fn parse_relay_update_response(data: &[u8]) -> ParsedRelayUpdateResponse {
         relay_internal_flags.push(r.read_uint8().expect("relay_internal"));
     }
 
-    let target_version = r.read_string(MAX_RELAY_VERSION_LENGTH as u32).expect("target_version");
+    let target_version = r
+        .read_string(MAX_RELAY_VERSION_LENGTH as u32)
+        .expect("target_version");
 
     let mut upcoming_magic = [0u8; 8];
     let mut current_magic = [0u8; 8];
@@ -221,7 +223,9 @@ pub fn parse_relay_update_response(data: &[u8]) -> ParsedRelayUpdateResponse {
     expected_relay_public_key.copy_from_slice(&pk);
     expected_relay_backend_public_key.copy_from_slice(&bk);
 
-    let test_token = r.read_bytes(ENCRYPTED_ROUTE_TOKEN_BYTES).expect("test_token");
+    let test_token = r
+        .read_bytes(ENCRYPTED_ROUTE_TOKEN_BYTES)
+        .expect("test_token");
 
     let mut ping_key = [0u8; 32];
     let pk_bytes = r.read_bytes(PING_KEY_BYTES).expect("ping_key");
@@ -542,4 +546,3 @@ pub fn simple_write_address(addr: &SocketAddrV4) -> Vec<u8> {
     w.write_address(addr);
     w.get_data().to_vec()
 }
-

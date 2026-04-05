@@ -95,11 +95,7 @@ fn test_app_state() -> Arc<AppState> {
         route_matrix_data: RwLock::new(vec![]),
         start_time: SystemTime::now(),
         delay_completed: AtomicBool::new(true),
-        leader_election: Arc::new(RedisLeaderElection::new(
-            "127.0.0.1:6379",
-            "test",
-            0,
-        )),
+        leader_election: Arc::new(RedisLeaderElection::new("127.0.0.1:6379", "test", 0)),
         magic_rotator: Arc::new(MagicRotator::new()),
     })
 }
@@ -333,4 +329,3 @@ async fn test_relay_update_updates_relay_manager_state() {
     assert_eq!(active[0].name, "relay-a");
     assert_eq!(active[0].sessions, 10);
 }
-

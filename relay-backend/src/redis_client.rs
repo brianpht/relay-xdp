@@ -106,19 +106,17 @@ impl RedisLeaderElection {
             period - 1
         );
 
-        let instances_a: std::collections::HashMap<String, String> =
-            redis::cmd("HGETALL")
-                .arg(&key_a)
-                .query_async(&mut con)
-                .await
-                .unwrap_or_default();
+        let instances_a: std::collections::HashMap<String, String> = redis::cmd("HGETALL")
+            .arg(&key_a)
+            .query_async(&mut con)
+            .await
+            .unwrap_or_default();
 
-        let instances_b: std::collections::HashMap<String, String> =
-            redis::cmd("HGETALL")
-                .arg(&key_b)
-                .query_async(&mut con)
-                .await
-                .unwrap_or_default();
+        let instances_b: std::collections::HashMap<String, String> = redis::cmd("HGETALL")
+            .arg(&key_b)
+            .query_async(&mut con)
+            .await
+            .unwrap_or_default();
 
         // Merge and parse
         let mut instance_map = instances_b;
@@ -127,7 +125,7 @@ impl RedisLeaderElection {
         }
 
         let mut entries: Vec<(String, u64)> = Vec::new();
-        for (_k, v) in &instance_map {
+        for v in instance_map.values() {
             let parts: Vec<&str> = v.split('|').collect();
             if parts.len() >= 2 {
                 if let Ok(start) = parts[1].parse::<u64>() {
@@ -215,12 +213,18 @@ impl RedisLeaderElection {
         value
     }
 
+    #[allow(dead_code)]
     pub fn is_leader(&self) -> bool {
-        self.inner.read().expect("leader state lock poisoned").is_leader
+        self.inner
+            .read()
+            .expect("leader state lock poisoned")
+            .is_leader
     }
 
     pub fn is_ready(&self) -> bool {
-        self.inner.read().expect("leader state lock poisoned").is_ready
+        self.inner
+            .read()
+            .expect("leader state lock poisoned")
+            .is_ready
     }
 }
-

@@ -160,7 +160,10 @@ fn test_relay_update_request_wire_format() {
     let request = helpers::parse_relay_update_request(&buf);
 
     assert_eq!(request.version, 1);
-    assert_eq!(request.address, SocketAddrV4::new(relay_address, relay_port));
+    assert_eq!(
+        request.address,
+        SocketAddrV4::new(relay_address, relay_port)
+    );
     assert_eq!(request.current_time, current_time);
     assert_eq!(request.start_time, start_time);
     assert_eq!(request.num_samples, num_samples);
@@ -192,7 +195,7 @@ fn test_relay_update_request_shutting_down() {
         50000,
         1700000000,
         1699999000,
-        &[],  // no samples
+        &[], // no samples
         &[],
         &[],
         &[],
@@ -218,25 +221,25 @@ fn test_relay_update_request_shutting_down() {
 #[test]
 fn test_relay_update_response_wire_format() {
     let response_bytes = helpers::build_relay_update_response(
-        1,                                            // version
-        1700000042,                                   // timestamp
-        &[0xAABBCCDD11223344, 0x5566778899AABBCC],   // relay_ids
+        1,                                         // version
+        1700000042,                                // timestamp
+        &[0xAABBCCDD11223344, 0x5566778899AABBCC], // relay_ids
         &[
             SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 40001),
             SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 3), 40002),
         ],
-        &[0, 1],                                       // internal flags
-        "relay-v1",                                    // target_version
-        &[1u8; 8],                                     // upcoming_magic
-        &[2u8; 8],                                     // current_magic
-        &[3u8; 8],                                     // previous_magic
+        &[0, 1],                                              // internal flags
+        "relay-v1",                                           // target_version
+        &[1u8; 8],                                            // upcoming_magic
+        &[2u8; 8],                                            // current_magic
+        &[3u8; 8],                                            // previous_magic
         SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 40000), // expected public addr
-        false,                                          // has internal
-        SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0),   // internal addr (unused)
-        &[0xAA; 32],                                   // relay public key
-        &[0xBB; 32],                                   // backend public key
-        &[0xCC; 111],                                  // test token
-        &[0xDD; 32],                                   // ping key
+        false,                                                // has internal
+        SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0),          // internal addr (unused)
+        &[0xAA; 32],                                          // relay public key
+        &[0xBB; 32],                                          // backend public key
+        &[0xCC; 111],                                         // test token
+        &[0xDD; 32],                                          // ping key
     );
 
     // Now parse this using the same SimpleReader approach as relay-xdp
@@ -314,9 +317,7 @@ fn test_cost_matrix_roundtrip() {
     let relay_addresses: Vec<SocketAddrV4> = (0..num_relays)
         .map(|i| SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, (i + 1) as u8), 40000))
         .collect();
-    let relay_names: Vec<String> = (0..num_relays)
-        .map(|i| format!("relay-{}", i))
-        .collect();
+    let relay_names: Vec<String> = (0..num_relays).map(|i| format!("relay-{}", i)).collect();
     let relay_latitudes: Vec<f32> = (0..num_relays).map(|i| i as f32 * 10.0).collect();
     let relay_longitudes: Vec<f32> = (0..num_relays).map(|i| i as f32 * -20.0).collect();
     let relay_datacenter_ids: Vec<u64> = (0..num_relays).map(|i| 5000 + i as u64).collect();
@@ -374,18 +375,7 @@ fn test_cost_matrix_roundtrip() {
 
 #[test]
 fn test_cost_matrix_empty_relays() {
-    let written = helpers::write_cost_matrix(
-        2,
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-    );
+    let written = helpers::write_cost_matrix(2, &[], &[], &[], &[], &[], &[], &[], &[], &[]);
     let parsed = helpers::read_cost_matrix(&written);
     assert_eq!(parsed.relay_ids.len(), 0);
     assert_eq!(parsed.costs.len(), 0);
@@ -533,7 +523,10 @@ fn test_relay_manager_process_update_and_get_costs() {
 
     // A-C: source=20 (C->A), dest=200000 (A->C not reported) => max=200000 => 255
     let ac_index = helpers::tri_matrix_index(2, 0);
-    assert_eq!(costs[ac_index], 255, "A-C cost should be 255 (one direction missing)");
+    assert_eq!(
+        costs[ac_index], 255,
+        "A-C cost should be 255 (one direction missing)"
+    );
 
     // B-C: neither has pinged the other => 255
     let bc_index = helpers::tri_matrix_index(2, 1);
@@ -618,7 +611,11 @@ fn test_relay_manager_timeout_expired_entries() {
 
     // Check at time T + RELAY_TIMEOUT + 1 (31 seconds later)
     let active = manager.get_active_relays(131);
-    assert_eq!(active.len(), 0, "relay should be timed out after 31 seconds");
+    assert_eq!(
+        active.len(),
+        0,
+        "relay should be timed out after 31 seconds"
+    );
 }
 
 #[test]
@@ -680,7 +677,14 @@ fn test_optimizer_two_relays_direct_only() {
     let datacenter_ids = vec![1u64, 2u64];
     let dest_relays = vec![true, true];
 
-    let entries = helpers::optimize2(num_relays, 1, &costs, &relay_price, &datacenter_ids, &dest_relays);
+    let entries = helpers::optimize2(
+        num_relays,
+        1,
+        &costs,
+        &relay_price,
+        &datacenter_ids,
+        &dest_relays,
+    );
 
     assert_eq!(entries.len(), cost_size);
     // Entry [1,0]: should have direct route with cost 50
@@ -711,15 +715,28 @@ fn test_optimizer_three_relays_finds_indirect_route() {
     let datacenter_ids = vec![1u64, 2, 3];
     let dest_relays = vec![true, true, true];
 
-    let entries = helpers::optimize2(num_relays, 1, &costs, &relay_price, &datacenter_ids, &dest_relays);
+    let entries = helpers::optimize2(
+        num_relays,
+        1,
+        &costs,
+        &relay_price,
+        &datacenter_ids,
+        &dest_relays,
+    );
 
     // Entry for pair (1, 0): should find indirect route via 2 with cost 70
     let idx = helpers::tri_matrix_index(1, 0);
     assert_eq!(entries[idx].direct_cost, 100);
-    assert!(entries[idx].num_routes >= 2, "should have direct + indirect routes");
+    assert!(
+        entries[idx].num_routes >= 2,
+        "should have direct + indirect routes"
+    );
 
     // Best route should be cost 70 (via relay 2)
-    assert_eq!(entries[idx].route_cost[0], 70, "best route should be 70ms via relay 2");
+    assert_eq!(
+        entries[idx].route_cost[0], 70,
+        "best route should be 70ms via relay 2"
+    );
 }
 
 #[test]
@@ -741,7 +758,14 @@ fn test_optimizer_no_improvement_skips_indirect() {
     let datacenter_ids = vec![1u64, 2, 3];
     let dest_relays = vec![true, true, true];
 
-    let entries = helpers::optimize2(num_relays, 1, &costs, &relay_price, &datacenter_ids, &dest_relays);
+    let entries = helpers::optimize2(
+        num_relays,
+        1,
+        &costs,
+        &relay_price,
+        &datacenter_ids,
+        &dest_relays,
+    );
 
     let idx = helpers::tri_matrix_index(1, 0);
     assert_eq!(entries[idx].direct_cost, 10);
@@ -1091,11 +1115,17 @@ fn test_relay_manager_packet_loss_filtering() {
     // With max_packet_loss=5.0, high loss should be filtered
     let relay_ids = vec![relay_a_id, relay_b_id];
     let costs = manager.get_costs(current_time, &relay_ids, 1000.0, 5.0);
-    assert_eq!(costs[0], 255, "high packet loss pair should be filtered out");
+    assert_eq!(
+        costs[0], 255,
+        "high packet loss pair should be filtered out"
+    );
 
     // With max_packet_loss=100.0, it should pass
     let costs = manager.get_costs(current_time, &relay_ids, 1000.0, 100.0);
-    assert_eq!(costs[0], 10, "low max_packet_loss filter should allow the pair");
+    assert_eq!(
+        costs[0], 10,
+        "low max_packet_loss filter should allow the pair"
+    );
 }
 
 // ===================================================================
@@ -1169,8 +1199,14 @@ fn test_route_hash_determinism() {
     let hash_b = helpers::route_hash(&relays_b);
     let hash_c = helpers::route_hash(&relays_c);
 
-    assert_eq!(hash_a, hash_b, "same relay sequence should produce same hash");
-    assert_ne!(hash_a, hash_c, "different relay sequence should produce different hash");
+    assert_eq!(
+        hash_a, hash_b,
+        "same relay sequence should produce same hash"
+    );
+    assert_ne!(
+        hash_a, hash_c,
+        "different relay sequence should produce different hash"
+    );
 }
 
 // ===================================================================
@@ -1185,10 +1221,10 @@ fn test_simple_writer_address_encoding_matches_go() {
 
     assert_eq!(bytes[0], 1); // IPAddressIPv4
     assert_eq!(bytes[1], 10); // ip[0]
-    assert_eq!(bytes[2], 0);  // ip[1]
-    assert_eq!(bytes[3], 0);  // ip[2]
-    assert_eq!(bytes[4], 1);  // ip[3]
-    // port 40000 = 0x9C40, LE = [0x40, 0x9C]
+    assert_eq!(bytes[2], 0); // ip[1]
+    assert_eq!(bytes[3], 0); // ip[2]
+    assert_eq!(bytes[4], 1); // ip[3]
+                             // port 40000 = 0x9C40, LE = [0x40, 0x9C]
     assert_eq!(bytes[5], 0x40);
     assert_eq!(bytes[6], 0x9C);
 }
@@ -1295,4 +1331,3 @@ fn test_relay_update_request_max_samples() {
         assert_eq!(request.sample_packet_loss[i], sample_losses[i]);
     }
 }
-

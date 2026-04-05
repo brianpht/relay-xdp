@@ -147,10 +147,12 @@ impl RelayData {
         let mut relay_public_keys = Vec::with_capacity(num_relays);
 
         for (i, entry) in entries.iter().enumerate() {
-            let addr: SocketAddrV4 = entry
-                .address
-                .parse()
-                .with_context(|| format!("invalid address for relay '{}': {}", entry.name, entry.address))?;
+            let addr: SocketAddrV4 = entry.address.parse().with_context(|| {
+                format!(
+                    "invalid address for relay '{}': {}",
+                    entry.name, entry.address
+                )
+            })?;
 
             let rid = relay_id(&entry.address);
 
@@ -187,10 +189,7 @@ impl RelayData {
             relay_public_keys.push(pk);
         }
 
-        log::info!(
-            "loaded {} relays from JSON (sorted by name)",
-            num_relays
-        );
+        log::info!("loaded {} relays from JSON (sorted by name)", num_relays);
         for (i, name) in relay_names.iter().enumerate() {
             log::debug!(
                 "  relay[{}]: {} -> {} (id={:016x})",
@@ -463,4 +462,3 @@ mod tests {
         assert!(err.to_string().contains("could not read relay data file"));
     }
 }
-

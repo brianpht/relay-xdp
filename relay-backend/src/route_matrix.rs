@@ -13,6 +13,7 @@ pub const ROUTE_MATRIX_VERSION_MAX: u32 = 4;
 pub const ROUTE_MATRIX_VERSION_WRITE: u32 = 4;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct RouteMatrix {
     pub version: u32,
     pub created_at: u64,
@@ -144,7 +145,7 @@ impl RouteMatrix {
         let mut rs = ReadStream::new(buffer);
 
         let version = rs.serialize_bits(8);
-        if version < ROUTE_MATRIX_VERSION_MIN || version > ROUTE_MATRIX_VERSION_MAX {
+        if !(ROUTE_MATRIX_VERSION_MIN..=ROUTE_MATRIX_VERSION_MAX).contains(&version) {
             return Err(format!("invalid route matrix version: {}", version));
         }
 
@@ -178,8 +179,8 @@ impl RouteMatrix {
         }
 
         let mut dest_relays = vec![false; num_relays];
-        for i in 0..num_relays {
-            dest_relays[i] = rs.serialize_bool();
+        for item in dest_relays.iter_mut().take(num_relays) {
+            *item = rs.serialize_bool();
         }
 
         let num_entries = rs.serialize_uint32() as usize;
@@ -260,8 +261,8 @@ impl RouteMatrix {
 
                 if self.route_entries[idx].direct_cost != 255 {
                     if self.route_entries[idx].num_routes > 0 {
-                        let improvement =
-                            self.route_entries[idx].direct_cost - self.route_entries[idx].route_cost[0];
+                        let improvement = self.route_entries[idx].direct_cost
+                            - self.route_entries[idx].route_cost[0];
                         let bucket = match improvement {
                             i if i <= 5 => 0,
                             i if i <= 10 => 1,
@@ -334,7 +335,8 @@ impl RouteMatrix {
             analysis.average_num_routes = (total_routes as f64 / num_relay_pairs) as f32;
         }
         if total_routes > 0 {
-            analysis.average_route_length = (total_route_length as f64 / total_routes as f64) as f32;
+            analysis.average_route_length =
+                (total_route_length as f64 / total_routes as f64) as f32;
         }
         if relay_pairs > 0 {
             analysis.no_route_percent = (no_routes as f32 / relay_pairs as f32) * 100.0;
@@ -344,4 +346,3 @@ impl RouteMatrix {
         analysis
     }
 }
-

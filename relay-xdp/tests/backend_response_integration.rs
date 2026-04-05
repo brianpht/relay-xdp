@@ -43,7 +43,12 @@ fn test_config(
 }
 
 /// Create a MainThread for testing (no BPF, no env vars).
-fn test_main_thread(config: Config) -> (MainThread, main_thread::MessageQueue<main_thread::ControlMessage>) {
+fn test_main_thread(
+    config: Config,
+) -> (
+    MainThread,
+    main_thread::MessageQueue<main_thread::ControlMessage>,
+) {
     let config = Arc::new(config);
     let quit = Arc::new(AtomicBool::new(false));
     let clean_shutdown = Arc::new(AtomicBool::new(false));
@@ -198,8 +203,14 @@ fn test_relay_set_delta_computation_across_updates() {
     {
         let queue = control_queue.lock().unwrap();
         assert_eq!(queue.len(), 1);
-        assert_eq!(queue[0].new_relays.num_relays, 2, "first update: 2 new relays");
-        assert_eq!(queue[0].delete_relays.num_relays, 0, "first update: 0 deleted relays");
+        assert_eq!(
+            queue[0].new_relays.num_relays, 2,
+            "first update: 2 new relays"
+        );
+        assert_eq!(
+            queue[0].delete_relays.num_relays, 0,
+            "first update: 0 deleted relays"
+        );
     }
 
     // Response 2: relays 200, 300 (100 removed, 300 added)
@@ -228,9 +239,15 @@ fn test_relay_set_delta_computation_across_updates() {
         assert_eq!(queue.len(), 2, "should have 2 control messages total");
 
         let msg = &queue[1];
-        assert_eq!(msg.new_relays.num_relays, 1, "second update: 1 new relay (300)");
+        assert_eq!(
+            msg.new_relays.num_relays, 1,
+            "second update: 1 new relay (300)"
+        );
         assert_eq!(msg.new_relays.id[0], 300);
-        assert_eq!(msg.delete_relays.num_relays, 1, "second update: 1 deleted relay (100)");
+        assert_eq!(
+            msg.delete_relays.num_relays, 1,
+            "second update: 1 deleted relay (100)"
+        );
         assert_eq!(msg.delete_relays.id[0], 100);
     }
 
@@ -260,7 +277,10 @@ fn test_relay_set_delta_computation_across_updates() {
         assert_eq!(queue.len(), 3);
         let msg = &queue[2];
         assert_eq!(msg.new_relays.num_relays, 0, "third update: 0 new relays");
-        assert_eq!(msg.delete_relays.num_relays, 0, "third update: 0 deleted relays");
+        assert_eq!(
+            msg.delete_relays.num_relays, 0,
+            "third update: 0 deleted relays"
+        );
     }
 }
 
@@ -298,7 +318,10 @@ fn test_response_wrong_public_key_rejected() {
     );
 
     let result = mt.parse_update_response(&resp);
-    assert!(result.is_err(), "should reject response with wrong public key");
+    assert!(
+        result.is_err(),
+        "should reject response with wrong public key"
+    );
     let err = format!("{:#}", result.unwrap_err());
     assert!(
         err.contains("public key"),
@@ -391,6 +414,8 @@ fn test_response_with_internal_address() {
     let queue = control_queue.lock().unwrap();
     assert_eq!(queue.len(), 1);
     assert_eq!(queue[0].new_relays.num_relays, 3);
-    assert_eq!(queue[0].new_relays.internal[1], 1, "relay 200 should be internal");
+    assert_eq!(
+        queue[0].new_relays.internal[1], 1,
+        "relay 200 should be internal"
+    );
 }
-

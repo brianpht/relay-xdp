@@ -73,6 +73,12 @@ pub struct RelayManager {
     ping_stats_buf: PingStats,
 }
 
+impl Default for RelayManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RelayManager {
     pub fn new() -> Self {
         Self {
@@ -111,11 +117,8 @@ impl RelayManager {
                 addrs.push(self.relay_addresses[i]);
                 ports.push(self.relay_ports[i]);
                 internal.push(self.relay_internal[i]);
-                // Move ping history (take from old vec, replace with dummy)
-                histories.push(std::mem::replace(
-                    &mut self.relay_ping_history[i],
-                    PingHistory::new(),
-                ));
+                // Move ping history (take from old vec, replace with default)
+                histories.push(std::mem::take(&mut self.relay_ping_history[i]));
             }
         }
 
@@ -139,15 +142,14 @@ impl RelayManager {
         // Rebuild O(1) lookup index
         self.relay_index.clear();
         for i in 0..num {
-            self.relay_index.insert((self.relay_addresses[i], self.relay_ports[i]), i);
+            self.relay_index
+                .insert((self.relay_addresses[i], self.relay_ports[i]), i);
         }
 
         // Distribute ping times evenly
         let current_time = platform::time();
         self.relay_last_ping_time = (0..num)
-            .map(|i| {
-                current_time - RELAY_PING_TIME + (i as f64) * RELAY_PING_TIME / (num as f64)
-            })
+            .map(|i| current_time - RELAY_PING_TIME + (i as f64) * RELAY_PING_TIME / (num as f64))
             .collect();
     }
 
@@ -171,8 +173,11 @@ impl RelayManager {
         self.ping_stats_buf.relay_packet_loss.clear();
 
         for i in 0..self.num_relays {
-            let hs = self.relay_ping_history[i]
-                .get_stats(current_time - RELAY_PING_STATS_WINDOW, current_time, RELAY_PING_SAFETY);
+            let hs = self.relay_ping_history[i].get_stats(
+                current_time - RELAY_PING_STATS_WINDOW,
+                current_time,
+                RELAY_PING_SAFETY,
+            );
             self.ping_stats_buf.relay_ids.push(self.relay_ids[i]);
             self.ping_stats_buf.relay_rtt.push(hs.rtt);
             self.ping_stats_buf.relay_jitter.push(hs.jitter);

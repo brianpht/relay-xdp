@@ -90,9 +90,7 @@ pub fn create_udp_socket(
 
 /// Parse "1.2.3.4:port" into (host_order_address, port).
 pub fn parse_address(s: &str) -> Result<(u32, u16)> {
-    let addr: SocketAddrV4 = s
-        .parse()
-        .with_context(|| format!("invalid address: {s}"))?;
+    let addr: SocketAddrV4 = s.parse().with_context(|| format!("invalid address: {s}"))?;
     let ip_bytes = addr.ip().octets();
     let host_order = u32::from_be_bytes(ip_bytes);
     Ok((host_order, addr.port()))
@@ -107,4 +105,3 @@ pub fn format_address(address: u32, port: u16) -> String {
 // Re-export for socket FD access
 #[cfg(target_os = "linux")]
 use std::os::unix::io::AsRawFd;
-

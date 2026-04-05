@@ -67,7 +67,9 @@ fn derive_secret_key(
     hasher.update(server_public_key);
 
     let mut output = [0u8; 64];
-    hasher.finalize_variable(&mut output).expect("valid output size");
+    hasher
+        .finalize_variable(&mut output)
+        .expect("valid output size");
 
     // rx = first 32 bytes
     let mut rx = [0u8; 32];
@@ -118,8 +120,11 @@ pub fn read_config() -> Result<Config> {
             .context("invalid relay backend public key")?;
     println!("Relay backend public key is {relay_backend_public_key_str}");
 
-    let relay_secret_key =
-        derive_secret_key(&relay_public_key, &relay_private_key, &relay_backend_public_key)?;
+    let relay_secret_key = derive_secret_key(
+        &relay_public_key,
+        &relay_private_key,
+        &relay_backend_public_key,
+    )?;
 
     let relay_backend_url = get_env("RELAY_BACKEND_URL")?;
     println!("Relay backend url is {relay_backend_url}");
@@ -134,8 +139,8 @@ pub fn read_config() -> Result<Config> {
                 }
                 let mut addr = [0u8; RELAY_ETHERNET_ADDRESS_BYTES];
                 for (i, part) in parts.iter().enumerate() {
-                    addr[i] = u8::from_str_radix(part, 16)
-                        .context("invalid hex in ethernet address")?;
+                    addr[i] =
+                        u8::from_str_radix(part, 16).context("invalid hex in ethernet address")?;
                 }
                 println!(
                     "Parsed to {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
@@ -160,4 +165,3 @@ pub fn read_config() -> Result<Config> {
         relay_backend_url,
     })
 }
-

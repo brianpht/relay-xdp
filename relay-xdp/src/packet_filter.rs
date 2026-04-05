@@ -4,6 +4,12 @@
 /// FNV-1a 64-bit hash.
 pub struct Fnv1a(u64);
 
+impl Default for Fnv1a {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Fnv1a {
     pub fn new() -> Self {
         Self(0xCBF29CE484222325)
@@ -25,7 +31,11 @@ impl Fnv1a {
 ///
 /// `from_address` and `to_address` are 4-byte slices in network byte order.
 /// `packet_length` is the UDP payload size in host byte order.
-pub fn generate_pittle(from_address: &[u8; 4], to_address: &[u8; 4], packet_length: u16) -> [u8; 2] {
+pub fn generate_pittle(
+    from_address: &[u8; 4],
+    to_address: &[u8; 4],
+    packet_length: u16,
+) -> [u8; 2] {
     let pl_le = packet_length.to_le_bytes();
     let mut sum: u16 = 0;
     for &b in from_address.iter() {
@@ -136,4 +146,3 @@ mod tests {
         assert!((0x11..=0x90).contains(&c[14]));
     }
 }
-

@@ -32,6 +32,12 @@ pub struct PingHistoryStats {
     pub packet_loss: f32,
 }
 
+impl Default for PingHistory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PingHistory {
     pub fn new() -> Self {
         Self {

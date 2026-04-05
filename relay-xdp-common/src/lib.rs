@@ -359,7 +359,6 @@ pub struct Chacha20Poly1305Crypto {
     pub key: [u8; CHACHA20POLY1305_KEY_SIZE],
 }
 
-
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for RelayConfig {}
 #[cfg(feature = "user")]
@@ -382,4 +381,3 @@ unsafe impl aya::Pod for HeaderData {}
 unsafe impl aya::Pod for RouteToken {}
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for ContinueToken {}
-

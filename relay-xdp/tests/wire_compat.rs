@@ -193,7 +193,7 @@ fn test_ping_token_sha256_deterministic() {
     // deterministic output (same as C's crypto_hash_sha256 over the same bytes)
     let token_data = PingTokenData {
         ping_key: [0xAA; 32],
-        expire_timestamp: 1700000000u64, // native byte order
+        expire_timestamp: 1700000000u64,       // native byte order
         source_address: 0x0A000001u32.to_be(), // 10.0.0.1 in BE
         dest_address: 0x0A000002u32.to_be(),   // 10.0.0.2 in BE
         source_port: 40000u16.to_be(),
@@ -317,4 +317,3 @@ fn test_ping_packet_wire_format_size() {
     let payload = 8 + 8 + 1 + RELAY_PING_TOKEN_BYTES;
     assert_eq!(header + payload, 67);
 }
-

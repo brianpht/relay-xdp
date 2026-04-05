@@ -148,7 +148,10 @@ fn test_xdp_writer_request_parsed_by_backend() {
     let request = RelayUpdateRequest::read(&buf).expect("backend should parse xdp-built request");
 
     assert_eq!(request.version, 1);
-    assert_eq!(request.address, SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 40000));
+    assert_eq!(
+        request.address,
+        SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 40000)
+    );
     assert_eq!(request.current_time, 1700000000);
     assert_eq!(request.start_time, 1699999000);
     assert_eq!(request.num_samples, 2);
@@ -283,10 +286,22 @@ fn test_address_encoding_request_byte_level() {
     // These must be identical byte sequences.
 
     let test_ips: &[(Ipv4Addr, u32)] = &[
-        (Ipv4Addr::new(10, 0, 0, 1), u32::from_be_bytes([10, 0, 0, 1])),
-        (Ipv4Addr::new(192, 168, 1, 100), u32::from_be_bytes([192, 168, 1, 100])),
-        (Ipv4Addr::new(172, 16, 254, 1), u32::from_be_bytes([172, 16, 254, 1])),
-        (Ipv4Addr::new(255, 255, 255, 255), u32::from_be_bytes([255, 255, 255, 255])),
+        (
+            Ipv4Addr::new(10, 0, 0, 1),
+            u32::from_be_bytes([10, 0, 0, 1]),
+        ),
+        (
+            Ipv4Addr::new(192, 168, 1, 100),
+            u32::from_be_bytes([192, 168, 1, 100]),
+        ),
+        (
+            Ipv4Addr::new(172, 16, 254, 1),
+            u32::from_be_bytes([172, 16, 254, 1]),
+        ),
+        (
+            Ipv4Addr::new(255, 255, 255, 255),
+            u32::from_be_bytes([255, 255, 255, 255]),
+        ),
         (Ipv4Addr::new(0, 0, 0, 1), u32::from_be_bytes([0, 0, 0, 1])),
     ];
 
@@ -497,9 +512,9 @@ fn test_magic_bytes_preserved_cross_crate() {
 #[test]
 fn test_ping_key_preserved_cross_crate() {
     let ping_key: [u8; 32] = [
-        0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54,
-        0x32, 0x10, 0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE, 0x11, 0x22, 0x33, 0x44,
-        0x55, 0x66, 0x77, 0x88,
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32,
+        0x10, 0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+        0x77, 0x88,
     ];
 
     let data = build_response_with_backend(
@@ -608,6 +623,8 @@ fn test_request_shutting_down_flag_cross_crate() {
     let request = RelayUpdateRequest::read(&buf).expect("backend should parse");
     assert_eq!(request.relay_flags, 1);
     assert_eq!(request.num_samples, 0);
-    assert_eq!(request.address, SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 40000));
+    assert_eq!(
+        request.address,
+        SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 1), 40000)
+    );
 }
-
