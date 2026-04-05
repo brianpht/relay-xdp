@@ -1,6 +1,5 @@
 //! Binary encoding helpers - little-endian wire format.
 
-
 /// Writer: appends little-endian values to a byte buffer.
 pub struct Writer<'a> {
     buf: &'a mut Vec<u8>,
@@ -131,7 +130,6 @@ impl<'a> Reader<'a> {
         self.pos += 8;
         Ok(v)
     }
-
 
     pub fn read_bytes_into(&mut self, out: &mut [u8]) -> Result<(), ReadError> {
         let len = out.len();

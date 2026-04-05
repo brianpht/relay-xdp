@@ -1,7 +1,6 @@
 //! Relay manager - tracks relay set, manages ping history per relay.
 //! Port of `relay_manager.c` and `relay_manager.h`.
 
-
 use std::collections::HashMap;
 
 use relay_xdp_common::{RELAY_PING_SAFETY, RELAY_PING_STATS_WINDOW, RELAY_PING_TIME};

@@ -286,4 +286,3 @@ pub const COUNTER_DISPLAY_NAMES: [&str; NUM_RELAY_COUNTERS] = {
     names[139] = "RELAY_COUNTER_PROFILE_SAMPLES";
     names
 };
-

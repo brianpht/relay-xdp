@@ -1,6 +1,5 @@
 //! Platform helpers: time, sleep, UDP socket, random bytes.
 
-
 use anyhow::{Context, Result};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};

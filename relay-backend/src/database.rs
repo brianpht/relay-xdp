@@ -192,10 +192,7 @@ impl RelayData {
             let internal_addr = match &entry.internal_address {
                 Some(s) => {
                     let ia: SocketAddrV4 = s.parse().with_context(|| {
-                        format!(
-                            "invalid internal_address for relay '{}': {}",
-                            entry.name, s
-                        )
+                        format!("invalid internal_address for relay '{}': {}", entry.name, s)
                     })?;
                     Some(ia)
                 }

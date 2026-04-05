@@ -94,11 +94,7 @@ fn render_backend_metrics(state: &Arc<AppState>, out: &mut String) {
     let active_relays = state.relay_manager.get_active_relays(current_time);
     let total_relays = state.relay_data.num_relays;
 
-    let uptime_secs = state
-        .start_time
-        .elapsed()
-        .unwrap_or_default()
-        .as_secs();
+    let uptime_secs = state.start_time.elapsed().unwrap_or_default().as_secs();
 
     let is_leader = if state.leader_election.is_leader() {
         1
@@ -156,7 +152,11 @@ fn render_backend_metrics(state: &Arc<AppState>, out: &mut String) {
         out,
         "# HELP relay_backend_route_matrix_optimize_ms Last route matrix optimization duration in milliseconds."
     );
-    let _ = writeln!(out, "relay_backend_route_matrix_optimize_ms {}", optimize_ms);
+    let _ = writeln!(
+        out,
+        "relay_backend_route_matrix_optimize_ms {}",
+        optimize_ms
+    );
 }
 
 /// Escape a label value for Prometheus text format.
@@ -210,8 +210,14 @@ mod tests {
     fn test_counter_names_count() {
         let populated = COUNTER_NAMES.iter().filter(|n| !n.is_empty()).count();
         // We have ~80 named counters out of 150 slots
-        assert!(populated > 50, "expected >50 named counters, got {}", populated);
-        assert!(populated < COUNTER_NAMES.len(), "some slots should be unused");
+        assert!(
+            populated > 50,
+            "expected >50 named counters, got {}",
+            populated
+        );
+        assert!(
+            populated < COUNTER_NAMES.len(),
+            "some slots should be unused"
+        );
     }
 }
-
