@@ -29,6 +29,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/relay_history/{src}/{dest}", get(relay_history_handler))
         .route("/costs", get(costs_handler))
         .route("/active_relays", get(active_relays_handler))
+        // Prometheus metrics
+        .route("/metrics", get(metrics_handler))
         // Health checks
         .route("/health", get(health_handler))
         .route("/lb_health", get(lb_health_handler))
@@ -246,8 +248,14 @@ fn build_relay_response(
         }
         relay_ids.push(relay.id);
         relay_addresses.push(relay.address);
-        // Internal flag not tracked per-relay yet; default to 0 (external).
-        relay_internal.push(0u8);
+        // Look up internal address from relay data (source of truth is JSON config).
+        let has_internal = relay_data
+            .relay_id_to_index
+            .get(&relay.id)
+            .and_then(|&idx| relay_data.relay_internal_addresses.get(idx))
+            .map(|ia| ia.is_some())
+            .unwrap_or(false);
+        relay_internal.push(if has_internal { 1u8 } else { 0u8 });
     }
 
     // Relay public key: use stored key if available, otherwise zeros.
@@ -275,10 +283,23 @@ fn build_relay_response(
         current_magic: magic.current_magic,
         previous_magic: magic.previous_magic,
         expected_public_address: request.address,
-        // Internal address not tracked per-relay yet. relay-xdp only
-        // validates when has_internal != 0, so 0 is safe.
-        expected_has_internal_address: 0,
-        expected_internal_address: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0),
+        // Set internal address from relay data JSON config. relay-xdp only
+        // validates when has_internal != 0, so 0 is safe when not configured.
+        expected_has_internal_address: if relay_data
+            .relay_internal_addresses
+            .get(relay_index)
+            .and_then(|ia| ia.as_ref())
+            .is_some()
+        {
+            1
+        } else {
+            0
+        },
+        expected_internal_address: relay_data
+            .relay_internal_addresses
+            .get(relay_index)
+            .and_then(|ia| *ia)
+            .unwrap_or_else(|| SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
         expected_relay_public_key: expected_relay_pk,
         expected_relay_backend_public_key: expected_backend_pk,
         test_token: [0u8; ENCRYPTED_ROUTE_TOKEN_BYTES],
@@ -582,41 +603,23 @@ async fn status_handler(State(_state): State<Arc<AppState>>) -> &'static str {
 }
 
 // -------------------------------------------------------
-// Counter names
+// Prometheus metrics
 // -------------------------------------------------------
 
-fn get_counter_names() -> Vec<String> {
-    let mut names = vec![String::new(); crate::constants::NUM_RELAY_COUNTERS];
-    names[0] = "RELAY_COUNTER_PACKETS_SENT".into();
-    names[1] = "RELAY_COUNTER_PACKETS_RECEIVED".into();
-    names[2] = "RELAY_COUNTER_BYTES_SENT".into();
-    names[3] = "RELAY_COUNTER_BYTES_RECEIVED".into();
-    names[4] = "RELAY_COUNTER_BASIC_PACKET_FILTER_DROPPED_PACKET".into();
-    names[5] = "RELAY_COUNTER_ADVANCED_PACKET_FILTER_DROPPED_PACKET".into();
-    names[6] = "RELAY_COUNTER_SESSION_CREATED".into();
-    names[7] = "RELAY_COUNTER_SESSION_CONTINUED".into();
-    names[8] = "RELAY_COUNTER_SESSION_DESTROYED".into();
-    names[10] = "RELAY_COUNTER_RELAY_PING_PACKET_SENT".into();
-    names[11] = "RELAY_COUNTER_RELAY_PING_PACKET_RECEIVED".into();
-    names[12] = "RELAY_COUNTER_RELAY_PING_PACKET_DID_NOT_VERIFY".into();
-    names[13] = "RELAY_COUNTER_RELAY_PING_PACKET_EXPIRED".into();
-    names[14] = "RELAY_COUNTER_RELAY_PING_PACKET_WRONG_SIZE".into();
-    names[15] = "RELAY_COUNTER_RELAY_PONG_PACKET_SENT".into();
-    names[16] = "RELAY_COUNTER_RELAY_PONG_PACKET_RECEIVED".into();
-    names[17] = "RELAY_COUNTER_RELAY_PONG_PACKET_WRONG_SIZE".into();
-    names[18] = "RELAY_COUNTER_RELAY_PONG_PACKET_UNKNOWN_RELAY".into();
-    names[20] = "RELAY_COUNTER_CLIENT_PING_PACKET_RECEIVED".into();
-    names[21] = "RELAY_COUNTER_CLIENT_PING_PACKET_WRONG_SIZE".into();
-    names[22] = "RELAY_COUNTER_CLIENT_PING_PACKET_RESPONDED_WITH_PONG".into();
-    names[23] = "RELAY_COUNTER_CLIENT_PING_PACKET_DID_NOT_VERIFY".into();
-    names[24] = "RELAY_COUNTER_CLIENT_PING_PACKET_EXPIRED".into();
-    names[30] = "RELAY_COUNTER_ROUTE_REQUEST_PACKET_RECEIVED".into();
-    names[31] = "RELAY_COUNTER_ROUTE_REQUEST_PACKET_WRONG_SIZE".into();
-    names[32] = "RELAY_COUNTER_ROUTE_REQUEST_PACKET_COULD_NOT_DECRYPT_ROUTE_TOKEN".into();
-    names[33] = "RELAY_COUNTER_ROUTE_REQUEST_PACKET_TOKEN_EXPIRED".into();
-    names[34] = "RELAY_COUNTER_ROUTE_REQUEST_PACKET_FORWARD_TO_NEXT_HOP".into();
-    names[130] = "RELAY_COUNTER_SESSIONS".into();
-    names[131] = "RELAY_COUNTER_ENVELOPE_KBPS_UP".into();
-    names[132] = "RELAY_COUNTER_ENVELOPE_KBPS_DOWN".into();
-    names
+async fn metrics_handler(State(state): State<Arc<AppState>>) -> Response {
+    let body = crate::metrics::render_metrics(&state);
+    (
+        StatusCode::OK,
+        [("content-type", crate::metrics::PROMETHEUS_CONTENT_TYPE)],
+        body,
+    )
+        .into_response()
+}
+
+// -------------------------------------------------------
+// Counter names (HTML display - used by /relay_counters)
+// -------------------------------------------------------
+
+fn get_counter_names() -> &'static [&'static str; NUM_RELAY_COUNTERS] {
+    &COUNTER_DISPLAY_NAMES
 }

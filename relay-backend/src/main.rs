@@ -8,6 +8,7 @@ mod database;
 mod encoding;
 mod handlers;
 mod magic;
+mod metrics;
 mod optimizer;
 mod redis_client;
 mod relay_manager;
@@ -15,7 +16,7 @@ mod relay_update;
 mod route_matrix;
 mod state;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
@@ -73,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
         delay_completed: AtomicBool::new(false),
         leader_election: leader_election.clone(),
         magic_rotator,
+        last_optimize_ms: AtomicU64::new(0),
     });
 
     // Spawn background tasks
@@ -241,6 +243,10 @@ async fn update_route_matrix(state: Arc<AppState>) {
         );
 
         let optimize_duration = time_start.elapsed();
+
+        state
+            .last_optimize_ms
+            .store(optimize_duration.as_millis() as u64, Ordering::Relaxed);
 
         log::debug!(
             "updated route matrix: {} relays in {}ms",

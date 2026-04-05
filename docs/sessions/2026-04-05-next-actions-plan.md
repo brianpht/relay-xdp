@@ -69,12 +69,12 @@ No tests added in this planning session. Tests expected for upcoming actions:
 2. ~~**Critical:** Add IP fragment drop check after IPv4 header parse; file: `relay-xdp-ebpf/src/main.rs`~~ **DONE**
 3. ~~**High:** Increment `SESSION_CREATED` / `SESSION_CONTINUED` / `SESSION_DESTROYED` counters; files: `relay-xdp-ebpf/src/main.rs`, `relay-xdp/src/main_thread.rs`~~ **DONE**
 4. ~~**High:** Add `RELAY_DEDICATED` env var support; files: `relay-xdp/src/config.rs`, `main_thread.rs`~~ **DONE**
-5. **Medium:** Add internal address per-relay tracking; files: `relay-backend/src/{database,handlers,relay_manager}.rs`
-6. **Medium:** Remove `#[allow(dead_code)]` suppressions; multiple `relay-xdp/src` files
+5. ~~**Medium:** Add internal address per-relay tracking; files: `relay-backend/src/{database,handlers,relay_manager}.rs`~~ **DONE**
+6. ~~**Medium:** Remove `#[allow(dead_code)]` suppressions; multiple `relay-xdp/src` files~~ **DONE**
 7. **Medium:** Hot reload for relay data with file watcher; files: `relay-backend/src/{state,main,database}.rs`
-8. **Medium:** Add Prometheus `/metrics` endpoint; file: `relay-backend/src/handlers.rs`
+8. ~~**Medium:** Add Prometheus `/metrics` endpoint; file: `relay-backend/src/handlers.rs`~~ **DONE**
 9. **Low:** GCS/HTTP URL support for `RELAY_DATA_FILE`; files: `relay-backend/src/database.rs`, `Cargo.toml`
-10. **Low:** Dockerfiles + CI/CD pipeline; new files at root
+10. ~~**Low:** Dockerfiles + CI/CD pipeline; new files at root~~ **DONE**
 
 ## Open Questions
 
@@ -93,4 +93,26 @@ No tests added in this planning session. Tests expected for upcoming actions:
 | M | `relay-xdp/src/config.rs` - added `dedicated: bool` field + `RELAY_DEDICATED` env var |
 | M | `relay-xdp/src/main_thread.rs` - pass `config.dedicated` to BPF config_map + SESSION_DESTROYED counter |
 | M | `relay-xdp/tests/backend_response_integration.rs` - added `dedicated` field to test Config |
+| M | `relay-backend/src/database.rs` - added `internal_address` to JSON schema + `relay_internal_addresses` to RelayData + 3 unit tests |
+| M | `relay-backend/src/handlers.rs` - populate `relay_internal`/`expected_has_internal_address`/`expected_internal_address` from RelayData |
+| M | `relay-backend/tests/http_handler_integration.rs` - added `relay_internal_addresses` field to test RelayData |
+| M | `relay-backend/tests/e2e_encrypted.rs` - added `relay_internal_addresses` field to test RelayData |
+| M | `relay-xdp/src/config.rs` - removed blanket `#[allow(dead_code)]`, added targeted suppression on `relay_name` |
+| M | `relay-xdp/src/bpf.rs` - replaced blanket `#[allow(dead_code)]` with per-field suppressions on `interface_index`/`attached_mode` |
+| M | `relay-xdp/src/manager.rs` - removed module-level `#![allow(dead_code)]`, deleted unused `RelaySet::clear()` |
+| M | `relay-xdp/src/platform.rs` - removed module-level `#![allow(dead_code)]` (all functions actively used) |
+| M | `relay-xdp/src/encoding.rs` - removed module-level `#![allow(dead_code)]`, deleted unused `read_address_raw`/`read_bytes`, moved `write_address_ipv4` to `#[cfg(test)]` |
+| A | `relay-backend/src/metrics.rs` - Prometheus `/metrics` endpoint, hand-rolled text exposition format, per-relay counters + backend internal metrics |
+| M | `relay-backend/src/constants.rs` - added `COUNTER_NAMES` (snake_case) and `COUNTER_DISPLAY_NAMES` (RELAY_COUNTER_* prefix) static arrays |
+| M | `relay-backend/src/state.rs` - added `last_optimize_ms: AtomicU64` field |
+| M | `relay-backend/src/main.rs` - added `metrics` module, init `last_optimize_ms`, store optimize duration after each cycle |
+| M | `relay-backend/src/handlers.rs` - added `/metrics` route + `metrics_handler`, refactored `get_counter_names` to use `COUNTER_DISPLAY_NAMES` |
+| M | `relay-backend/src/lib.rs` - added `pub mod metrics` |
+| M | `relay-backend/tests/http_handler_integration.rs` - added `last_optimize_ms` to test AppState |
+| M | `relay-backend/tests/e2e_encrypted.rs` - added `last_optimize_ms` to test AppState |
+| M | `relay-backend/tests/json_loader_integration.rs` - added `last_optimize_ms` to test AppState |
+| A | `relay-backend/Dockerfile` - multi-stage Docker build (rust:bookworm -> debian:bookworm-slim) |
+| A | `relay-xdp/Dockerfile` - 3-stage Docker build (eBPF nightly -> userspace stable -> runtime) |
+| A | `.dockerignore` - exclude target/, .git/, *.ko, docs/, .github/ |
+| M | `.github/workflows/rust.yml` - added `docker-backend` and `docker-relay-xdp` CI jobs (ghcr.io push on master/tags) |
 

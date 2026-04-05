@@ -7,6 +7,7 @@ pub mod database;
 pub mod encoding;
 pub mod handlers;
 pub mod magic;
+pub mod metrics;
 pub mod optimizer;
 pub mod redis_client;
 pub mod relay_manager;

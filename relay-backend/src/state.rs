@@ -1,6 +1,6 @@
 //! Shared application state.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
@@ -21,4 +21,7 @@ pub struct AppState {
     pub delay_completed: AtomicBool,
     pub leader_election: Arc<RedisLeaderElection>,
     pub magic_rotator: Arc<MagicRotator>,
+    /// Last route matrix optimization duration in milliseconds.
+    /// Updated by `update_route_matrix()` after each optimization cycle.
+    pub last_optimize_ms: AtomicU64,
 }

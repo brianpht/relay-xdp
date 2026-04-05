@@ -1,6 +1,5 @@
 //! Binary encoding helpers - little-endian wire format.
 
-#![allow(dead_code)]
 
 /// Writer: appends little-endian values to a byte buffer.
 pub struct Writer<'a> {
@@ -43,15 +42,18 @@ impl<'a> Writer<'a> {
         self.buf.extend_from_slice(&bytes[..length]);
     }
 
+    pub fn position(&self) -> usize {
+        self.buf.len()
+    }
+}
+
+#[cfg(test)]
+impl<'a> Writer<'a> {
     /// Write an address in the relay update format: address_type(1) + ip(4, network order) + port(2, LE)
     pub fn write_address_ipv4(&mut self, address_be: u32, port: u16) {
         self.write_uint8(relay_xdp_common::RELAY_ADDRESS_IPV4);
         self.write_uint32(address_be);
         self.write_uint16(port);
-    }
-
-    pub fn position(&self) -> usize {
-        self.buf.len()
     }
 }
 
@@ -130,12 +132,6 @@ impl<'a> Reader<'a> {
         Ok(v)
     }
 
-    pub fn read_bytes(&mut self, len: usize) -> Result<Vec<u8>, ReadError> {
-        self.ensure(len)?;
-        let v = self.data[self.pos..self.pos + len].to_vec();
-        self.pos += len;
-        Ok(v)
-    }
 
     pub fn read_bytes_into(&mut self, out: &mut [u8]) -> Result<(), ReadError> {
         let len = out.len();
@@ -171,13 +167,6 @@ impl<'a> Reader<'a> {
         let port = self.read_uint16()?;
         // Convert from big-endian (network order) to host order
         Ok((u32::from_be(addr_be), port))
-    }
-
-    /// Read address returning (host_order_addr, port)
-    pub fn read_address_raw(&mut self) -> Result<(u32, u16), ReadError> {
-        let addr = self.read_uint32()?;
-        let port = self.read_uint16()?;
-        Ok((addr, port))
     }
 }
 

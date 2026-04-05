@@ -11,10 +11,13 @@ use std::path::Path;
 use relay_xdp_common::*;
 
 /// Holds the loaded BPF program and map handles.
-#[allow(dead_code)]
 pub struct BpfContext {
     pub bpf: Ebpf,
+    /// Stored for future Prometheus /metrics exposure (step 8).
+    #[allow(dead_code)]
     pub interface_index: u32,
+    /// Stored for future Prometheus /metrics exposure (step 8).
+    #[allow(dead_code)]
     pub attached_mode: Option<XdpFlags>,
 }
 

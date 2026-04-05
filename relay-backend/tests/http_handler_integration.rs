@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
@@ -81,6 +81,7 @@ fn test_relay_data() -> RelayData {
         dest_relays: vec![true; 3],
         database_bin_file: vec![],
         relay_public_keys: vec![[0u8; 32]; 3],
+        relay_internal_addresses: vec![None; 3],
     }
 }
 
@@ -97,6 +98,7 @@ fn test_app_state() -> Arc<AppState> {
         delay_completed: AtomicBool::new(true),
         leader_election: Arc::new(RedisLeaderElection::new("127.0.0.1:6379", "test", 0)),
         magic_rotator: Arc::new(MagicRotator::new()),
+        last_optimize_ms: AtomicU64::new(0),
     })
 }
 

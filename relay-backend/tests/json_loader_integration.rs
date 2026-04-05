@@ -4,7 +4,7 @@
 //! encrypted relay update requests through the HTTP handler. This is the
 //! integration test described in step 5 of the relay data loader plan.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
@@ -191,6 +191,7 @@ fn build_state_from_json(
         delay_completed: AtomicBool::new(true),
         leader_election: Arc::new(RedisLeaderElection::new("127.0.0.1:6379", "test", 0)),
         magic_rotator: Arc::new(MagicRotator::new()),
+        last_optimize_ms: AtomicU64::new(0),
     })
 }
 

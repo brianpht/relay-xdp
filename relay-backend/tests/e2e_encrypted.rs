@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
@@ -154,6 +154,7 @@ fn test_app_state_with_crypto(
         dest_relays: vec![true],
         database_bin_file: vec![],
         relay_public_keys: vec![relay_pk_bytes],
+        relay_internal_addresses: vec![None],
     };
 
     let config = Config {
@@ -182,6 +183,7 @@ fn test_app_state_with_crypto(
         delay_completed: AtomicBool::new(true),
         leader_election: Arc::new(RedisLeaderElection::new("127.0.0.1:6379", "test", 0)),
         magic_rotator: Arc::new(MagicRotator::new()),
+        last_optimize_ms: AtomicU64::new(0),
     })
 }
 
@@ -531,6 +533,7 @@ async fn test_e2e_plaintext_mode_when_no_crypto_keys() {
         dest_relays: vec![true],
         database_bin_file: vec![],
         relay_public_keys: vec![[0u8; 32]],
+        relay_internal_addresses: vec![None],
     };
 
     let config = Config {
@@ -559,6 +562,7 @@ async fn test_e2e_plaintext_mode_when_no_crypto_keys() {
         delay_completed: AtomicBool::new(true),
         leader_election: Arc::new(RedisLeaderElection::new("127.0.0.1:6379", "test", 0)),
         magic_rotator: Arc::new(MagicRotator::new()),
+        last_optimize_ms: AtomicU64::new(0),
     });
 
     // Send a plaintext (unencrypted) request

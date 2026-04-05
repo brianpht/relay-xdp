@@ -1,7 +1,6 @@
 //! Relay manager - tracks relay set, manages ping history per relay.
 //! Port of `relay_manager.c` and `relay_manager.h`.
 
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 
@@ -37,14 +36,6 @@ impl RelaySet {
         self.port.push(port);
         self.internal.push(internal);
         self.num_relays += 1;
-    }
-
-    pub fn clear(&mut self) {
-        self.num_relays = 0;
-        self.id.clear();
-        self.address.clear();
-        self.port.clear();
-        self.internal.clear();
     }
 }
 

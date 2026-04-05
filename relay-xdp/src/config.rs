@@ -7,9 +7,10 @@ use relay_xdp_common::*;
 
 use crate::platform;
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Config {
+    /// Used in logging and tests; will be needed for Prometheus labels.
+    #[allow(dead_code)]
     pub relay_name: String,
     pub relay_port: u16,
     /// Host byte order

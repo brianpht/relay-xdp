@@ -1,0 +1,33 @@
+# Build artifacts
+target/
+relay-xdp-ebpf/target/
+
+# Git
+.git/
+.gitignore
+
+# Pre-compiled objects (rebuilt inside Docker)
+*.o
+*.ko
+
+# Kernel module (must match host kernel - not containerized)
+module/*.ko
+module/*.o
+module/*.mod
+module/*.mod.c
+module/modules.order
+module/Module.symvers
+
+# Documentation and sessions
+docs/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# CI config (not needed inside containers)
+.github/
+

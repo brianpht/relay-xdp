@@ -9,6 +9,7 @@
 //!     {
 //!       "name": "relay-dallas",
 //!       "address": "10.0.0.1:40000",
+//!       "internal_address": "192.168.1.1:40000",
 //!       "latitude": 32.78,
 //!       "longitude": -96.80,
 //!       "datacenter_id": 1,
@@ -41,6 +42,11 @@ struct RelayDataJson {
 struct RelayEntryJson {
     name: String,
     address: String,
+    /// Optional internal (private network) address. When set, other relays in
+    /// the same datacenter can reach this relay via the internal IP, reducing
+    /// latency and egress cost.
+    #[serde(default)]
+    internal_address: Option<String>,
     #[serde(default)]
     latitude: f32,
     #[serde(default)]
@@ -74,6 +80,10 @@ pub struct RelayData {
     /// Per-relay public keys (32 bytes each). Used to decrypt relay-xdp update
     /// requests and echo back in responses for relay self-verification.
     pub relay_public_keys: Vec<[u8; 32]>,
+    /// Per-relay internal (private network) addresses. `None` means the relay
+    /// has no distinct internal address and should be reached via its public
+    /// address only.
+    pub relay_internal_addresses: Vec<Option<SocketAddrV4>>,
 }
 
 impl RelayData {
@@ -92,6 +102,7 @@ impl RelayData {
             dest_relays: vec![],
             database_bin_file: vec![],
             relay_public_keys: vec![],
+            relay_internal_addresses: vec![],
         }
     }
 
@@ -145,6 +156,7 @@ impl RelayData {
         let mut relay_id_to_index = HashMap::with_capacity(num_relays);
         let mut dest_relays = Vec::with_capacity(num_relays);
         let mut relay_public_keys = Vec::with_capacity(num_relays);
+        let mut relay_internal_addresses = Vec::with_capacity(num_relays);
 
         for (i, entry) in entries.iter().enumerate() {
             let addr: SocketAddrV4 = entry.address.parse().with_context(|| {
@@ -177,6 +189,19 @@ impl RelayData {
                 None => [0u8; 32],
             };
 
+            let internal_addr = match &entry.internal_address {
+                Some(s) => {
+                    let ia: SocketAddrV4 = s.parse().with_context(|| {
+                        format!(
+                            "invalid internal_address for relay '{}': {}",
+                            entry.name, s
+                        )
+                    })?;
+                    Some(ia)
+                }
+                None => None,
+            };
+
             relay_ids.push(rid);
             relay_addresses.push(addr);
             relay_names.push(entry.name.clone());
@@ -187,6 +212,7 @@ impl RelayData {
             relay_id_to_index.insert(rid, i);
             dest_relays.push(entry.dest);
             relay_public_keys.push(pk);
+            relay_internal_addresses.push(internal_addr);
         }
 
         log::info!("loaded {} relays from JSON (sorted by name)", num_relays);
@@ -213,6 +239,7 @@ impl RelayData {
             dest_relays,
             database_bin_file: vec![],
             relay_public_keys,
+            relay_internal_addresses,
         })
     }
 }
@@ -460,5 +487,71 @@ mod tests {
     fn test_load_json_file_not_found() {
         let err = RelayData::load_json("/nonexistent/path/relays.json").unwrap_err();
         assert!(err.to_string().contains("could not read relay data file"));
+    }
+
+    #[test]
+    fn test_load_internal_addresses() {
+        let json = r#"{
+            "relays": [
+                {
+                    "name": "relay-a",
+                    "address": "10.0.0.1:40000",
+                    "internal_address": "192.168.1.1:40000"
+                },
+                {
+                    "name": "relay-b",
+                    "address": "10.0.0.2:40000"
+                },
+                {
+                    "name": "relay-c",
+                    "address": "10.0.0.3:40000",
+                    "internal_address": "192.168.1.3:40000"
+                }
+            ]
+        }"#;
+
+        let rd = RelayData::from_json(json).unwrap();
+        assert_eq!(rd.num_relays, 3);
+
+        // relay-a has internal address
+        assert_eq!(
+            rd.relay_internal_addresses[0],
+            Some("192.168.1.1:40000".parse().unwrap())
+        );
+        // relay-b has no internal address
+        assert_eq!(rd.relay_internal_addresses[1], None);
+        // relay-c has internal address
+        assert_eq!(
+            rd.relay_internal_addresses[2],
+            Some("192.168.1.3:40000".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn test_load_invalid_internal_address() {
+        let json = r#"{
+            "relays": [
+                {
+                    "name": "relay-a",
+                    "address": "10.0.0.1:40000",
+                    "internal_address": "not-an-address"
+                }
+            ]
+        }"#;
+
+        let err = RelayData::from_json(json).unwrap_err();
+        assert!(err.to_string().contains("invalid internal_address"));
+    }
+
+    #[test]
+    fn test_load_no_internal_addresses_defaults_to_none() {
+        let json = r#"{
+            "relays": [
+                { "name": "relay-a", "address": "10.0.0.1:40000" }
+            ]
+        }"#;
+
+        let rd = RelayData::from_json(json).unwrap();
+        assert_eq!(rd.relay_internal_addresses[0], None);
     }
 }

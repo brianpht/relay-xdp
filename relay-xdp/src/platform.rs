@@ -1,6 +1,5 @@
 //! Platform helpers: time, sleep, UDP socket, random bytes.
 
-#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
