@@ -61,59 +61,67 @@ relay-xdp/
 |-- Cargo.toml                     Workspace root (resolver v2)
 |
 |-- relay-xdp-common/              Shared types (#[repr(C)], #![no_std])
-|   +-- src/lib.rs                 ~385 lines
+|   +-- src/lib.rs                 ~384 lines
 |
 |-- relay-xdp/                     Userspace binary + lib (relay node)
 |   |-- Cargo.toml                 Pure-Rust deps (sha2, crypto_box, x25519-dalek, blake2)
 |   |-- src/
 |   |   |-- lib.rs                 Re-exports for integration tests (~16 lines)
 |   |   |-- main.rs                Entry point, signal handling (~111 lines)
-|   |   |-- config.rs              Env vars, key derivation (~163 lines)
-|   |   |-- bpf.rs                 XDP loader, 6 BPF maps via Aya (~220 lines)
-|   |   |-- main_thread.rs         HTTP update loop 1 Hz (~622 lines)
-|   |   |-- ping_thread.rs         UDP ping/pong 10 Hz (~269 lines)
-|   |   |-- manager.rs             Relay set tracking (~184 lines)
-|   |   |-- ping_history.rs        Circular buffer 64 entries (~207 lines)
-|   |   |-- encoding.rs            Little-endian binary read/write (~319 lines)
-|   |   |-- packet_filter.rs       Pittle/chonkle DDoS filter (~139 lines)
-|   |   +-- platform.rs            Time, sleep, UDP socket (~110 lines)
+|   |   |-- config.rs              Env vars, key derivation (~178 lines)
+|   |   |-- bpf.rs                 XDP loader, 6 BPF maps via Aya (~227 lines)
+|   |   |-- main_thread.rs         HTTP update loop 1 Hz (~666 lines)
+|   |   |-- ping_thread.rs         UDP ping/pong 10 Hz (~279 lines)
+|   |   |-- manager.rs             Relay set tracking (~180 lines)
+|   |   |-- ping_history.rs        Circular buffer 64 entries (~214 lines)
+|   |   |-- encoding.rs            Little-endian binary read/write (~306 lines)
+|   |   |-- packet_filter.rs       Pittle/chonkle DDoS filter (~149 lines)
+|   |   +-- platform.rs            Time, sleep, UDP socket (~106 lines)
 |   +-- tests/
-|       |-- wire_compat.rs         Struct layout + crypto tests (~320 lines)
-|       +-- func_parity.rs         Functional parity tests (~782 lines)
+|       |-- wire_compat.rs         Struct layout + crypto tests (~319 lines)
+|       |-- backend_response_integration.rs  Cross-crate response parsing (~422 lines)
+|       +-- func_parity.rs         Functional parity tests (~791 lines)
 |
 |-- relay-backend/                 Route optimization backend
 |   |-- Cargo.toml                 axum, tokio, redis, serde, uuid
 |   |-- ARCHITECTURE.md            Detailed backend architecture + wire format docs
 |   |-- src/
-|   |   |-- lib.rs                 Re-exports for integration tests (~15 lines)
-|   |   |-- main.rs                Entry point, background tasks, axum server (~310 lines)
-|   |   |-- config.rs              Env vars → Config struct (~101 lines)
-|   |   |-- constants.rs           Relay protocol constants (~65 lines)
-|   |   |-- state.rs               AppState - shared state (~23 lines)
-|   |   |-- handlers.rs            HTTP handlers (axum Router, 15 routes) (~423 lines)
-|   |   |-- encoding.rs            Bitpacked + Simple LE encoding (~870 lines)
+|   |   |-- lib.rs                 Re-exports for integration tests (~16 lines)
+|   |   |-- main.rs                Entry point, background tasks, axum server (~334 lines)
+|   |   |-- config.rs              Env vars -> Config struct (~110 lines)
+|   |   |-- constants.rs           Relay protocol constants + counter name arrays (~289 lines)
+|   |   |-- state.rs               AppState - shared state (~27 lines)
+|   |   |-- handlers.rs            HTTP handlers (axum Router, 16 routes) (~626 lines)
+|   |   |-- encoding.rs            Bitpacked + Simple LE encoding (~867 lines)
 |   |   |-- relay_update.rs        Parse RelayUpdateRequest, build response (~218 lines)
 |   |   |-- relay_manager.rs       In-memory relay pair state tracker (~435 lines)
-|   |   |-- cost_matrix.rs         Cost matrix bitpacked serialization (~137 lines)
-|   |   |-- route_matrix.rs        Route matrix bitpacked serialization (~347 lines)
+|   |   |-- cost_matrix.rs         Cost matrix bitpacked serialization (~136 lines)
+|   |   |-- route_matrix.rs        Route matrix bitpacked serialization (~348 lines)
 |   |   |-- optimizer.rs           Optimize2 - multi-threaded route finding (~455 lines)
-|   |   |-- database.rs            RelayData loaded from .bin file (~41 lines)
-|   |   +-- redis_client.rs        Redis leader election + data store (~226 lines)
+|   |   |-- database.rs            RelayData loaded from JSON file, validation (~555 lines)
+|   |   |-- redis_client.rs        Redis leader election + data store (~230 lines)
+|   |   |-- metrics.rs             Prometheus metrics rendering (~224 lines)
+|   |   +-- magic.rs               Magic bytes + ping key rotation (~98 lines)
 |   +-- tests/
-|       |-- integration_xdp.rs     30 integration tests (~1298 lines)
-|       +-- helpers/mod.rs         Test helpers (~545 lines)
+|       |-- integration_xdp.rs     30 integration tests (~1333 lines)
+|       |-- cross_crate_wire.rs    10 cross-crate wire format tests (~630 lines)
+|       |-- e2e_encrypted.rs       11 end-to-end crypto tests (~627 lines)
+|       |-- http_handler_integration.rs  6 HTTP handler tests (~333 lines)
+|       |-- json_loader_integration.rs   6 JSON loader tests (~548 lines)
+|       |-- pipeline_integration.rs      3 full pipeline tests (~433 lines)
+|       +-- helpers/mod.rs         Test helpers (~548 lines)
 |
 |-- relay-xdp-ebpf/               eBPF kernel program (NOT a workspace member)
 |   |-- Cargo.toml                 target: bpfel-unknown-none
 |   |-- rust-toolchain.toml        nightly + rust-src
-|   +-- src/main.rs                12 packet handlers (~1724 lines)
+|   +-- src/main.rs                12 packet handlers (~1773 lines)
 |
 |-- module/                        Linux kernel module (C)
-|   |-- relay_module.c             SHA-256 + XChaCha20-Poly1305 kfuncs (~248 lines)
+|   |-- relay_module.c             SHA-256 + XChaCha20-Poly1305 kfuncs (~249 lines)
 |   +-- Makefile                   kbuild + auto-load
 |
 +-- xtask/                         Build helper
-    +-- src/main.rs                build-ebpf-rust, func-test (~141 lines)
+    +-- src/main.rs                build-ebpf-rust, func-test (~145 lines)
 ```
 
 `relay-xdp-ebpf` targets `bpfel-unknown-none` (bare-metal BPF) and is excluded
@@ -199,15 +207,15 @@ Pure Rust binary with no C dependencies. Crypto uses `sha2`, `crypto_box`,
 | Module             | Lines | Purpose                                                                    |
 |--------------------|-------|----------------------------------------------------------------------------|
 | `main.rs`          | ~111  | Entry point, signal handling (SIGINT/SIGTERM/SIGHUP), thread orchestration |
-| `config.rs`        | ~163  | Read environment variables, derive secret key (X25519 + BLAKE2B)           |
-| `bpf.rs`           | ~220  | Load XDP program via Aya, attach to NIC, manage 6 BPF maps                 |
-| `main_thread.rs`   | ~622  | 1 Hz HTTP update loop, BPF map management, session timeouts                |
-| `ping_thread.rs`   | ~269  | 10 Hz UDP relay-to-relay ping/pong                                         |
-| `manager.rs`       | ~184  | Relay set tracking, ping history aggregation                               |
-| `ping_history.rs`  | ~207  | Circular buffer (64 entries), RTT/jitter/packet loss computation           |
-| `encoding.rs`      | ~319  | Little-endian binary `Writer`/`Reader` matching C wire format              |
-| `packet_filter.rs` | ~139  | Pittle/chonkle DDoS filter generation (FNV-1a)                             |
-| `platform.rs`      | ~110  | Monotonic time, sleep, UDP socket creation, random bytes                   |
+| `config.rs`        | ~178  | Read environment variables, derive secret key (X25519 + BLAKE2B)           |
+| `bpf.rs`           | ~227  | Load XDP program via Aya, attach to NIC, manage 6 BPF maps                 |
+| `main_thread.rs`   | ~666  | 1 Hz HTTP update loop, BPF map management, session timeouts                |
+| `ping_thread.rs`   | ~279  | 10 Hz UDP relay-to-relay ping/pong                                         |
+| `manager.rs`       | ~180  | Relay set tracking, ping history aggregation                               |
+| `ping_history.rs`  | ~214  | Circular buffer (64 entries), RTT/jitter/packet loss computation           |
+| `encoding.rs`      | ~306  | Little-endian binary `Writer`/`Reader` matching C wire format              |
+| `packet_filter.rs` | ~149  | Pittle/chonkle DDoS filter generation (FNV-1a)                             |
+| `platform.rs`      | ~106  | Monotonic time, sleep, UDP socket creation, random bytes                   |
 
 #### Startup flow
 
@@ -238,7 +246,7 @@ BpfContext::init(xdp_obj_path, relay_address, internal_address)
 
 ### relay-xdp-ebpf - eBPF Data Plane
 
-~1724 lines of Rust targeting `bpfel-unknown-none`. Runs at NIC driver level
+~1773 lines of Rust targeting `bpfel-unknown-none`. Runs at NIC driver level
 via the XDP hook. Built separately with nightly Rust.
 
 Constraints:
@@ -274,19 +282,21 @@ to `server_backend`. Runs as a separate async binary (tokio + axum).
 
 | Module             | Lines | Purpose                                                                     |
 |--------------------|-------|-----------------------------------------------------------------------------|
-| `main.rs`          | ~310  | Entry point, 4 background tasks (tokio), axum web server                    |
-| `config.rs`        | ~101  | Environment variables → Config struct                                       |
-| `constants.rs`     | ~65   | Relay protocol constants                                                    |
-| `state.rs`         | ~23   | AppState - shared state between handlers + background tasks                 |
-| `handlers.rs`      | ~423  | HTTP handlers (15 routes: relay_update, route_matrix, costs, health, etc.)  |
-| `encoding.rs`      | ~870  | Bitpacked (WriteStream/ReadStream) + Simple LE (SimpleWriter/SimpleReader)  |
+| `main.rs`          | ~334  | Entry point, 4 background tasks (tokio), axum web server                    |
+| `config.rs`        | ~110  | Environment variables → Config struct                                       |
+| `constants.rs`     | ~289  | Relay protocol constants, counter name arrays for Prometheus/HTML           |
+| `state.rs`         | ~27   | AppState - shared state between handlers + background tasks                 |
+| `handlers.rs`      | ~626  | HTTP handlers (16 routes: relay_update, route_matrix, costs, metrics, etc.) |
+| `encoding.rs`      | ~867  | Bitpacked (WriteStream/ReadStream) + Simple LE (SimpleWriter/SimpleReader)  |
 | `relay_update.rs`  | ~218  | Parse RelayUpdateRequest, build RelayUpdateResponse, FNV-1a relay ID        |
 | `relay_manager.rs` | ~435  | In-memory 2-level state: SourceEntry → DestEntry (RTT/jitter/loss per pair) |
-| `cost_matrix.rs`   | ~137  | Triangular cost matrix bitpacked serialization (version 2)                  |
-| `route_matrix.rs`  | ~347  | Route matrix bitpacked serialization (version 4) + analysis                 |
+| `cost_matrix.rs`   | ~136  | Triangular cost matrix bitpacked serialization (version 2)                  |
+| `route_matrix.rs`  | ~348  | Route matrix bitpacked serialization (version 4) + analysis                 |
 | `optimizer.rs`     | ~455  | Optimize2 - multi-threaded route finding via `std::thread::scope`           |
-| `database.rs`      | ~41   | RelayData - relay config loaded from .bin file                              |
-| `redis_client.rs`  | ~226  | Redis leader election + data store/load for horizontal scaling              |
+| `database.rs`      | ~555  | RelayData loaded from JSON file, validation, public keys, internal addrs    |
+| `redis_client.rs`  | ~230  | Redis leader election + data store/load for horizontal scaling              |
+| `metrics.rs`       | ~224  | Prometheus metrics rendering (per-relay counters + backend internals)       |
+| `magic.rs`         | ~98   | Magic bytes + ping key rotation (3-value window, 10s interval)              |
 
 Key design decisions:
 
@@ -299,7 +309,7 @@ Key design decisions:
 
 ### module - Kernel Module (C)
 
-248 lines of GPL-licensed C. The only non-Rust code in the project. Provides
+249 lines of GPL-licensed C. The only non-Rust code in the project. Provides
 two `__bpf_kfunc` functions registered via `BTF_SET8`:
 
 ```c
@@ -323,7 +333,7 @@ Requires: Linux kernel 6.5+, loaded modules `chacha20` and `poly1305`.
 
 ### xtask - Build Helper
 
-141 lines. Three commands:
+145 lines. Three commands:
 
 | Command                       | Action                                                                                          |
 |-------------------------------|-------------------------------------------------------------------------------------------------|
@@ -710,6 +720,7 @@ All configuration via environment variables (read once at startup):
 | `RELAY_GATEWAY_ETHERNET_ADDRESS` | MAC        | no       | Gateway MAC for XDP redirect                   |
 | `RELAY_XDP_OBJ`                  | path       | no       | eBPF object file (default: `relay_xdp_rust.o`) |
 | `RELAY_NO_BPF`                   | `1`/`true` | no       | Run without BPF (for testing)                  |
+| `RELAY_DEDICATED`                | `1`/`true` | no       | Dedicated mode: XDP_DROP non-relay traffic     |
 
 ---
 
@@ -717,30 +728,38 @@ All configuration via environment variables (read once at startup):
 
 ### relay-xdp tests
 
-52 tests total (37 run with `cargo test`, 15 functional tests require `--ignored`):
+59 tests total (44 run with `cargo test`, 15 functional tests require `--ignored`):
 
-| Test File              | Count | Type        | What It Covers                                                 |
-|------------------------|-------|-------------|----------------------------------------------------------------|
-| `encoding` (unit)      | 9     | Unit        | LE encoding roundtrip, string, address format                  |
-| `packet_filter` (unit) | 2     | Unit        | Pittle symmetry, chonkle byte ranges                           |
-| `ping_history` (unit)  | 6     | Unit        | RTT/jitter/loss, circular buffer, wraparound                   |
-| `wire_compat.rs`       | 20    | Integration | Struct sizes, field offsets, SHA-256, crypto_box, crypto_kx    |
-| `func_parity.rs`       | 15    | Integration | Config errors, update protocol, mock backend, crypto roundtrip |
+| Test File                          | Count | Type        | What It Covers                                                        |
+|------------------------------------|-------|-------------|-----------------------------------------------------------------------|
+| `encoding` (unit)                  | 11    | Unit        | LE encoding roundtrip, string, address format, bounds checks          |
+| `packet_filter` (unit)             | 2     | Unit        | Pittle symmetry, chonkle byte ranges                                  |
+| `ping_history` (unit)              | 6     | Unit        | RTT/jitter/loss, circular buffer, wraparound                          |
+| `wire_compat.rs`                   | 20    | Integration | Struct sizes, field offsets, SHA-256, crypto_box, crypto_kx           |
+| `backend_response_integration.rs`  | 5     | Integration | Cross-crate response parsing, relay set deltas, internal address      |
+| `func_parity.rs`                   | 15    | Integration | Config errors, update protocol, mock backend, crypto roundtrip        |
 
 ### relay-backend tests
 
-33 tests total (30 integration + 3 unit):
+88 tests total (22 unit + 66 integration):
 
-| Test File            | Count | Type        | What It Covers                                              |
-|----------------------|-------|-------------|-------------------------------------------------------------|
-| `encoding` (unit)    | 3     | Unit        | bits_required, tri_matrix, WriteStream/ReadStream roundtrip |
-| `integration_xdp.rs` | 30    | Integration | Wire format, optimizer, relay manager, cost/route matrix    |
+| Test File                      | Count | Type        | What It Covers                                                     |
+|--------------------------------|-------|-------------|--------------------------------------------------------------------|
+| `encoding` (unit)              | 3     | Unit        | bits_required, tri_matrix, WriteStream/ReadStream roundtrip        |
+| `database` (unit)              | 16    | Unit        | JSON loading, validation, sort order, public keys, internal addrs  |
+| `metrics` (unit)               | 3     | Unit        | Counter name arrays, label escaping                                |
+| `integration_xdp.rs`           | 30    | Integration | Wire format, optimizer, relay manager, cost/route matrix           |
+| `cross_crate_wire.rs`          | 10    | Integration | relay-xdp Writer <-> relay-backend SimpleReader wire compatibility |
+| `e2e_encrypted.rs`             | 11    | Integration | NaCl crypto_box encrypt/decrypt, tampered payloads, wrong keys     |
+| `http_handler_integration.rs`  | 6     | Integration | HTTP handler validation, error responses, relay manager updates    |
+| `json_loader_integration.rs`   | 6     | Integration | JSON relay data -> encrypted request -> response pipeline          |
+| `pipeline_integration.rs`      | 3     | Integration | Multi-relay update -> cost matrix -> optimizer pipeline             |
 
-The 30 integration tests are organized in 18 test groups covering: FNV-1a
-compatibility, relay update request/response wire format, cost matrix roundtrip,
-route matrix roundtrip, relay manager (costs, timeout, history, jitter/loss
-filtering), optimizer (direct, indirect, stress), tri matrix helpers, CSV
-generation, bitpacked encoding, end-to-end pipeline, route hash determinism,
+The 30 integration tests in `integration_xdp.rs` are organized in 18 test groups
+covering: FNV-1a compatibility, relay update request/response wire format, cost
+matrix roundtrip, route matrix roundtrip, relay manager (costs, timeout, history,
+jitter/loss filtering), optimizer (direct, indirect, stress), tri matrix helpers,
+CSV generation, bitpacked encoding, end-to-end pipeline, route hash determinism,
 SimpleWriter address encoding, and max samples stress test.
 
 ```bash

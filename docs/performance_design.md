@@ -88,6 +88,10 @@ use `XDP_PASS`.
 
 **Rule**: `XDP_PASS` is the slow path. Minimize its use.
 
+In **dedicated mode** (`RELAY_DEDICATED=1`), non-relay traffic (non-UDP,
+wrong destination) is dropped with `XDP_DROP` instead of `XDP_PASS`,
+eliminating all kernel network stack overhead on dedicated relay servers.
+
 ---
 
 ### 2. Zero-Copy Packet Pipeline
@@ -277,6 +281,12 @@ Rules:
 `stats_map` is a `PerCpuArray` with 150 u64 counters. Each CPU core writes to
 its own copy with **zero locking**. Userspace sums across all CPUs once per
 second.
+
+Counter indices 0-132 track operational events (packets, bytes, errors).
+Indices 133-139 are **profiling counters** (`RELAY_COUNTER_PROFILE_*`),
+written only when the eBPF program is built with `--features profiling`.
+They accumulate per-stage nanosecond timings: parse, filter, map lookup,
+crypto, rewrite, total, and sample count.
 
 **Rule**: Never use atomics or locks for counter updates in eBPF.
 

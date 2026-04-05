@@ -67,19 +67,26 @@ relay-backend/
 │   ├── main.rs              # Entry point, background tasks, web server (axum + tokio)
 │   ├── lib.rs               # Re-export modules for integration tests
 │   ├── config.rs            # Read env vars into Config struct
-│   ├── constants.rs         # Relay protocol constants
+│   ├── constants.rs         # Relay protocol constants + counter name arrays
 │   ├── state.rs             # AppState: shared state between handlers + background tasks
-│   ├── handlers.rs          # HTTP handlers (axum Router)
+│   ├── handlers.rs          # HTTP handlers (axum Router, 16 routes)
 │   ├── encoding.rs          # Two encoding systems: Bitpacked (WriteStream/ReadStream) + Simple LE (SimpleWriter/SimpleReader)
 │   ├── relay_update.rs      # Parse RelayUpdateRequest + build RelayUpdateResponse
 │   ├── relay_manager.rs     # In-memory relay pair state tracker (RTT/jitter/loss per relay pair)
 │   ├── cost_matrix.rs       # Cost matrix serialization (bitpacked)
 │   ├── route_matrix.rs      # Route matrix serialization (bitpacked)
 │   ├── optimizer.rs         # Optimize2: optimal route finding (multi-threaded)
-│   ├── database.rs          # RelayData: relay config loaded from JSON file or empty
-│   └── redis_client.rs      # Redis leader election + data store/load
+│   ├── database.rs          # RelayData: relay config loaded from JSON file, validation, public keys
+│   ├── redis_client.rs      # Redis leader election + data store/load
+│   ├── metrics.rs           # Prometheus metrics rendering (per-relay counters + backend internals)
+│   └── magic.rs             # Magic bytes + ping key rotation (3-value window, 10s interval)
 └── tests/
     ├── integration_xdp.rs   # 18 test groups, 30 test functions: wire format, optimizer, relay manager
+    ├── cross_crate_wire.rs  # 10 tests: relay-xdp Writer <-> relay-backend SimpleReader wire compat
+    ├── e2e_encrypted.rs     # 11 tests: NaCl crypto_box encrypt/decrypt, tampered payloads
+    ├── http_handler_integration.rs  # 6 tests: HTTP handler validation, error responses
+    ├── json_loader_integration.rs   # 6 tests: JSON relay data -> encrypted request pipeline
+    ├── pipeline_integration.rs      # 3 tests: multi-relay update -> cost -> optimizer pipeline
     └── helpers/
         └── mod.rs           # Test helpers: build/parse packets, wrappers
 ```
@@ -701,6 +708,14 @@ All configuration via environment variables:
 
 ## Testing
 
+### Unit Tests
+
+| Module       | Count | Description                                        |
+|--------------|-------|----------------------------------------------------|
+| `encoding`   | 3     | bits_required, tri_matrix, WriteStream/ReadStream   |
+| `database`   | 16    | JSON loading, validation, sort order, public keys, internal addresses |
+| `metrics`    | 3     | Counter name arrays, label escaping                |
+
 ### Integration Tests (`tests/integration_xdp.rs`)
 
 18 test groups, **30 `#[test]` functions** verifying wire format compatibility and correctness:
@@ -744,10 +759,82 @@ All configuration via environment variables:
 - `test_tri_matrix`: triangular matrix index
 - `test_write_read_roundtrip`: WriteStream/ReadStream roundtrip
 
+### Cross-Crate Wire Tests (`tests/cross_crate_wire.rs`)
+
+10 tests verifying that relay-xdp's `Writer`/`Reader` and relay-backend's
+`SimpleWriter`/`SimpleReader` produce compatible wire format:
+
+| Test                                               | Description                                     |
+|----------------------------------------------------|-------------------------------------------------|
+| `test_xdp_writer_request_parsed_by_backend`        | relay-xdp request parsed by relay-backend       |
+| `test_backend_response_parsed_by_xdp_reader`       | relay-backend response parsed by relay-xdp      |
+| `test_address_encoding_request_byte_level`          | Byte-level address encoding in requests         |
+| `test_address_encoding_response_byte_level`         | Byte-level address encoding in responses        |
+| `test_magic_bytes_preserved_cross_crate`            | Magic bytes roundtrip across crates             |
+| `test_ping_key_preserved_cross_crate`               | Ping key roundtrip across crates                |
+| `test_multi_relay_response_cross_crate`             | Multi-relay response parsing                    |
+| `test_none_address_encoding_cross_crate`            | NONE address encoding compatibility             |
+| `test_request_shutting_down_flag_cross_crate`       | Shutting down flag preserved                    |
+| `test_response_with_internal_address_cross_crate`   | Internal address in response                    |
+
+### End-to-End Encrypted Tests (`tests/e2e_encrypted.rs`)
+
+11 tests verifying NaCl crypto_box encryption between relay-xdp and relay-backend:
+
+| Test                                                    | Description                                    |
+|---------------------------------------------------------|------------------------------------------------|
+| `test_e2e_encrypted_request_decrypts_and_returns_ok`    | Encrypted request decrypts successfully        |
+| `test_e2e_encrypted_request_updates_relay_manager`      | Decrypted request updates relay manager state  |
+| `test_e2e_encrypted_response_contains_expected_keys`    | Response contains correct keys                 |
+| `test_e2e_multiple_encrypted_requests_succeed`          | Multiple sequential encrypted requests         |
+| `test_e2e_plaintext_mode_when_no_crypto_keys`           | Plaintext mode without private key             |
+| `test_e2e_tampered_ciphertext_returns_bad_request`      | Tampered ciphertext rejected                   |
+| `test_e2e_tampered_mac_returns_bad_request`             | Tampered MAC rejected                          |
+| `test_e2e_tampered_nonce_returns_bad_request`           | Tampered nonce rejected                        |
+| `test_e2e_truncated_encrypted_body_returns_bad_request` | Truncated body rejected                        |
+| `test_e2e_unknown_relay_in_encrypted_header_returns_error` | Unknown relay address rejected              |
+| `test_e2e_wrong_relay_key_returns_bad_request`          | Wrong relay key rejected                       |
+
+### HTTP Handler Tests (`tests/http_handler_integration.rs`)
+
+6 tests verifying HTTP handler behavior:
+
+| Test                                             | Description                                     |
+|--------------------------------------------------|-------------------------------------------------|
+| `test_relay_update_valid_request_returns_ok`      | Valid request returns HTTP 200                  |
+| `test_relay_update_too_large_returns_error`       | Oversized request rejected                      |
+| `test_relay_update_too_small_returns_bad_request` | Undersized request rejected                     |
+| `test_relay_update_invalid_format_returns_bad_request` | Invalid format rejected                    |
+| `test_relay_update_unknown_relay_returns_not_found` | Unknown relay returns 404                     |
+| `test_relay_update_updates_relay_manager_state`   | Valid request updates relay manager             |
+
+### JSON Loader Tests (`tests/json_loader_integration.rs`)
+
+6 tests verifying JSON relay data loading and encrypted request pipeline:
+
+| Test                                                       | Description                                 |
+|------------------------------------------------------------|---------------------------------------------|
+| `test_json_loaded_relay_encrypted_request_returns_ok`       | JSON-loaded relay accepts encrypted request |
+| `test_json_loaded_relay_encrypted_request_updates_relay_manager` | Request updates relay manager          |
+| `test_json_loaded_relay_response_echoes_correct_public_key` | Response echoes correct public key         |
+| `test_json_loaded_relay_wrong_key_returns_bad_request`      | Wrong key rejected for JSON-loaded relay   |
+| `test_json_loaded_two_relays_see_each_other_as_peers`       | Two relays appear as peers in responses    |
+| `test_json_file_load_then_encrypted_request`                | File load -> encrypted request pipeline    |
+
+### Pipeline Tests (`tests/pipeline_integration.rs`)
+
+3 tests verifying the full relay update -> cost matrix -> optimizer pipeline:
+
+| Test                                          | Description                                      |
+|-----------------------------------------------|--------------------------------------------------|
+| `test_four_relay_updates_to_cost_matrix`       | 4 relay updates produce valid cost matrix        |
+| `test_indirect_route_discovery_pipeline`       | Optimizer discovers indirect routes              |
+| `test_shutting_down_relay_excluded_from_costs` | Shutting-down relay excluded from cost matrix    |
+
 ### Running Tests
 
 ```bash
-cargo test -p relay-backend                    # All tests (30 integration + 3 unit)
+cargo test -p relay-backend                    # All tests (22 unit + 66 integration = 88 total)
 cargo test -p relay-backend -- --test-threads=1  # Sequential (if needed)
 ```
 

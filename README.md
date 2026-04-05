@@ -162,6 +162,7 @@ export RELAY_INTERNAL_ADDRESS="10.0.0.1:40000"   # Datacenter-internal address
 export RELAY_GATEWAY_ETHERNET_ADDRESS="aa:bb:cc:dd:ee:ff"
 export RELAY_XDP_OBJ="relay_xdp_rust.o"          # Path to eBPF object
 export RELAY_NO_BPF=1                             # Run without BPF (testing)
+export RELAY_DEDICATED=1                          # Drop non-relay traffic (dedicated servers)
 
 # Run
 sudo ./target/release/relay-xdp
@@ -182,6 +183,7 @@ export ROUTE_MATRIX_INTERVAL_MS=1000              # Route recomputation interval
 export MAX_JITTER=1000                            # Max jitter threshold for costs
 export MAX_PACKET_LOSS=100.0                      # Max packet loss threshold
 export ENABLE_RELAY_HISTORY=false                 # 300-entry ring buffer per pair
+export RELAY_DATA_FILE="/path/to/relays.json"     # JSON relay config (optional)
 
 # Run
 ./target/release/relay-backend
