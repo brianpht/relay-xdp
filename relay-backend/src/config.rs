@@ -14,6 +14,8 @@ pub struct Config {
     pub internal_port: String,
     pub relay_backend_public_key: Vec<u8>,
     pub relay_backend_private_key: Vec<u8>,
+    /// Path to relay data JSON file. None = start with empty relay data.
+    pub relay_data_file: Option<String>,
 }
 
 fn get_env_string(name: &str, default: &str) -> String {
@@ -68,6 +70,8 @@ pub fn read_config() -> Result<Config> {
     let relay_backend_private_key = get_env_base64("RELAY_BACKEND_PRIVATE_KEY")
         .unwrap_or_default();
 
+    let relay_data_file = std::env::var("RELAY_DATA_FILE").ok().filter(|v| !v.is_empty());
+
     if relay_backend_public_key.is_empty() {
         log::warn!("RELAY_BACKEND_PUBLIC_KEY not set - relay update crypto disabled");
     }
@@ -83,6 +87,10 @@ pub fn read_config() -> Result<Config> {
     log::info!("enable_relay_history: {}", enable_relay_history);
     log::info!("redis_hostname: {}", redis_hostname);
     log::info!("internal_address: {}", internal_address);
+    log::info!(
+        "relay_data_file: {}",
+        relay_data_file.as_deref().unwrap_or("<none>")
+    );
 
     Ok(Config {
         max_jitter,
@@ -96,6 +104,7 @@ pub fn read_config() -> Result<Config> {
         internal_port,
         relay_backend_public_key,
         relay_backend_private_key,
+        relay_data_file,
     })
 }
 

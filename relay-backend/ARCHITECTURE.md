@@ -76,7 +76,7 @@ relay-backend/
 │   ├── cost_matrix.rs       # Cost matrix serialization (bitpacked)
 │   ├── route_matrix.rs      # Route matrix serialization (bitpacked)
 │   ├── optimizer.rs         # Optimize2: optimal route finding (multi-threaded)
-│   ├── database.rs          # RelayData: relay config loaded from .bin file
+│   ├── database.rs          # RelayData: relay config loaded from JSON file or empty
 │   └── redis_client.rs      # Redis leader election + data store/load
 └── tests/
     ├── integration_xdp.rs   # 18 test groups, 30 test functions: wire format, optimizer, relay manager
@@ -95,7 +95,7 @@ Async application (tokio) with 4 background tasks running concurrently:
 ```
 main()
   ├── config::read_config()              # Read env vars
-  ├── RelayData::empty()                 # Initially empty (loaded from .bin later)
+  ├── RelayData::load_json() / empty()   # Load from JSON if RELAY_DATA_FILE set
   ├── RelayManager::new()                # In-memory state tracker
   ├── RedisLeaderElection::new()         # Leader election via Redis
   ├── AppState { ... }                   # Arc<AppState> shared state
@@ -128,7 +128,7 @@ update_route_matrix() loop:
 ```rust
 pub struct AppState {
     pub config: Arc<Config>,                         // Configuration (immutable)
-    pub relay_data: Arc<RelayData>,                  // Relay metadata from database .bin
+    pub relay_data: Arc<RelayData>,                  // Relay metadata from JSON file
     pub relay_manager: Arc<RelayManager>,             // In-memory RTT/jitter/loss tracker
     pub relays_csv: RwLock<Vec<u8>>,                 // CSV output for /relays endpoint
     pub cost_matrix_data: RwLock<Vec<u8>>,            // Serialized cost matrix
@@ -695,6 +695,7 @@ All configuration via environment variables:
 | `INTERNAL_PORT`             | string | = HTTP_PORT    | Internal port for Redis registration    |
 | `RELAY_BACKEND_PUBLIC_KEY`  | base64 | none           | Public key for crypto (optional)        |
 | `RELAY_BACKEND_PRIVATE_KEY` | base64 | none           | Private key for crypto (optional)       |
+| `RELAY_DATA_FILE`           | string | none           | Path to relay data JSON file (optional) |
 
 ---
 

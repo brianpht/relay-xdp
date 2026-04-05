@@ -42,6 +42,7 @@ fn test_config() -> Config {
         internal_port: "0".to_string(),
         relay_backend_public_key: vec![],
         relay_backend_private_key: vec![],
+        relay_data_file: None,
     }
 }
 

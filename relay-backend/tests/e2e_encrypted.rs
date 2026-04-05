@@ -168,6 +168,7 @@ fn test_app_state_with_crypto(
         internal_port: "0".to_string(),
         relay_backend_public_key: backend_pk.as_bytes().to_vec(),
         relay_backend_private_key: backend_sk.to_bytes().to_vec(),
+        relay_data_file: None,
     };
 
     Arc::new(AppState {
@@ -540,6 +541,7 @@ async fn test_e2e_plaintext_mode_when_no_crypto_keys() {
         internal_port: "0".to_string(),
         relay_backend_public_key: vec![], // empty = no crypto
         relay_backend_private_key: vec![], // empty = no crypto
+        relay_data_file: None,
     };
 
     let state = Arc::new(AppState {

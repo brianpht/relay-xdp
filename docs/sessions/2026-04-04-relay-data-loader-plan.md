@@ -69,12 +69,12 @@ JSON schema:
 
 Implementation steps:
 
-1. `RelayData::load_json(path)` in `database.rs` - parse, sort by name, build vecs, compute ids
-2. `relay_data_file: Option<String>` in `config.rs` from env var `RELAY_DATA_FILE`
-3. Wire into `main.rs` line 39-40: load if path set, else `empty()`
-4. Unit tests: valid load, sort order, duplicate detection, invalid address, public keys, empty array
-5. Integration test: JSON fixture -> AppState -> encrypted request -> 200 OK
-6. Update docs: ARCHITECTURE.md config table, README, JSON schema example
+1. ~~`RelayData::load_json(path)` in `database.rs` - parse, sort by name, build vecs, compute ids~~ **Done**
+2. ~~`relay_data_file: Option<String>` in `config.rs` from env var `RELAY_DATA_FILE`~~ **Done**
+3. ~~Wire into `main.rs` line 39-40: load if path set, else `empty()`~~ **Done**
+4. ~~Unit tests: valid load, sort order, duplicate detection, invalid address, public keys, empty array~~ **Done (13 tests)**
+5. ~~Integration test: JSON fixture -> AppState -> encrypted request -> 200 OK~~ **Done (6 tests)**
+6. ~~Update docs: ARCHITECTURE.md config table, startup flow, shared state~~ **Done**
 
 ## Decisions Made
 
@@ -88,7 +88,34 @@ Implementation steps:
 
 ## Tests Added/Modified
 
-None (planning session only).
+13 unit tests in `relay-backend/src/database.rs`:
+
+| Test | Verifies |
+|------|----------|
+| `test_load_valid_json` | Full parse, sort order, all fields, relay_id_to_index, default public keys |
+| `test_load_sort_order` | Relays sorted alphabetically by name |
+| `test_load_duplicate_name_rejected` | Duplicate relay name returns error |
+| `test_load_duplicate_address_rejected` | Duplicate relay address returns error |
+| `test_load_invalid_address_rejected` | Unparseable address returns error |
+| `test_load_empty_relays` | Empty array produces empty RelayData |
+| `test_load_public_keys` | Base64 public keys decoded correctly, missing key defaults to zeros |
+| `test_load_invalid_public_key_length` | Non-32-byte key rejected |
+| `test_load_invalid_public_key_base64` | Invalid base64 rejected |
+| `test_relay_ids_computed_from_address` | relay_id matches FNV-1a of address string |
+| `test_load_invalid_json` | Malformed JSON returns error |
+| `test_load_json_file` | File I/O round-trip (write temp file, load, verify) |
+| `test_load_json_file_not_found` | Missing file returns error |
+
+6 integration tests in `relay-backend/tests/json_loader_integration.rs`:
+
+| Test | Verifies |
+|------|----------|
+| `test_json_loaded_relay_encrypted_request_returns_ok` | JSON fixture -> from_json -> AppState -> encrypted POST -> 200 OK |
+| `test_json_loaded_relay_encrypted_request_updates_relay_manager` | Encrypted update registers relay as active with correct session count |
+| `test_json_loaded_relay_response_echoes_correct_public_key` | Response echoes correct per-relay public key from JSON for two different relays |
+| `test_json_loaded_two_relays_see_each_other_as_peers` | Second relay's response lists first as active peer with correct address/id |
+| `test_json_loaded_relay_wrong_key_returns_bad_request` | Wrong relay secret key fails decryption -> 400 |
+| `test_json_file_load_then_encrypted_request` | load_json() from temp file -> encrypted POST -> 200 OK + valid response |
 
 ## Issues Encountered
 
@@ -99,21 +126,29 @@ None (planning session only).
 
 ## Next Steps
 
-1. **High:** Implement `RelayData::load_json()` in `relay-backend/src/database.rs`
-2. **High:** Add `RELAY_DATA_FILE` env var to `config.rs` and wire into `main.rs`
-3. **High:** Unit tests for JSON loader (valid, sort, duplicates, errors, public keys)
-4. **Medium:** Integration test - load JSON fixture -> encrypted request -> verify response
-5. **Medium:** Update docs (ARCHITECTURE.md config table, README, JSON schema)
+1. ~~**High:** Implement `RelayData::load_json()` in `relay-backend/src/database.rs`~~ **Done**
+2. ~~**High:** Add `RELAY_DATA_FILE` env var to `config.rs` and wire into `main.rs`~~ **Done**
+3. ~~**High:** Unit tests for JSON loader (valid, sort, duplicates, errors, public keys)~~ **Done (13 tests)**
+4. ~~**Medium:** Integration test - load JSON fixture -> encrypted request -> verify response~~ **Done (6 tests)**
+5. ~~**Medium:** Update docs (ARCHITECTURE.md config table, startup flow, shared state)~~ **Done**
 6. **Low:** Hot reload support (Phase 2 - `arc-swap` or `RwLock` + file watcher)
 7. **Low:** GCS/HTTP URL support for `RELAY_DATA_FILE` (Phase 2)
 
 ## Files Changed
 
-None (planning session only).
+| File | Change |
+|------|--------|
+| `relay-backend/src/database.rs` | Added `from_json()`, `load_json()`, JSON schema types, validation, 13 unit tests, `#[derive(Debug)]` |
+| `relay-backend/src/config.rs` | Added `relay_data_file: Option<String>` field, reads `RELAY_DATA_FILE` env var |
+| `relay-backend/src/main.rs` | Wired `RelayData::load_json()` / `empty()` based on config |
+| `relay-backend/tests/http_handler_integration.rs` | Added `relay_data_file: None` to test Config |
+| `relay-backend/tests/e2e_encrypted.rs` | Added `relay_data_file: None` to two test Config structs |
+| `relay-backend/ARCHITECTURE.md` | Updated config table, module desc, startup flow, shared state comment |
+| `relay-backend/tests/json_loader_integration.rs` | **New** - 6 integration tests: JSON fixture -> AppState -> encrypted request -> verify |
 
 ## Reference
 
 - Go original: `Service.LoadDatabase()` -> `db.LoadDatabase()` -> `Fixup()` -> `Validate()` -> `generateRelayData()`
-- Current Rust gap: `relay-backend/src/database.rs` - only `RelayData::empty()`, no loader
+- Rust implementation: `relay-backend/src/database.rs` - `RelayData::load_json()` / `from_json()` / `empty()`
 - relay-xdp secret key derivation: `relay-xdp/src/config.rs` `derive_secret_key()` (X25519 + BLAKE2B-512)
 - Previous session: [`2026-04-04-integration-test-plan.md`](2026-04-04-integration-test-plan.md)

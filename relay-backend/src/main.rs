@@ -36,8 +36,17 @@ async fn main() -> anyhow::Result<()> {
     let config = config::read_config()?;
     let http_port = config.http_port;
 
-    // Load relay data (empty for now - will be loaded from .bin file)
-    let relay_data = Arc::new(RelayData::empty());
+    // Load relay data from JSON file if configured, otherwise start empty.
+    let relay_data = match &config.relay_data_file {
+        Some(path) => {
+            log::info!("loading relay data from: {}", path);
+            Arc::new(RelayData::load_json(path)?)
+        }
+        None => {
+            log::info!("no RELAY_DATA_FILE set - starting with empty relay data");
+            Arc::new(RelayData::empty())
+        }
+    };
 
     // Create relay manager
     let relay_manager = Arc::new(RelayManager::new(config.enable_relay_history));
