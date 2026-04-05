@@ -23,6 +23,7 @@ pub struct Config {
     pub gateway_ethernet_address: [u8; RELAY_ETHERNET_ADDRESS_BYTES],
     pub use_gateway_ethernet_address: bool,
     pub relay_backend_url: String,
+    pub dedicated: bool,
 }
 
 fn get_env(name: &str) -> Result<String> {
@@ -151,6 +152,13 @@ pub fn read_config() -> Result<Config> {
             _ => (false, [0u8; RELAY_ETHERNET_ADDRESS_BYTES]),
         };
 
+    let dedicated = std::env::var("RELAY_DEDICATED")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if dedicated {
+        println!("Relay dedicated mode is ENABLED");
+    }
+
     Ok(Config {
         relay_name,
         relay_port,
@@ -163,5 +171,6 @@ pub fn read_config() -> Result<Config> {
         gateway_ethernet_address,
         use_gateway_ethernet_address,
         relay_backend_url,
+        dedicated,
     })
 }

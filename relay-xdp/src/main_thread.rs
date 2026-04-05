@@ -89,7 +89,7 @@ impl MainThread {
         if let Some(ref bpf) = bpf {
             let mut bpf_guard = bpf.lock().unwrap();
             let relay_config = RelayConfig {
-                dedicated: 0,
+                dedicated: if config.dedicated { 1 } else { 0 },
                 relay_port: config.relay_port.to_be(),
                 relay_public_address: config.relay_public_address.to_be(),
                 relay_internal_address: config.relay_internal_address.to_be(),
@@ -223,6 +223,7 @@ impl MainThread {
         counters[RELAY_COUNTER_SESSIONS] = session_stats.session_count;
         counters[RELAY_COUNTER_ENVELOPE_KBPS_UP] = session_stats.envelope_kbps_up;
         counters[RELAY_COUNTER_ENVELOPE_KBPS_DOWN] = session_stats.envelope_kbps_down;
+        counters[RELAY_COUNTER_SESSION_DESTROYED] += session_stats.destroyed_count;
 
         // Pump stats messages from ping thread
         {
@@ -613,7 +614,9 @@ impl MainThread {
             let mut bpf_guard = bpf.lock().unwrap();
             if let Ok(mut session_map) = bpf_guard.session_map() {
                 for key in &session_keys_to_delete {
-                    let _ = session_map.remove(key);
+                    if session_map.remove(key).is_ok() {
+                        stats.destroyed_count += 1;
+                    }
                 }
             }
         }
@@ -658,4 +661,5 @@ struct SessionStats {
     session_count: u64,
     envelope_kbps_up: u64,
     envelope_kbps_down: u64,
+    destroyed_count: u64,
 }

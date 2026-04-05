@@ -67,8 +67,8 @@ No tests added in this planning session. Tests expected for upcoming actions:
 
 1. ~~**Critical:** Add session expiry checks in all 7 eBPF session-based handlers; file: `relay-xdp-ebpf/src/main.rs`~~ **DONE**
 2. ~~**Critical:** Add IP fragment drop check after IPv4 header parse; file: `relay-xdp-ebpf/src/main.rs`~~ **DONE**
-3. **High:** Increment `SESSION_CREATED` / `SESSION_CONTINUED` counters; file: `relay-xdp-ebpf/src/main.rs`
-4. **High:** Add `RELAY_DEDICATED` env var support; files: `relay-xdp/src/config.rs`, `main_thread.rs`
+3. ~~**High:** Increment `SESSION_CREATED` / `SESSION_CONTINUED` / `SESSION_DESTROYED` counters; files: `relay-xdp-ebpf/src/main.rs`, `relay-xdp/src/main_thread.rs`~~ **DONE**
+4. ~~**High:** Add `RELAY_DEDICATED` env var support; files: `relay-xdp/src/config.rs`, `main_thread.rs`~~ **DONE**
 5. **Medium:** Add internal address per-relay tracking; files: `relay-backend/src/{database,handlers,relay_manager}.rs`
 6. **Medium:** Remove `#[allow(dead_code)]` suppressions; multiple `relay-xdp/src` files
 7. **Medium:** Hot reload for relay data with file watcher; files: `relay-backend/src/{state,main,database}.rs`
@@ -82,12 +82,15 @@ No tests added in this planning session. Tests expected for upcoming actions:
 |----------|---------|
 | Is the advanced packet filter needed? | Counter index 5 (`ADVANCED_PACKET_FILTER_DROPPED_PACKET`) exists but nothing triggers it. Go original may have had full chonkle re-computation. |
 | Are real route tokens needed? | `test_token` is `[0u8; 111]` in relay update responses. Real tokens need per-relay secret key derivation in the backend. |
-| What triggers `RELAY_DEDICATED` behavior? | Need to trace how `config.dedicated` is used in eBPF to understand the full impact. |
+| ~~What triggers `RELAY_DEDICATED` behavior?~~ | **RESOLVED:** `config.dedicated != 0` in eBPF changes XDP_PASS to XDP_DROP for non-relay traffic (non-UDP, fragments, wrong port/addr, IPv6). Set via `RELAY_DEDICATED=1` env var. |
 
 ## Files Changed
 
 | Status | File |
 |--------|------|
 | A | `docs/sessions/2026-04-05-next-actions-plan.md` |
-| M | `relay-xdp-ebpf/src/main.rs` - session expiry checks (7 handlers) + IP fragment drop |
+| M | `relay-xdp-ebpf/src/main.rs` - session expiry checks (7 handlers) + IP fragment drop + SESSION_CREATED/CONTINUED counters |
+| M | `relay-xdp/src/config.rs` - added `dedicated: bool` field + `RELAY_DEDICATED` env var |
+| M | `relay-xdp/src/main_thread.rs` - pass `config.dedicated` to BPF config_map + SESSION_DESTROYED counter |
+| M | `relay-xdp/tests/backend_response_integration.rs` - added `dedicated` field to test Config |
 

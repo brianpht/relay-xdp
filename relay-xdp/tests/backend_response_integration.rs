@@ -39,6 +39,7 @@ fn test_config(
         gateway_ethernet_address: [0u8; 6],
         use_gateway_ethernet_address: false,
         relay_backend_url: "http://127.0.0.1:0".to_string(),
+        dedicated: false,
     }
 }
 

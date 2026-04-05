@@ -1000,7 +1000,9 @@ unsafe fn handle_route_request(
         session_id: (*token).session_id,
         session_version: (*token).session_version as u64,
     };
-    let _ = session_map.insert(&key, &session, BPF_NOEXIST);
+    if session_map.insert(&key, &session, BPF_NOEXIST).is_ok() {
+        increment_counter(stats, RELAY_COUNTER_SESSION_CREATED);
+    }
 
     // Copy ETH+IP+UDP headers forward past the first route token
     copy_bytes(
@@ -1311,6 +1313,7 @@ unsafe fn handle_continue_request(
     }
 
     (*session).expire_timestamp = (*token).expire_timestamp;
+    increment_counter(stats, RELAY_COUNTER_SESSION_CONTINUED);
 
     copy_bytes(
         data as *const u8,
