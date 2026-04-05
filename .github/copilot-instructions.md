@@ -96,11 +96,11 @@ Field layouts + byte offsets: [`docs/architecture.md` § BPF Map Schema](../docs
 ## Build Commands
 
 ```
-cargo build --release                # userspace
-cargo xtask build-ebpf-rust          # eBPF (nightly)
-cd module && make                    # kernel module
-cargo test                           # unit + wire_compat
-cargo xtask func-test                # functional parity (RELAY_NO_BPF=1)
+cargo build --release                  # userspace
+cargo run -p xtask -- build-ebpf-rust  # eBPF (nightly)
+cd module && make                      # kernel module
+cargo test                             # unit + wire_compat
+cargo run -p xtask -- func-test        # functional parity (RELAY_NO_BPF=1)
 ```
 
 ## Dependency Chain

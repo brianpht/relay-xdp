@@ -1071,6 +1071,11 @@ unsafe fn handle_route_response(
     }
     let session = session.unwrap();
 
+    if (*session).expire_timestamp < (*state).current_timestamp {
+        increment_counter(stats, RELAY_COUNTER_ROUTE_RESPONSE_PACKET_SESSION_EXPIRED);
+        return count_drop(stats, data_end - data);
+    }
+
     let packet_sequence = read_u64_le(header);
     if packet_sequence <= (*session).special_server_to_client_sequence {
         increment_counter(stats, RELAY_COUNTER_ROUTE_RESPONSE_PACKET_ALREADY_RECEIVED);
@@ -1142,6 +1147,11 @@ unsafe fn handle_client_to_server(
     }
     let session = session.unwrap();
 
+    if (*session).expire_timestamp < (*state).current_timestamp {
+        increment_counter(stats, RELAY_COUNTER_CLIENT_TO_SERVER_PACKET_SESSION_EXPIRED);
+        return count_drop(stats, data_end - data);
+    }
+
     let packet_sequence = read_u64_le(header);
     if packet_sequence <= (*session).payload_client_to_server_sequence {
         increment_counter(stats, RELAY_COUNTER_CLIENT_TO_SERVER_PACKET_ALREADY_RECEIVED);
@@ -1212,6 +1222,11 @@ unsafe fn handle_server_to_client(
         return count_drop(stats, data_end - data);
     }
     let session = session.unwrap();
+
+    if (*session).expire_timestamp < (*state).current_timestamp {
+        increment_counter(stats, RELAY_COUNTER_SERVER_TO_CLIENT_PACKET_SESSION_EXPIRED);
+        return count_drop(stats, data_end - data);
+    }
 
     let packet_sequence = read_u64_le(header);
     if packet_sequence <= (*session).payload_server_to_client_sequence {
@@ -1290,6 +1305,11 @@ unsafe fn handle_continue_request(
     }
     let session = session.unwrap();
 
+    if (*session).expire_timestamp < (*state).current_timestamp {
+        increment_counter(stats, RELAY_COUNTER_CONTINUE_REQUEST_PACKET_SESSION_EXPIRED);
+        return count_drop(stats, data_end - data);
+    }
+
     (*session).expire_timestamp = (*token).expire_timestamp;
 
     copy_bytes(
@@ -1352,6 +1372,11 @@ unsafe fn handle_continue_response(
         return count_drop(stats, data_end - data);
     }
     let session = session.unwrap();
+
+    if (*session).expire_timestamp < (*state).current_timestamp {
+        increment_counter(stats, RELAY_COUNTER_CONTINUE_RESPONSE_PACKET_SESSION_EXPIRED);
+        return count_drop(stats, data_end - data);
+    }
 
     let packet_sequence = read_u64_le(header);
 
@@ -1419,6 +1444,11 @@ unsafe fn handle_session_ping(
     }
     let session = session.unwrap();
 
+    if (*session).expire_timestamp < (*state).current_timestamp {
+        increment_counter(stats, RELAY_COUNTER_SESSION_PING_PACKET_SESSION_EXPIRED);
+        return count_drop(stats, data_end - data);
+    }
+
     let packet_sequence = read_u64_le(header);
     if packet_sequence <= (*session).special_client_to_server_sequence {
         increment_counter(stats, RELAY_COUNTER_SESSION_PING_PACKET_ALREADY_RECEIVED);
@@ -1483,6 +1513,11 @@ unsafe fn handle_session_pong(
         return count_drop(stats, data_end - data);
     }
     let session = session.unwrap();
+
+    if (*session).expire_timestamp < (*state).current_timestamp {
+        increment_counter(stats, RELAY_COUNTER_SESSION_PONG_PACKET_SESSION_EXPIRED);
+        return count_drop(stats, data_end - data);
+    }
 
     let packet_sequence = read_u64_le(header);
     if packet_sequence <= (*session).special_server_to_client_sequence {
@@ -1572,6 +1607,16 @@ unsafe fn try_relay_xdp_filter(ctx: &XdpContext) -> Result<u32, ()> {
         // Drop packets with IP header length != 20
         if (*ip).version_ihl & 0x0F != 5 {
             increment_counter(stats, RELAY_COUNTER_DROP_LARGE_IP_HEADER);
+            return if (*config).dedicated != 0 {
+                Ok(count_drop(stats, data_end - data))
+            } else {
+                Ok(xdp_action::XDP_PASS)
+            };
+        }
+
+        // Drop IP fragments - fragments can bypass stateful UDP checks
+        if u16::from_be((*ip).frag_off) & 0x3FFF != 0 {
+            increment_counter(stats, RELAY_COUNTER_DROP_FRAGMENT);
             return if (*config).dedicated != 0 {
                 Ok(count_drop(stats, data_end - data))
             } else {

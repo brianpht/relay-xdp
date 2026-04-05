@@ -65,8 +65,8 @@ No tests added in this planning session. Tests expected for upcoming actions:
 
 ## Next Steps
 
-1. **Critical:** Add session expiry checks in all 7 eBPF session-based handlers; file: `relay-xdp-ebpf/src/main.rs`
-2. **Critical:** Add IP fragment drop check after IPv4 header parse; file: `relay-xdp-ebpf/src/main.rs`
+1. ~~**Critical:** Add session expiry checks in all 7 eBPF session-based handlers; file: `relay-xdp-ebpf/src/main.rs`~~ **DONE**
+2. ~~**Critical:** Add IP fragment drop check after IPv4 header parse; file: `relay-xdp-ebpf/src/main.rs`~~ **DONE**
 3. **High:** Increment `SESSION_CREATED` / `SESSION_CONTINUED` counters; file: `relay-xdp-ebpf/src/main.rs`
 4. **High:** Add `RELAY_DEDICATED` env var support; files: `relay-xdp/src/config.rs`, `main_thread.rs`
 5. **Medium:** Add internal address per-relay tracking; files: `relay-backend/src/{database,handlers,relay_manager}.rs`
@@ -89,4 +89,5 @@ No tests added in this planning session. Tests expected for upcoming actions:
 | Status | File |
 |--------|------|
 | A | `docs/sessions/2026-04-05-next-actions-plan.md` |
+| M | `relay-xdp-ebpf/src/main.rs` - session expiry checks (7 handlers) + IP fragment drop |
 
