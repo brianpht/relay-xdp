@@ -70,3 +70,20 @@ jobs:
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  compose-test:
+    name: Compose Integration Test
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start services
+        run: docker compose -f docker-compose.test.yml up --build -d
+      - name: Run integration assertions
+        run: bash tests/compose-test.sh --no-build
+      - name: Dump service logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.test.yml logs --tail=100
+      - name: Teardown
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v --remove-orphans

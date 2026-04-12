@@ -129,7 +129,7 @@ No code changes in this planning session. Expected deliverables:
 2. ~~**High:** Create `relay-xdp/Dockerfile.nobpf` (2-stage, no eBPF)~~ DONE
 3. ~~**High:** Create `docker-compose.test.yml` with 5 services + static IPs~~ DONE
 4. ~~**High:** Create `tests/compose-test.sh` with 9 assertions~~ DONE
-5. **Medium:** Add `compose-test` job to `.github/workflows/rust.yml`
+5. ~~**Medium:** Add `compose-test` job to `.github/workflows/rust.yml`~~ DONE
 6. **Low:** Consider adding a second backend instance to test Redis leader election failover
 
 ## Files Changed
@@ -143,4 +143,5 @@ No code changes in this planning session. Expected deliverables:
 | A | `relay-xdp/Dockerfile.nobpf` - 2-stage build (no eBPF nightly) |
 | A | `docker-compose.test.yml` - 5-service topology with static IPs |
 | M | `relay-backend/Dockerfile` - added curl to runtime for healthcheck |
+| M | `.github/workflows/rust.yml` - added compose-test job |
 
