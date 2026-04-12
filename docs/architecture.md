@@ -335,11 +335,11 @@ Requires: Linux kernel 6.5+, loaded modules `chacha20` and `poly1305`.
 
 145 lines. Three commands:
 
-| Command                       | Action                                                                                          |
-|-------------------------------|-------------------------------------------------------------------------------------------------|
-| `cargo xtask build-ebpf`      | Build eBPF from C source (legacy)                                                               |
-| `cargo xtask build-ebpf-rust` | Build Rust eBPF: `cargo +nightly build --target bpfel-unknown-none -Z build-std=core --release` |
-| `cargo xtask func-test`       | Run functional parity tests: `cargo test --test func_parity -- --ignored --test-threads=1`      |
+| Command                             | Action                                                                                          |
+|-------------------------------------|-------------------------------------------------------------------------------------------------|
+| `cargo -p xtask -- build-ebpf`      | Build eBPF from C source (legacy)                                                               |
+| `cargo -p xtask -- build-ebpf-rust` | Build Rust eBPF: `cargo +nightly build --target bpfel-unknown-none -Z build-std=core --release` |
+| `cargo -p xtask -- func-test`       | Run functional parity tests: `cargo test --test func_parity -- --ignored --test-threads=1`      |
 
 ---
 
@@ -767,7 +767,7 @@ SimpleWriter address encoding, and max samples stress test.
 cargo test
 
 # Functional parity (no root, uses RELAY_NO_BPF=1)
-cargo xtask func-test
+cargo run -p xtask -- func-test
 # or:
 cargo test --test func_parity -- --ignored --test-threads=1
 
@@ -784,7 +784,7 @@ cargo test -p relay-backend
 cargo build --release                # builds relay-xdp + relay-backend
 
 # Build eBPF kernel program (requires nightly)
-cargo xtask build-ebpf-rust
+cargo run -p xtask -- build-ebpf-rust
 
 # Build kernel module (requires kernel headers + root)
 cd module && make

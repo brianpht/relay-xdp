@@ -39,7 +39,7 @@ pub struct MagicSnapshot {
 
 fn random_bytes<const N: usize>() -> [u8; N] {
     let mut buf = [0u8; N];
-    getrandom::getrandom(&mut buf).expect("getrandom failed");
+    getrandom::fill(&mut buf).expect("getrandom failed");
     buf
 }
 

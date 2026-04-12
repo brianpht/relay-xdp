@@ -135,7 +135,7 @@ relay-xdp/
 cargo build --release
 
 # eBPF data plane (requires nightly)
-cargo xtask build-ebpf-rust
+cargo run -p xtask -- build-ebpf-rust
 
 # Kernel module
 cd module && make

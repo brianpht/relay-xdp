@@ -138,7 +138,7 @@ fn encrypt_request(
     let body = &plaintext[HEADER_SIZE..];
 
     let mut nonce_bytes = [0u8; NONCE_SIZE];
-    getrandom::getrandom(&mut nonce_bytes).expect("getrandom failed");
+    getrandom::fill(&mut nonce_bytes).expect("getrandom failed");
     let nonce = crypto_box::Nonce::from(nonce_bytes);
 
     let salsa_box = crypto_box::SalsaBox::new(backend_pk, relay_sk);

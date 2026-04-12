@@ -15,10 +15,9 @@ path = "src/main.rs"
 # Web framework
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.6", features = ["trace"] }
 
 # Redis
-redis = { version = "0.27", features = ["tokio-comp"] }
+redis = { version = "1.2.0", features = ["tokio-comp"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -28,7 +27,7 @@ base64 = "0.22"
 
 # Crypto (NaCl box - decrypt relay-xdp update requests)
 crypto_box = "0.9"
-getrandom = "0.2"
+getrandom = "0.4.2"
 
 # Utilities
 uuid = { version = "1", features = ["v4"] }
@@ -43,5 +42,5 @@ relay-xdp-common = { path = "../relay-xdp-common" }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 crypto_box = "0.9"
-getrandom = "0.2"
+getrandom = "0.4.2"
 

@@ -14,7 +14,6 @@ path = "src/main.rs"
 [dependencies]
 relay-xdp-common = { path = "../relay-xdp-common", features = ["user"] }
 aya = "0.13"
-aya-log = "0.2"
 base64 = "0.22"
 log = "0.4"
 env_logger = "0.11"
@@ -27,7 +26,6 @@ libc = "0.2"
 # Pure-Rust crypto (replaces libsodium-sys-stable)
 sha2 = "0.11.0"
 crypto_box = "0.9"
-salsa20 = "0.10"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 blake2 = "0.10"
 getrandom = "0.4.2"
