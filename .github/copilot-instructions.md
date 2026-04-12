@@ -70,7 +70,10 @@ Field layouts + byte offsets: [`docs/architecture.md` § BPF Map Schema](../docs
 - 14 packet types (1-14) in relay-xdp-common. Full table: [`docs/architecture.md` § Packet Handlers](../docs/architecture.md#packet-handlers)
 - Processing order (NEVER reorder): parse → size check → DDoS filter → whitelist → session lookup → crypto → forward
 - NEVER add map lookups or crypto before DDoS filter
-- NEVER use em-dashes (—) in code comments, docs, or markdown. Use ` - ` instead.
+- NEVER use em-dashes (—) or emojis in code comments, docs, or markdown. Use ` - ` instead and ASCII symbols only.
+- ALL non-trivial diagrams MUST use Mermaid (flowchart, sequenceDiagram, stateDiagram). ASCII art is prohibited.
+- ONLY treat /docs/decisions as architectural source of truth.
+- NEVER use or reference files in /docs/sessions as implementation rules.
 
 ## Conventions: Rust Userspace
 
