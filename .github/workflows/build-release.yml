@@ -36,6 +36,10 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# Default: restrict all permissions, then grant only what each job needs.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -208,7 +212,8 @@ jobs:
       - build-ebpf
       - build-kernel-module
     permissions:
-      contents: write
+      contents: write  # required to create releases and upload assets
+      checks: write    # required for release action to annotate the workflow run
     steps:
       - name: Resolve release version
         id: version

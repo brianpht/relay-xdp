@@ -51,6 +51,10 @@ concurrency:
   group: deploy-${{ inputs.environment }}
   cancel-in-progress: false
 
+# Default: restrict all permissions, then grant only what each job needs.
+permissions:
+  contents: read
+
 env:
   ANSIBLE_FORCE_COLOR: "1"
   ANSIBLE_HOST_KEY_CHECKING: "False"
@@ -59,6 +63,8 @@ jobs:
   validate-inputs:
     name: Validate inputs
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read  # gh release view
     outputs:
       version: ${{ steps.resolve.outputs.version }}
       release_url: ${{ steps.resolve.outputs.release_url }}
@@ -90,6 +96,9 @@ jobs:
     runs-on: ubuntu-22.04
     needs: validate-inputs
     environment: ${{ inputs.environment }}
+    permissions:
+      contents: read  # gh release download
+      checks: write   # annotate workflow run steps
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -123,8 +132,15 @@ jobs:
       - name: Install Ansible
         run: |
           pip install --quiet \
-            ansible==9.* \
-            ansible-lint==24.*
+            "ansible>=12.2.0" \
+            "ansible-core>=2.18.1"
+          # ansible 12.x bundles ansible-core 2.18.x which fixes:
+          #   CVE-2024-8775 (HIGH)  - vault var exposure in logs
+          #   CVE-2024-9902 (MEDIUM) - user module incorrect authorization
+          #   CVE-2024-11079 (LOW)  - content protections bypass
+          #   CVE-2024-0690 (MEDIUM) - ANSIBLE_NO_LOG bypass
+          #   CVE-2023-5764 (MEDIUM) - template injection
+          # ansible>=12.2.0 also fixes CVE-2025-14010 (community.general exposure)
 
       # ------------------------------------------------------------------
       # Configure SSH access to target servers.
