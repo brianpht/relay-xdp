@@ -1,0 +1,270 @@
+# Build and publish a GitHub Release with all deployment artifacts.
+#
+# Artifacts produced per release:
+#   relay-backend              - x86_64 Linux binary (Rust stable)
+#   relay-xdp                  - x86_64 Linux binary (Rust stable)
+#   relay_xdp_rust.o           - eBPF object (Rust nightly, bpfel-unknown-none)
+#   relay_module-<kver>.ko     - Kernel module, one per supported kernel version
+#
+# Triggers:
+#   - Push of a tag matching v* (e.g. v1.2.3)
+#   - Manual dispatch (workflow_dispatch)
+#
+# On success, creates a GitHub Release tagged with the pushed tag (or the
+# manually supplied version) and attaches all artifacts to it.
+#
+# Kernel version matrix: add entries to the matrix below when new kernel
+# versions are deployed on staging/production hosts.  The runner must have
+# the matching linux-headers-* package available in the Ubuntu apt mirror.
+# Check available versions: apt-cache search linux-headers | grep generic
+
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version tag (e.g. v1.2.3)"
+        required: true
+        type: string
+
+# Prevent concurrent releases for the same ref.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ------------------------------------------------------------------
+  # Job 1: Build relay-backend and relay-xdp userspace binaries
+  # ------------------------------------------------------------------
+  build-userspace:
+    name: Build userspace binaries
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: userspace-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            userspace-${{ runner.os }}-
+
+      - name: Build relay-backend
+        run: cargo build --release -p relay-backend
+
+      - name: Build relay-xdp
+        run: cargo build --release -p relay-xdp
+
+      - name: Upload relay-backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-backend
+          path: target/release/relay-backend
+          retention-days: 1
+
+      - name: Upload relay-xdp artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-xdp
+          path: target/release/relay-xdp
+          retention-days: 1
+
+  # ------------------------------------------------------------------
+  # Job 2: Build eBPF object (relay_xdp_rust.o)
+  # Requires Rust nightly + bpf-linker. relay-xdp-ebpf is NOT a
+  # workspace member - it is built separately targeting bpfel-unknown-none.
+  # ------------------------------------------------------------------
+  build-ebpf:
+    name: Build eBPF object
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust nightly with rust-src
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Cache Cargo registry (nightly)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            relay-xdp-ebpf/target
+          key: ebpf-${{ runner.os }}-${{ hashFiles('relay-xdp-ebpf/Cargo.lock') }}
+          restore-keys: |
+            ebpf-${{ runner.os }}-
+
+      - name: Install bpf-linker
+        run: cargo install bpf-linker
+
+      - name: Build eBPF program
+        working-directory: relay-xdp-ebpf
+        run: |
+          cargo +nightly build \
+            --target bpfel-unknown-none \
+            -Z build-std=core \
+            --release
+
+      - name: Upload eBPF object artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay_xdp_rust.o
+          path: relay-xdp-ebpf/target/bpfel-unknown-none/release/relay-xdp-ebpf
+          retention-days: 1
+
+  # ------------------------------------------------------------------
+  # Job 3: Build kernel module (relay_module.ko) per kernel version.
+  #
+  # Matrix: add kernel versions matching production/staging hosts.
+  # The module source is in module/relay_module.c.
+  # Requires kernel headers + btf vmlinux for the target kernel.
+  #
+  # NOTE: GitHub-hosted Ubuntu 22.04 runners ship with kernel 6.5 or
+  # later; installing linux-headers-<ver>-generic is sufficient for
+  # in-tree module builds. If the runner kernel itself matches the
+  # target version, we can use the running kernel directly.
+  # ------------------------------------------------------------------
+  build-kernel-module:
+    name: Build kernel module (${{ matrix.kernel_version }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel_version:
+          - "6.5.0-44-generic"
+          - "6.8.0-45-generic"
+          # Add more versions here as needed.
+          # To discover available versions:
+          #   apt-cache search linux-headers | grep -E "^linux-headers-[0-9]" | grep generic
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install kernel headers for ${{ matrix.kernel_version }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            linux-headers-${{ matrix.kernel_version }} \
+            build-essential \
+            kmod
+
+      - name: Copy vmlinux BTF for target kernel
+        run: |
+          # BTF vmlinux may not exist for cross-version builds; skip if absent.
+          BTF_SRC="/sys/kernel/btf/vmlinux"
+          BTF_DST="/usr/lib/modules/${{ matrix.kernel_version }}/build/vmlinux"
+          if [ -f "$BTF_SRC" ]; then
+            sudo cp "$BTF_SRC" "$BTF_DST"
+          else
+            echo "Warning: BTF vmlinux not available for ${{ matrix.kernel_version }}, skipping copy"
+          fi
+
+      - name: Build relay_module.ko
+        working-directory: module
+        run: |
+          make -C /lib/modules/${{ matrix.kernel_version }}/build \
+            M=$(pwd) \
+            modules
+
+      - name: Rename artifact to include kernel version
+        working-directory: module
+        run: cp relay_module.ko relay_module-${{ matrix.kernel_version }}.ko
+
+      - name: Upload kernel module artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay_module-${{ matrix.kernel_version }}
+          path: module/relay_module-${{ matrix.kernel_version }}.ko
+          retention-days: 1
+
+  # ------------------------------------------------------------------
+  # Job 4: Collect all artifacts and create GitHub Release.
+  # Runs after all build jobs succeed.
+  # ------------------------------------------------------------------
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-22.04
+    needs:
+      - build-userspace
+      - build-ebpf
+      - build-kernel-module
+    permissions:
+      contents: write
+    steps:
+      - name: Resolve release version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download relay-backend
+        uses: actions/download-artifact@v4
+        with:
+          name: relay-backend
+          path: dist/
+
+      - name: Download relay-xdp
+        uses: actions/download-artifact@v4
+        with:
+          name: relay-xdp
+          path: dist/
+
+      - name: Download relay_xdp_rust.o
+        uses: actions/download-artifact@v4
+        with:
+          name: relay_xdp_rust.o
+          path: dist/
+
+      - name: Download kernel modules
+        uses: actions/download-artifact@v4
+        with:
+          pattern: relay_module-*
+          path: dist/
+          merge-multiple: true
+
+      - name: Rename eBPF object to canonical name
+        run: |
+          # The artifact is uploaded as "relay-xdp-ebpf" (binary name);
+          # rename to relay_xdp_rust.o for clarity at deploy time.
+          if [ -f dist/relay-xdp-ebpf ]; then
+            mv dist/relay-xdp-ebpf dist/relay_xdp_rust.o
+          fi
+
+      - name: Mark binaries executable
+        run: chmod +x dist/relay-backend dist/relay-xdp
+
+      - name: List release artifacts
+        run: ls -lh dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "relay-xdp ${{ steps.version.outputs.tag }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: dist/*
+

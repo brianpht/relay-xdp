@@ -163,13 +163,16 @@ No code changes in this session - planning only.
 ## Next Steps
 
 1. **High:** Implement `ansible/` directory structure with all roles, templates, and playbooks
-2. **High:** Implement `.github/workflows/build-release.yml` CI pipeline
-3. **High:** Implement `.github/workflows/deploy.yml` deploy workflow
-4. **Medium:** Determine exact kernel versions running on staging/production hosts for CI matrix
+2. ~~**High:** Implement `.github/workflows/build-release.yml` CI pipeline~~ - **Done**
+3. ~~**High:** Implement `.github/workflows/deploy.yml` deploy workflow~~ - **Done**
+4. **Medium:** Determine exact kernel versions running on staging/production hosts; update matrix in `build-release.yml`
 5. **Medium:** Generate staging/production keypairs and encrypt with Ansible Vault
 6. **Low:** Add monitoring integration (Prometheus node_exporter, relay metrics endpoint) - deferred
 
 ## Files Changed
 
-No files changed - planning session only.
+| Status | File |
+|--------|------|
+| A | `.github/workflows/build-release.yml` |
+| A | `.github/workflows/deploy.yml` |
 

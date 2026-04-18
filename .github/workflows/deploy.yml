@@ -1,0 +1,230 @@
+# Deploy a released version of relay-xdp to staging or production.
+#
+# This workflow downloads pre-built artifacts from a GitHub Release and
+# runs the Ansible playbooks against the target environment.
+#
+# Prerequisites (configure in GitHub Settings > Secrets and variables > Actions):
+#   ANSIBLE_VAULT_PASSWORD  - Password for ansible-vault encrypted files
+#   DEPLOY_SSH_KEY          - Private SSH key for connecting to target servers
+#   DEPLOY_SSH_KNOWN_HOSTS  - Known hosts entries for target servers
+#
+# Inputs:
+#   environment   - Target environment: staging | production
+#   version       - Release tag to deploy, e.g. v1.2.3
+#   dry_run       - If true, pass --check to ansible-playbook (no changes made)
+#
+# Deploy order (enforced by site.yml):
+#   1. common        - all hosts (kernel check, deps, sysctl, firewall)
+#   2. redis         - backend_servers
+#   3. relay-backend - backend_servers  (waits for healthy before continuing)
+#   4. kernel-module - relay_servers    (downloads .ko matching ansible_kernel)
+#   5. relay-xdp     - relay_servers    (serial: 1, verify + rollback per node)
+#
+# Rolling deploy: relay-xdp role uses serial:1 in production. Each node is
+# verified before the next is started. On verification failure, the node is
+# rolled back and the play stops - remaining nodes are NOT updated.
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      version:
+        description: "Release tag to deploy (e.g. v1.2.3)"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run - run ansible with --check (no changes applied)"
+        required: false
+        type: boolean
+        default: false
+
+# Only one deploy per environment at a time.
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  ANSIBLE_FORCE_COLOR: "1"
+  ANSIBLE_HOST_KEY_CHECKING: "False"
+
+jobs:
+  validate-inputs:
+    name: Validate inputs
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      release_url: ${{ steps.resolve.outputs.release_url }}
+    steps:
+      - name: Verify release exists for version ${{ inputs.version }}
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          echo "Checking release for tag: $VERSION"
+
+          RELEASE_JSON=$(gh release view "$VERSION" \
+            --repo "${{ github.repository }}" \
+            --json tagName,url,assets 2>&1) || {
+            echo "ERROR: Release '$VERSION' not found."
+            exit 1
+          }
+
+          echo "Release found:"
+          echo "$RELEASE_JSON" | jq '{tag: .tagName, url: .url, assets: [.assets[].name]}'
+
+          RELEASE_URL=$(echo "$RELEASE_JSON" | jq -r '.url')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "release_url=$RELEASE_URL" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy ${{ inputs.version }} to ${{ inputs.environment }}
+    runs-on: ubuntu-22.04
+    needs: validate-inputs
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------
+      # Download release artifacts so Ansible roles can distribute them
+      # to target hosts without the hosts needing internet access.
+      # Artifacts are placed in dist/ and the path is passed to Ansible
+      # via the `artifacts_dir` variable.
+      # ------------------------------------------------------------------
+      - name: Download release artifacts (${{ inputs.version }})
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          gh release download "${{ inputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --dir dist/
+          chmod +x dist/relay-backend dist/relay-xdp
+          echo "Downloaded artifacts:"
+          ls -lh dist/
+
+      # ------------------------------------------------------------------
+      # Set up Python + Ansible
+      # ------------------------------------------------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ansible
+        run: |
+          pip install --quiet \
+            ansible==9.* \
+            ansible-lint==24.*
+
+      # ------------------------------------------------------------------
+      # Configure SSH access to target servers.
+      # DEPLOY_SSH_KEY:         PEM private key (RSA or Ed25519)
+      # DEPLOY_SSH_KNOWN_HOSTS: newline-separated known_hosts entries
+      # ------------------------------------------------------------------
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          echo "${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+          # Use deploy key for all Ansible SSH connections.
+          cat >> ~/.ssh/config <<EOF
+          Host *
+            IdentityFile ~/.ssh/deploy_key
+            StrictHostKeyChecking yes
+            BatchMode yes
+            ConnectTimeout 10
+          EOF
+
+      # ------------------------------------------------------------------
+      # Write Ansible Vault password to a temp file so ansible-playbook
+      # can decrypt group_vars/vault_*.yml without interactive prompt.
+      # ------------------------------------------------------------------
+      - name: Write Ansible Vault password
+        run: |
+          echo "${{ secrets.ANSIBLE_VAULT_PASSWORD }}" > /tmp/vault_pass
+          chmod 600 /tmp/vault_pass
+
+      # ------------------------------------------------------------------
+      # Dry run: validate playbook syntax + config without making changes.
+      # ------------------------------------------------------------------
+      - name: Ansible syntax check
+        working-directory: ansible
+        run: |
+          ansible-playbook \
+            -i inventory/${{ inputs.environment }}.yml \
+            playbooks/site.yml \
+            --vault-password-file /tmp/vault_pass \
+            --syntax-check
+
+      # ------------------------------------------------------------------
+      # Full deploy.
+      #
+      # Extra variables passed to playbook:
+      #   relay_version      - the release tag being deployed
+      #   artifacts_dir      - local path to downloaded artifacts (Ansible
+      #                        uses `copy:` module to push them to hosts)
+      #
+      # In production, relay-xdp role enforces serial:1 rolling deploy
+      # internally. See roles/relay-xdp/tasks/main.yml for verification
+      # and rollback logic.
+      # ------------------------------------------------------------------
+      - name: Run Ansible playbook
+        working-directory: ansible
+        run: |
+          EXTRA_FLAGS=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            EXTRA_FLAGS="--check --diff"
+            echo "DRY RUN mode enabled - no changes will be applied"
+          fi
+
+          ansible-playbook \
+            -i inventory/${{ inputs.environment }}.yml \
+            playbooks/site.yml \
+            --vault-password-file /tmp/vault_pass \
+            --extra-vars "relay_version=${{ inputs.version }}" \
+            --extra-vars "artifacts_dir=${{ github.workspace }}/dist" \
+            $EXTRA_FLAGS
+
+      # ------------------------------------------------------------------
+      # Clean up sensitive files regardless of success/failure.
+      # ------------------------------------------------------------------
+      - name: Clean up secrets
+        if: always()
+        run: |
+          rm -f /tmp/vault_pass ~/.ssh/deploy_key
+
+      # ------------------------------------------------------------------
+      # Summarize deploy result.
+      # ------------------------------------------------------------------
+      - name: Write deploy summary
+        if: always()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Deploy Summary
+
+          | Field | Value |
+          |-------|-------|
+          | Environment | \`${{ inputs.environment }}\` |
+          | Version | \`${{ inputs.version }}\` |
+          | Dry Run | \`${{ inputs.dry_run }}\` |
+          | Release | ${{ needs.validate-inputs.outputs.release_url }} |
+          | Triggered by | @${{ github.actor }} |
+          | Status | ${{ job.status }} |
+          EOF
+
