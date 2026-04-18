@@ -1,0 +1,80 @@
+# Security audit for Rust dependencies using cargo-audit.
+#
+# Scans Cargo.lock against the RustSec advisory database (rustsec.org).
+# Reports vulnerabilities, unmaintained crates, and unsound code.
+#
+# Triggers:
+#   - Push to main/master
+#   - Pull requests to main/master
+#   - Weekly schedule (Sunday 02:00 UTC) to catch new advisories
+#   - Manual dispatch
+#
+# The rustsec/audit-check action requires `checks: write` to annotate
+# the workflow run with advisory details. Without this permission the
+# action fails with "Resource not accessible by integration".
+#
+# Note: this workflow runs only on the host workspace Cargo.lock.
+# relay-xdp-ebpf has its own Cargo.lock and is audited separately
+# in the build-ebpf job of build-release.yml.
+
+name: Security Audit
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "Cargo.lock"
+      - ".github/workflows/security-audit.yml"
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - "Cargo.lock"
+  schedule:
+    # Every Sunday at 02:00 UTC - catch advisories published between releases.
+    - cron: "0 2 * * 0"
+  workflow_dispatch:
+
+# Restrict default token to read-only; grant checks:write explicitly below.
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      checks: write  # required by rustsec/audit-check to annotate findings
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run cargo audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Fail the job on vulnerabilities; treat unmaintained/unsound as
+          # warnings only (informational) so they do not block CI.
+          deny: "vulnerabilities"
+
+  audit-ebpf:
+    name: cargo audit (relay-xdp-ebpf)
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run cargo audit (ebpf)
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          file: relay-xdp-ebpf/Cargo.lock
+          deny: "vulnerabilities"
+
