@@ -1,0 +1,51 @@
+---
+# roles/relay-backend/tasks/main.yml
+# Deploy relay-backend binary, environment file, and systemd unit.
+
+- name: Download relay-backend binary
+  ansible.builtin.get_url:
+    url: "{{ artifact_base_url }}/relay-backend"
+    dest: "{{ relay_bin_dir }}/relay-backend"
+    mode: "0755"
+    owner: root
+    group: root
+  notify: restart relay-backend
+
+- name: Deploy relay-backend environment file
+  ansible.builtin.template:
+    src: backend.env.j2
+    dest: "{{ relay_conf_dir }}/backend.env"
+    owner: "{{ relay_user }}"
+    group: "{{ relay_group }}"
+    mode: "0640"
+  notify: restart relay-backend
+
+- name: Deploy relay-backend systemd unit
+  ansible.builtin.template:
+    src: relay-backend.service.j2
+    dest: /etc/systemd/system/relay-backend.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - reload systemd
+    - restart relay-backend
+
+- name: Enable and start relay-backend
+  ansible.builtin.systemd:
+    name: relay-backend
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Wait for relay-backend healthcheck
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ backend_http_port }}/health"
+    method: GET
+    status_code: 200
+    timeout: 5
+  register: health_check
+  retries: "{{ relay_verify_retries }}"
+  delay: "{{ relay_verify_delay_s }}"
+  until: health_check.status == 200
+

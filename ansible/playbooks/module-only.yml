@@ -1,0 +1,14 @@
+---
+# playbooks/module-only.yml
+# Update kernel module only (unload old, download new, reload).
+# Run this when a new kernel is installed on relay hosts or a new .ko is released.
+#
+# Usage:
+#   ansible-playbook -i inventory/staging.yml playbooks/module-only.yml -e relay_version=v1.2.3
+
+- name: Kernel module update
+  hosts: relay_servers
+  gather_facts: true
+  roles:
+    - kernel-module
+

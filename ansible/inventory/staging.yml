@@ -1,0 +1,22 @@
+# Staging inventory
+# Add actual hostnames/IPs before first deploy.
+# Groups:
+#   relay_servers   - hosts running relay-xdp + kernel module
+#   backend_servers - hosts running relay-backend + Redis
+
+all:
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+
+  children:
+    relay_servers:
+      hosts:
+        relay-staging-1:
+          ansible_host: 10.0.0.11
+          relay_name: relay-staging-1
+
+    backend_servers:
+      hosts:
+        backend-staging-1:
+          ansible_host: 10.0.0.21
+

@@ -1,0 +1,28 @@
+# Production inventory
+# Add actual hostnames/IPs before first deploy.
+# Groups:
+#   relay_servers   - hosts running relay-xdp + kernel module
+#   backend_servers - hosts running relay-backend + Redis
+
+all:
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+
+  children:
+    relay_servers:
+      hosts:
+        relay-prod-1:
+          ansible_host: 10.1.0.11
+          relay_name: relay-prod-1
+        relay-prod-2:
+          ansible_host: 10.1.0.12
+          relay_name: relay-prod-2
+        relay-prod-3:
+          ansible_host: 10.1.0.13
+          relay_name: relay-prod-3
+
+    backend_servers:
+      hosts:
+        backend-prod-1:
+          ansible_host: 10.1.0.21
+

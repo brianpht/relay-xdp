@@ -1,0 +1,10 @@
+# Never commit unencrypted vault files or SSH keys.
+# Vault files must be encrypted with ansible-vault before commit.
+*.retry
+.vault_pass
+vault_pass.txt
+*.pem
+*.key
+id_rsa
+id_ed25519
+

@@ -1,0 +1,15 @@
+---
+# playbooks/relay-only.yml
+# Redeploy relay-xdp binary and eBPF object only (rolling, serial: 1).
+# Skips backend, redis, and kernel module steps.
+#
+# Usage:
+#   ansible-playbook -i inventory/staging.yml playbooks/relay-only.yml -e relay_version=v1.2.3
+
+- name: relay-xdp rolling redeploy
+  hosts: relay_servers
+  gather_facts: true
+  serial: "{{ relay_serial | default(1) }}"
+  roles:
+    - relay-xdp
+

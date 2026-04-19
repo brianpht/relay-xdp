@@ -1,0 +1,84 @@
+---
+# playbooks/rollback.yml
+# Restore relay-xdp on specified hosts from the backup directory.
+# Backup is written before each deploy by the relay-xdp role.
+#
+# Usage:
+#   # Rollback a specific host:
+#   ansible-playbook -i inventory/production.yml playbooks/rollback.yml \
+#     --limit relay-prod-2
+#
+#   # Rollback all relay servers (use with caution):
+#   ansible-playbook -i inventory/production.yml playbooks/rollback.yml
+
+- name: Rollback relay-xdp to previous version
+  hosts: relay_servers
+  gather_facts: false
+  tasks:
+    - name: Check backup binary exists
+      ansible.builtin.stat:
+        path: "{{ relay_backup_dir }}/relay-xdp"
+      register: backup_binary
+
+    - name: Fail if no backup is available
+      ansible.builtin.fail:
+        msg: >
+          No backup binary found at {{ relay_backup_dir }}/relay-xdp.
+          Cannot rollback {{ inventory_hostname }}.
+      when: not backup_binary.stat.exists
+
+    - name: Stop relay-xdp service
+      ansible.builtin.systemd:
+        name: relay-xdp
+        state: stopped
+
+    - name: Restore relay-xdp binary from backup
+      ansible.builtin.copy:
+        src: "{{ relay_backup_dir }}/relay-xdp"
+        dest: "{{ relay_data_dir }}/relay-xdp"
+        remote_src: true
+        mode: "0755"
+        owner: root
+        group: root
+
+    - name: Restore eBPF object from backup
+      ansible.builtin.copy:
+        src: "{{ relay_backup_dir }}/relay_xdp_rust.o"
+        dest: "{{ relay_data_dir }}/relay_xdp_rust.o"
+        remote_src: true
+        mode: "0644"
+        owner: "{{ relay_user }}"
+        group: "{{ relay_group }}"
+      ignore_errors: true  # may not exist if backup was before first eBPF deploy
+
+    - name: Restore relay.env from backup
+      ansible.builtin.copy:
+        src: "{{ relay_backup_dir }}/relay.env"
+        dest: "{{ relay_conf_dir }}/relay.env"
+        remote_src: true
+        mode: "0640"
+        owner: "{{ relay_user }}"
+        group: "{{ relay_group }}"
+      ignore_errors: true
+
+    - name: Start relay-xdp service with restored binary
+      ansible.builtin.systemd:
+        name: relay-xdp
+        state: started
+        daemon_reload: true
+
+    - name: Wait for relay-xdp to start
+      ansible.builtin.pause:
+        seconds: "{{ relay_startup_wait_s }}"
+
+    - name: Verify relay-xdp is active after rollback
+      ansible.builtin.command:
+        cmd: systemctl is-active relay-xdp
+      register: svc_active
+      changed_when: false
+      failed_when: svc_active.rc != 0
+
+    - name: Print rollback result
+      ansible.builtin.debug:
+        msg: "Rollback successful on {{ inventory_hostname }} - relay-xdp is active."
+

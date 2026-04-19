@@ -1,0 +1,21 @@
+# ansible/group_vars/vault_staging.yml
+# Encrypted with: ansible-vault encrypt group_vars/vault_staging.yml
+#
+# To create:
+#   ansible-vault create group_vars/vault_staging.yml
+# To edit:
+#   ansible-vault edit group_vars/vault_staging.yml
+#
+# Template (plaintext - DO NOT COMMIT unencrypted):
+#
+# vault_relay_backend_public_key:  "base64-encoded-public-key"
+# vault_relay_backend_private_key: "base64-encoded-private-key"
+#
+# vault_relay_keys:
+#   relay-staging-1:
+#     public_key:  "base64-encoded-public-key"
+#     private_key: "base64-encoded-private-key"
+#
+# Placeholder - replace this entire file with ansible-vault encrypted content.
+ANSIBLE_VAULT_PLACEHOLDER: this file must be encrypted with ansible-vault before use
+

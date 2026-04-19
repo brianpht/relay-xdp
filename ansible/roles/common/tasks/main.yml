@@ -1,0 +1,83 @@
+---
+# roles/common/tasks/main.yml
+# Base OS configuration: kernel check, user, packages, sysctl, firewall.
+
+- name: Check kernel version meets minimum requirement
+  ansible.builtin.assert:
+    that:
+      - ansible_kernel_version is version(min_kernel_major ~ '.' ~ min_kernel_minor, '>=')
+    fail_msg: >
+      Kernel {{ ansible_kernel }} does not meet minimum required {{ min_kernel_major }}.{{ min_kernel_minor }}.
+      Upgrade the kernel before deploying.
+  vars:
+    # Extract "major.minor" from ansible_kernel (e.g. "6.8.0-45-generic" -> "6.8")
+    ansible_kernel_version: "{{ ansible_kernel.split('-')[0] }}"
+
+- name: Install required system packages
+  ansible.builtin.apt:
+    name:
+      - libelf1
+      - ca-certificates
+      - curl
+      - kmod
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create relay system group
+  ansible.builtin.group:
+    name: "{{ relay_group }}"
+    system: true
+    state: present
+
+- name: Create relay system user
+  ansible.builtin.user:
+    name: "{{ relay_user }}"
+    group: "{{ relay_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: /var/lib/relay
+    create_home: false
+    state: present
+
+- name: Create relay directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ relay_user }}"
+    group: "{{ relay_group }}"
+    mode: "0755"
+  loop:
+    - "{{ relay_data_dir }}"
+    - "{{ relay_backup_dir }}"
+    - "{{ relay_conf_dir }}"
+
+- name: Configure sysctl for high-throughput UDP
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_set: true
+    state: present
+    reload: true
+  loop:
+    - { key: net.core.rmem_max,          value: "134217728" }
+    - { key: net.core.wmem_max,          value: "134217728" }
+    - { key: net.core.rmem_default,      value: "16777216"  }
+    - { key: net.core.wmem_default,      value: "16777216"  }
+    - { key: net.core.netdev_max_backlog, value: "250000"   }
+    - { key: net.ipv4.udp_mem,           value: "102400 873800 134217728" }
+
+- name: Open relay UDP port in ufw
+  community.general.ufw:
+    rule: allow
+    port: "{{ relay_udp_port }}"
+    proto: udp
+  when: ansible_facts.packages['ufw'] is defined
+
+- name: Open relay HTTP port in ufw
+  community.general.ufw:
+    rule: allow
+    port: "{{ relay_http_port }}"
+    proto: tcp
+  when: ansible_facts.packages['ufw'] is defined
+

@@ -1,0 +1,7 @@
+---
+# roles/kernel-module/handlers/main.yml
+
+- name: reload kernel module
+  ansible.builtin.debug:
+    msg: "Kernel module reload triggered - handled inline in tasks."
+

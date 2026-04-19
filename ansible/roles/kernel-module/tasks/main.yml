@@ -1,0 +1,63 @@
+---
+# roles/kernel-module/tasks/main.yml
+# Download and load the pre-built relay_module.ko for the running kernel.
+# The .ko artifact is named relay_module-<kernel-version>.ko on GitHub Releases.
+
+- name: Set kernel module filename
+  ansible.builtin.set_fact:
+    ko_filename: "relay_module-{{ ansible_kernel }}.ko"
+    ko_dest: "/opt/relay/relay_module-{{ ansible_kernel }}.ko"
+
+- name: Download kernel module for running kernel
+  ansible.builtin.get_url:
+    url: "{{ artifact_base_url }}/{{ ko_filename }}"
+    dest: "{{ ko_dest }}"
+    mode: "0644"
+    owner: root
+    group: root
+  notify: reload kernel module
+
+- name: Ensure chacha20 kernel module is loaded
+  community.general.modprobe:
+    name: chacha20
+    state: present
+
+- name: Ensure poly1305 kernel module is loaded
+  community.general.modprobe:
+    name: poly1305
+    state: present
+
+- name: Unload existing relay_module if loaded
+  community.general.modprobe:
+    name: relay_module
+    state: absent
+  ignore_errors: true  # not fatal if not loaded yet
+
+- name: Load relay_module.ko
+  ansible.builtin.command:
+    cmd: "insmod {{ ko_dest }}"
+  changed_when: true
+  register: insmod_result
+
+- name: Verify relay_module loaded via lsmod
+  ansible.builtin.command:
+    cmd: lsmod
+  register: lsmod_output
+  changed_when: false
+
+- name: Assert relay_module is present in lsmod
+  ansible.builtin.assert:
+    that:
+      - "'relay_module' in lsmod_output.stdout"
+    fail_msg: "relay_module not found in lsmod after insmod. Check dmesg."
+
+- name: Show dmesg entries for relay_module
+  ansible.builtin.command:
+    cmd: dmesg --notime
+  register: dmesg_output
+  changed_when: false
+
+- name: Print relay_module dmesg entries
+  ansible.builtin.debug:
+    msg: "{{ dmesg_output.stdout_lines | select('search', 'relay') | list }}"
+

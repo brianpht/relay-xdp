@@ -1,0 +1,12 @@
+---
+# roles/relay-xdp/handlers/main.yml
+
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart relay-xdp
+  ansible.builtin.systemd:
+    name: relay-xdp
+    state: restarted
+

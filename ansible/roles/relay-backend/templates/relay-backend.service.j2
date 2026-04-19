@@ -1,0 +1,32 @@
+[Unit]
+Description=relay-backend - route optimization backend
+Documentation=https://github.com/{{ github_repo }}
+After=network.target redis-server.service
+Requires=redis-server.service
+
+[Service]
+Type=simple
+User={{ relay_user }}
+Group={{ relay_group }}
+EnvironmentFile={{ relay_conf_dir }}/backend.env
+ExecStart={{ relay_bin_dir }}/relay-backend
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/relay
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=relay-backend
+
+[Install]
+WantedBy=multi-user.target
+

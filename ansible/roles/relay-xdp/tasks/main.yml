@@ -1,0 +1,125 @@
+---
+# roles/relay-xdp/tasks/main.yml
+# Deploy relay-xdp binary, eBPF object, environment file, and systemd unit.
+# Backs up the current install before overwriting so rollback.yml can restore.
+
+- name: Check if relay-xdp is currently deployed
+  ansible.builtin.stat:
+    path: "{{ relay_data_dir }}/relay-xdp"
+  register: current_binary
+
+- name: Back up current relay-xdp binary
+  ansible.builtin.copy:
+    src: "{{ relay_data_dir }}/relay-xdp"
+    dest: "{{ relay_backup_dir }}/relay-xdp"
+    remote_src: true
+    mode: "0755"
+  when: current_binary.stat.exists
+
+- name: Back up current eBPF object
+  ansible.builtin.copy:
+    src: "{{ relay_data_dir }}/relay_xdp_rust.o"
+    dest: "{{ relay_backup_dir }}/relay_xdp_rust.o"
+    remote_src: true
+    mode: "0644"
+  when: current_binary.stat.exists
+
+- name: Back up current relay.env
+  ansible.builtin.copy:
+    src: "{{ relay_conf_dir }}/relay.env"
+    dest: "{{ relay_backup_dir }}/relay.env"
+    remote_src: true
+    mode: "0640"
+  when: current_binary.stat.exists
+  ignore_errors: true  # env file may not exist on first deploy
+
+- name: Download relay-xdp binary
+  ansible.builtin.get_url:
+    url: "{{ artifact_base_url }}/relay-xdp"
+    dest: "{{ relay_data_dir }}/relay-xdp"
+    mode: "0755"
+    owner: root
+    group: root
+  notify: restart relay-xdp
+
+- name: Download eBPF object
+  ansible.builtin.get_url:
+    url: "{{ artifact_base_url }}/relay_xdp_rust.o"
+    dest: "{{ relay_data_dir }}/relay_xdp_rust.o"
+    mode: "0644"
+    owner: "{{ relay_user }}"
+    group: "{{ relay_group }}"
+  notify: restart relay-xdp
+
+- name: Deploy relay-xdp environment file
+  ansible.builtin.template:
+    src: relay.env.j2
+    dest: "{{ relay_conf_dir }}/relay.env"
+    owner: "{{ relay_user }}"
+    group: "{{ relay_group }}"
+    mode: "0640"
+  notify: restart relay-xdp
+
+- name: Deploy relay-xdp systemd unit
+  ansible.builtin.template:
+    src: relay-xdp.service.j2
+    dest: /etc/systemd/system/relay-xdp.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - reload systemd
+    - restart relay-xdp
+
+- name: Enable and start relay-xdp
+  ansible.builtin.systemd:
+    name: relay-xdp
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Wait for relay-xdp startup
+  ansible.builtin.pause:
+    seconds: "{{ relay_startup_wait_s }}"
+
+- name: Verify relay-xdp systemd service is active
+  ansible.builtin.command:
+    cmd: systemctl is-active relay-xdp
+  register: svc_active
+  changed_when: false
+  failed_when: svc_active.rc != 0
+
+- name: Verify XDP BPF program is loaded
+  ansible.builtin.command:
+    cmd: bpftool prog list
+  register: bpftool_output
+  changed_when: false
+
+- name: Assert XDP program present in bpftool
+  ansible.builtin.assert:
+    that:
+      - "'xdp' in bpftool_output.stdout"
+    fail_msg: "XDP program not found in bpftool prog list. relay-xdp may have failed to attach."
+
+- name: Verify relay_module kernel module is present
+  ansible.builtin.command:
+    cmd: lsmod
+  register: lsmod_output
+  changed_when: false
+
+- name: Assert relay_module loaded
+  ansible.builtin.assert:
+    that:
+      - "'relay_module' in lsmod_output.stdout"
+    fail_msg: "relay_module not in lsmod - kernel module was unloaded."
+
+- name: Check relay-xdp journal for startup message
+  ansible.builtin.command:
+    cmd: journalctl -u relay-xdp --since "{{ relay_startup_wait_s + 5 }} seconds ago" --no-pager
+  register: journal_output
+  changed_when: false
+
+- name: Print recent relay-xdp journal entries
+  ansible.builtin.debug:
+    msg: "{{ journal_output.stdout_lines[-20:] }}"
+

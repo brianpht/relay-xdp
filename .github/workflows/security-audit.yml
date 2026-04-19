@@ -9,13 +9,12 @@
 #   - Weekly schedule (Sunday 02:00 UTC) to catch new advisories
 #   - Manual dispatch
 #
-# The rustsec/audit-check action requires `checks: write` to annotate
-# the workflow run with advisory details. Without this permission the
-# action fails with "Resource not accessible by integration".
+# Uses cargo-audit CLI directly (not rustsec/audit-check) to avoid the
+# "Resource not accessible by integration" error that occurs when
+# checks:write is unavailable (fork PRs, restricted repo settings).
 #
 # Note: this workflow runs only on the host workspace Cargo.lock.
-# relay-xdp-ebpf has its own Cargo.lock and is audited separately
-# in the build-ebpf job of build-release.yml.
+# relay-xdp-ebpf has its own Cargo.lock and is audited in the ebpf job below.
 
 name: Security Audit
 
@@ -38,7 +37,7 @@ on:
     - cron: "0 2 * * 0"
   workflow_dispatch:
 
-# Restrict default token to read-only; grant checks:write explicitly below.
+# Read-only token - cargo-audit CLI does not need checks:write.
 permissions:
   contents: read
 
@@ -48,33 +47,48 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: read
-      checks: write  # required by rustsec/audit-check to annotate findings
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run cargo audit
-        uses: rustsec/audit-check@v2
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo-audit binary
+        uses: actions/cache@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          # Fail the job on vulnerabilities; treat unmaintained/unsound as
-          # warnings only (informational) so they do not block CI.
-          deny: "vulnerabilities"
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-${{ runner.os }}-v0.21
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked --version "^0.21" 2>/dev/null || true
+
+      - name: Run cargo audit (workspace)
+        # Exit code 1 = vulnerabilities found (fail CI).
+        # --deny=warnings also fails on unmaintained/unsound; remove if too noisy.
+        run: cargo audit --deny=vulnerability --file Cargo.lock
 
   audit-ebpf:
     name: cargo audit (relay-xdp-ebpf)
     runs-on: ubuntu-22.04
     permissions:
       contents: read
-      checks: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run cargo audit (ebpf)
-        uses: rustsec/audit-check@v2
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo-audit binary
+        uses: actions/cache@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          file: relay-xdp-ebpf/Cargo.lock
-          deny: "vulnerabilities"
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-${{ runner.os }}-v0.21
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked --version "^0.21" 2>/dev/null || true
+
+      - name: Run cargo audit (relay-xdp-ebpf)
+        run: cargo audit --deny=vulnerability --file relay-xdp-ebpf/Cargo.lock
 

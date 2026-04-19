@@ -1,0 +1,43 @@
+---
+# playbooks/site.yml
+# Full deploy: all hosts in dependency order.
+#
+# Usage:
+#   ansible-playbook -i inventory/staging.yml playbooks/site.yml -e relay_version=v1.2.3
+#   ansible-playbook -i inventory/production.yml playbooks/site.yml -e relay_version=v1.2.3 --ask-vault-pass
+#
+# Rolling deploy: relay_servers deploy serial:1 (one node at a time).
+# If verification fails on any node, the play stops - remaining nodes are
+# NOT updated. Run rollback.yml to restore the failed node.
+
+- name: Base OS setup - all hosts
+  hosts: all
+  gather_facts: true
+  roles:
+    - common
+
+- name: Redis - backend servers
+  hosts: backend_servers
+  gather_facts: false
+  roles:
+    - redis
+
+- name: relay-backend - backend servers
+  hosts: backend_servers
+  gather_facts: false
+  roles:
+    - relay-backend
+
+- name: Kernel module - relay servers
+  hosts: relay_servers
+  gather_facts: true
+  roles:
+    - kernel-module
+
+- name: relay-xdp - relay servers (rolling, one at a time)
+  hosts: relay_servers
+  gather_facts: true
+  serial: "{{ relay_serial | default(1) }}"
+  roles:
+    - relay-xdp
+

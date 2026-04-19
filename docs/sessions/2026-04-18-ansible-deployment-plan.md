@@ -162,7 +162,7 @@ No code changes in this session - planning only.
 
 ## Next Steps
 
-1. **High:** Implement `ansible/` directory structure with all roles, templates, and playbooks
+1. ~~**High:** Implement `ansible/` directory structure with all roles, templates, and playbooks~~ - **Done**
 2. ~~**High:** Implement `.github/workflows/build-release.yml` CI pipeline~~ - **Done**
 3. ~~**High:** Implement `.github/workflows/deploy.yml` deploy workflow~~ - **Done**
 4. **Medium:** Determine exact kernel versions running on staging/production hosts; update matrix in `build-release.yml`
@@ -175,4 +175,33 @@ No code changes in this session - planning only.
 |--------|------|
 | A | `.github/workflows/build-release.yml` |
 | A | `.github/workflows/deploy.yml` |
+| M | `.github/workflows/security-audit.yml` - replaced rustsec/audit-check with cargo-audit CLI (fixes checks:write error) |
+| A | `ansible/ansible.cfg` |
+| A | `ansible/README.md` |
+| A | `ansible/.gitignore` |
+| A | `ansible/inventory/staging.yml` |
+| A | `ansible/inventory/production.yml` |
+| A | `ansible/group_vars/all.yml` |
+| A | `ansible/group_vars/staging.yml` |
+| A | `ansible/group_vars/production.yml` |
+| A | `ansible/group_vars/vault_staging.yml` (placeholder - encrypt before use) |
+| A | `ansible/group_vars/vault_production.yml` (placeholder - encrypt before use) |
+| A | `ansible/roles/common/tasks/main.yml` |
+| A | `ansible/roles/kernel-module/tasks/main.yml` |
+| A | `ansible/roles/kernel-module/handlers/main.yml` |
+| A | `ansible/roles/redis/tasks/main.yml` |
+| A | `ansible/roles/redis/handlers/main.yml` |
+| A | `ansible/roles/redis/templates/redis.conf.j2` |
+| A | `ansible/roles/relay-backend/tasks/main.yml` |
+| A | `ansible/roles/relay-backend/handlers/main.yml` |
+| A | `ansible/roles/relay-backend/templates/backend.env.j2` |
+| A | `ansible/roles/relay-backend/templates/relay-backend.service.j2` |
+| A | `ansible/roles/relay-xdp/tasks/main.yml` |
+| A | `ansible/roles/relay-xdp/handlers/main.yml` |
+| A | `ansible/roles/relay-xdp/templates/relay.env.j2` |
+| A | `ansible/roles/relay-xdp/templates/relay-xdp.service.j2` |
+| A | `ansible/playbooks/site.yml` |
+| A | `ansible/playbooks/relay-only.yml` |
+| A | `ansible/playbooks/module-only.yml` |
+| A | `ansible/playbooks/rollback.yml` |
 
