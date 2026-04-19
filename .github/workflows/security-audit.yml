@@ -64,9 +64,8 @@ jobs:
         run: cargo install cargo-audit --locked --version "^0.21" 2>/dev/null || true
 
       - name: Run cargo audit (workspace)
-        # Exit code 1 = vulnerabilities found (fail CI).
-        # --deny=warnings also fails on unmaintained/unsound; remove if too noisy.
-        run: cargo audit --deny=vulnerability --file Cargo.lock
+        # --deny=unsound fails on unsound code; vulnerabilities always fail by default.
+        run: cargo audit --deny unsound --file Cargo.lock
 
   audit-ebpf:
     name: cargo audit (relay-xdp-ebpf)
@@ -90,5 +89,5 @@ jobs:
         run: cargo install cargo-audit --locked --version "^0.21" 2>/dev/null || true
 
       - name: Run cargo audit (relay-xdp-ebpf)
-        run: cargo audit --deny=vulnerability --file relay-xdp-ebpf/Cargo.lock
+        run: cargo audit --deny unsound --file relay-xdp-ebpf/Cargo.lock
 
