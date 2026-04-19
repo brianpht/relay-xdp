@@ -169,7 +169,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             linux-headers-${{ matrix.kernel_version }} \
             build-essential \
-            kmod
+            kmod \
+            dwarves
 
       - name: Copy vmlinux BTF for target kernel
         run: |
