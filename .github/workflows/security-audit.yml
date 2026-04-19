@@ -58,10 +58,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/cargo-audit
-          key: cargo-audit-${{ runner.os }}-v0.21
+          key: cargo-audit-${{ runner.os }}-latest-${{ hashFiles('.github/workflows/security-audit.yml') }}
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked --version "^0.21" 2>/dev/null || true
+        run: cargo install cargo-audit --locked 2>/dev/null || cargo install cargo-audit
 
       - name: Run cargo audit (workspace)
         # --deny=unsound fails on unsound code; vulnerabilities always fail by default.
@@ -83,11 +83,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/cargo-audit
-          key: cargo-audit-${{ runner.os }}-v0.21
+          key: cargo-audit-${{ runner.os }}-latest-${{ hashFiles('.github/workflows/security-audit.yml') }}
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked --version "^0.21" 2>/dev/null || true
+        run: cargo install cargo-audit --locked 2>/dev/null || cargo install cargo-audit
 
       - name: Run cargo audit (relay-xdp-ebpf)
         run: cargo audit --deny unsound --file relay-xdp-ebpf/Cargo.lock
-
