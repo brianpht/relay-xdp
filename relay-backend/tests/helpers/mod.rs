@@ -3,6 +3,10 @@
 //! Provides convenience functions that build/parse relay update packets,
 //! cost matrices, route matrices, etc. using the relay-backend library.
 
+// Many helpers are written for future tests or cross-crate wire compat tests
+// that do not all run in every binary. Suppress dead_code for the whole module.
+#![allow(dead_code)]
+
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use relay_backend::constants::*;

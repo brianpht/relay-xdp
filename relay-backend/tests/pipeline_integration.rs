@@ -73,6 +73,7 @@ fn build_xdp_relay_update(
 }
 
 /// Helper struct for test relays.
+#[allow(dead_code)]
 struct TestRelay {
     ip: Ipv4Addr,
     port: u16,
