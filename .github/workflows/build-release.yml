@@ -154,14 +154,28 @@ jobs:
       fail-fast: false
       matrix:
         kernel_version:
-          - "6.5.0-44-generic"
-          - "6.8.0-45-generic"
-          # Add more versions here as needed.
-          # To discover available versions:
-          #   apt-cache search linux-headers | grep -E "^linux-headers-[0-9]" | grep generic
+          # Ubuntu 22.04 HWE series - versions confirmed available in apt mirror.
+          # 6.5 series (GA kernel for Ubuntu 22.04 HWE):
+          - "6.5.0-45-generic"
+          # 6.8 series (Ubuntu 24.04 backport, available on 22.04 HWE):
+          - "6.8.0-57-generic"
+          # To find available versions on a live Ubuntu 22.04 host:
+          #   apt-cache search linux-headers | grep -E "^linux-headers-[0-9]" | grep generic | sort -V
+          # Update this list when new kernel versions are deployed to staging/production.
+          # Current staging/production kernels: TBD - see Next Steps in deployment plan.
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Show available kernel header versions (for matrix maintenance)
+        run: |
+          echo "--- Available linux-headers-*-generic packages ---"
+          apt-cache search linux-headers 2>/dev/null \
+            | grep -E "^linux-headers-[0-9]" \
+            | grep generic \
+            | awk '{print $1}' \
+            | sort -V \
+            || true
 
       - name: Install kernel headers for ${{ matrix.kernel_version }}
         run: |
@@ -171,6 +185,8 @@ jobs:
             build-essential \
             kmod \
             dwarves
+          # Verify pahole is available - required for BTF module generation.
+          pahole --version || { echo "ERROR: pahole not found after installing dwarves"; exit 1; }
 
       - name: Copy vmlinux BTF for target kernel
         run: |
@@ -186,8 +202,12 @@ jobs:
       - name: Build relay_module.ko
         working-directory: module
         run: |
+          # Pass PAHOLE explicitly - the kernel build system may not find it
+          # via PATH when cross-building for a non-running kernel version.
+          PAHOLE_BIN="$(which pahole)"
           make -C /lib/modules/${{ matrix.kernel_version }}/build \
-            M=$(pwd) \
+            M="$(pwd)" \
+            PAHOLE="$PAHOLE_BIN" \
             modules
 
       - name: Rename artifact to include kernel version
