@@ -6,8 +6,7 @@ written in Rust + eBPF + C.
 ## Overview
 
 `relay-xdp` routes UDP game traffic between clients, servers, and other relays with sub-microsecond per-packet latency.
-The eBPF data plane runs inside the kernel at the NIC driver level, forwarding, reflecting, or dropping packets **before
-** the kernel even allocates a socket buffer. A userspace control plane handles relay registration, health reporting,
+The eBPF data plane runs inside the kernel at the NIC driver level, forwarding, reflecting, or dropping packets **before** the kernel even allocates a socket buffer. A userspace control plane handles relay registration, health reporting,
 and session management at 1 Hz.
 
 This is a complete Rust + eBPF implementation. The only C code is a small kernel module that exposes SHA-256 and
