@@ -166,7 +166,7 @@ No code changes in this session - planning only.
 2. ~~**High:** Implement `.github/workflows/build-release.yml` CI pipeline~~ - **Done**
 3. ~~**High:** Implement `.github/workflows/deploy.yml` deploy workflow~~ - **Done**
 4. ~~**Medium:** Determine exact kernel versions running on staging/production hosts; update matrix in `build-release.yml`~~ - **Partially done** - matrix updated to confirmed-available Ubuntu 22.04 HWE versions (`6.5.0-45-generic`, `6.8.0-57-generic`); actual staging/production kernel versions still TBD (run `uname -r` on each host and update matrix accordingly). CI now prints available versions on each run to assist with future updates.
-5. **Medium:** Generate staging/production keypairs and encrypt with Ansible Vault
+5. ~~**Medium:** Generate staging/production keypairs and encrypt with Ansible Vault~~ - **Done** - `ansible/scripts/gen-vault-keys.sh` generates X25519 keypairs (Python cryptography or openssl fallback); `ansible/scripts/encrypt-vault.sh` encrypts vault files. Vault placeholder files updated with step-by-step instructions.
 6. **Low:** Add monitoring integration (Prometheus node_exporter, relay metrics endpoint) - deferred
 
 ## Files Changed
@@ -174,7 +174,6 @@ No code changes in this session - planning only.
 | Status | File |
 |--------|------|
 | M | `.github/workflows/build-release.yml` - fix `pahole: not found` (pass `PAHOLE=$(which pahole)` to make); update kernel matrix to confirmed-available versions; add step to print available kernel header versions |
-| A | `.github/workflows/deploy.yml` |
 | M | `.github/workflows/security-audit.yml` - replaced rustsec/audit-check with cargo-audit CLI (fixes checks:write error) |
 | A | `ansible/ansible.cfg` |
 | A | `ansible/README.md` |
@@ -184,8 +183,10 @@ No code changes in this session - planning only.
 | A | `ansible/group_vars/all.yml` |
 | A | `ansible/group_vars/staging.yml` |
 | A | `ansible/group_vars/production.yml` |
-| A | `ansible/group_vars/vault_staging.yml` (placeholder - encrypt before use) |
-| A | `ansible/group_vars/vault_production.yml` (placeholder - encrypt before use) |
+ M  `ansible/group_vars/vault_staging.yml` - updated instructions pointing to gen-vault-keys.sh 
+ M  `ansible/group_vars/vault_production.yml` - updated instructions pointing to gen-vault-keys.sh 
+ A  `ansible/scripts/gen-vault-keys.sh` - generate X25519 keypairs for staging/production; outputs plaintext vault YAML 
+ A  `ansible/scripts/encrypt-vault.sh` - convenience wrapper for ansible-vault encrypt 
 | A | `ansible/roles/common/tasks/main.yml` |
 | A | `ansible/roles/kernel-module/tasks/main.yml` |
 | A | `ansible/roles/kernel-module/handlers/main.yml` |
