@@ -4,6 +4,7 @@ members = [
     "relay-xdp-common",
     "relay-xdp",
     "relay-backend",
+    "relay-sdk",
     "xtask",
 ]
 exclude = [
