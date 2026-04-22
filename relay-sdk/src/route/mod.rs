@@ -12,16 +12,21 @@ pub mod trackers;
 
 pub const HEADER_BYTES: usize = 25;
 use crate::address::Address;
-use crate::constants::*;
+use crate::constants::{
+    CLIENT_ROUTE_TIMEOUT, CONTINUE_REQUEST_SEND_TIME, CONTINUE_REQUEST_TIMEOUT,
+    ENCRYPTED_CONTINUE_TOKEN_BYTES, ENCRYPTED_ROUTE_TOKEN_BYTES,
+    FLAGS_BAD_CONTINUE_TOKEN, FLAGS_BAD_ROUTE_TOKEN, FLAGS_CONTINUE_REQUEST_TIMED_OUT,
+    FLAGS_NO_ROUTE_TO_CONTINUE, FLAGS_PREVIOUS_UPDATE_STILL_PENDING, FLAGS_ROUTE_EXPIRED,
+    FLAGS_ROUTE_REQUEST_TIMED_OUT, FLAGS_ROUTE_TIMED_OUT, MAX_PACKET_BYTES, MAX_TOKENS, MTU,
+    PACKET_BODY_OFFSET, PACKET_TYPE_CLIENT_TO_SERVER, PACKET_TYPE_CONTINUE_REQUEST,
+    PACKET_TYPE_CONTINUE_RESPONSE, PACKET_TYPE_ROUTE_REQUEST, PACKET_TYPE_ROUTE_RESPONSE,
+    PACKET_TYPE_SERVER_TO_CLIENT, ROUTE_REQUEST_SEND_TIME, ROUTE_REQUEST_TIMEOUT,
+    SESSION_PRIVATE_KEY_BYTES, SLICE_SECONDS, UPDATE_TYPE_CONTINUE, UPDATE_TYPE_DIRECT,
+    UPDATE_TYPE_ROUTE,
+};
 use crate::crypto::{hash_sha256, XCHACHA_KEY_BYTES};
 use crate::platform;
 use crate::tokens::{decrypt_continue_token, decrypt_route_token};
-// ── Packet type IDs ───────────────────────────────────────────────────────────
-pub const PACKET_TYPE_ROUTE_REQUEST: u8 = 1;
-pub const PACKET_TYPE_ROUTE_RESPONSE: u8 = 2;
-pub const PACKET_TYPE_CLIENT_TO_SERVER: u8 = 3;
-pub const PACKET_TYPE_SERVER_TO_CLIENT: u8 = 4;
-pub const PACKET_TYPE_CONTINUE_REQUEST: u8 = 7;
 // ── FNV-1a (64-bit) - copied from rust-sdk ───────────────────────────────────
 fn fnv1a_64(data: &[u8]) -> u64 {
     let mut h: u64 = 0xCBF2_9CE4_8422_2325;
@@ -370,7 +375,9 @@ impl RouteManager {
         if self.fallback_to_direct {
             return;
         }
-        if !(2..=MAX_TOKENS).contains(&num_tokens) || tokens.len() < ENCRYPTED_ROUTE_TOKEN_BYTES {
+        if !(2..=MAX_TOKENS).contains(&num_tokens)
+            || tokens.len() < num_tokens * ENCRYPTED_ROUTE_TOKEN_BYTES
+        {
             self.set_fallback_to_direct(FLAGS_BAD_ROUTE_TOKEN);
             return;
         }
@@ -397,15 +404,15 @@ impl RouteManager {
         self.route_data.pending_route_kbps_up = rt.envelope_kbps_up as i32;
         self.route_data.pending_route_kbps_down = rt.envelope_kbps_down as i32;
         self.route_data.pending_route_private_key = rt.session_private_key;
-        // next_address is stored BE in RouteToken
+        // next_address is stored BE in RouteToken - convert back to native then to bytes
         self.route_data.pending_route_next_address = Address::V4 {
-            octets: rt.next_address.to_be_bytes(),
+            octets: u32::from_be(rt.next_address).to_be_bytes(),
             port: u16::from_be(rt.next_port),
         };
         let token_data =
             &tokens[ENCRYPTED_ROUTE_TOKEN_BYTES..num_tokens * ENCRYPTED_ROUTE_TOKEN_BYTES];
         let from_address = address_ipv4_bytes(client_external_address);
-        let to_address = rt.next_address.to_be_bytes();
+        let to_address = u32::from_be(rt.next_address).to_be_bytes();
         let bytes = write_route_request_packet(
             &mut self.route_data.pending_route_request_packet_data,
             token_data,
@@ -434,7 +441,8 @@ impl RouteManager {
             self.set_fallback_to_direct(FLAGS_PREVIOUS_UPDATE_STILL_PENDING);
             return;
         }
-        if !(2..=MAX_TOKENS).contains(&num_tokens) || tokens.len() < ENCRYPTED_CONTINUE_TOKEN_BYTES
+        if !(2..=MAX_TOKENS).contains(&num_tokens)
+            || tokens.len() < num_tokens * ENCRYPTED_CONTINUE_TOKEN_BYTES
         {
             self.set_fallback_to_direct(FLAGS_BAD_CONTINUE_TOKEN);
             return;
@@ -535,6 +543,24 @@ impl RouteManager {
     pub fn confirm_continue_route(&mut self) {
         self.route_data.current_route_expire_time += SLICE_SECONDS;
         self.route_data.pending_continue = false;
+    }
+    /// Returns the pending route private key if a route request is outstanding.
+    /// Used by callers to verify ROUTE_RESPONSE header HMAC before confirming.
+    pub fn get_pending_route_private_key(&self) -> Option<[u8; SESSION_PRIVATE_KEY_BYTES]> {
+        if self.route_data.pending_route {
+            Some(self.route_data.pending_route_private_key)
+        } else {
+            None
+        }
+    }
+    /// Returns the current route private key if an active route exists.
+    /// Used by callers to verify CONTINUE_RESPONSE header HMAC before confirming.
+    pub fn get_current_route_private_key(&self) -> Option<[u8; SESSION_PRIVATE_KEY_BYTES]> {
+        if self.route_data.current_route {
+            Some(self.route_data.current_route_private_key)
+        } else {
+            None
+        }
     }
     pub fn get_current_route_data(&self) -> (bool, bool, u64, u8, [u8; SESSION_PRIVATE_KEY_BYTES]) {
         (
@@ -850,6 +876,14 @@ mod tests {
         assert!(!rm.route_data.pending_route);
         assert_eq!(up, 1000);
         assert_eq!(down, 2000);
+        // Regression: next_address BE u32 -> correct IPv4 octets
+        assert_eq!(
+            rm.route_data.current_route_next_address,
+            Address::V4 {
+                octets: [10, 0, 0, 1],
+                port: 12345,
+            }
+        );
     }
     #[test]
     fn prepare_send_packet_no_route_returns_none() {

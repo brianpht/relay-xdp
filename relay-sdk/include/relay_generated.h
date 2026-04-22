@@ -182,4 +182,121 @@
 
 #define relay_CONTINUE_TOKEN_BYTES 17
 
+/**
+ * Opaque handle for a relay game-client session.
+ * Created by `relay_client_create`, destroyed by `relay_client_destroy`.
+ */
+typedef struct relay_RelayClient relay_RelayClient;
+
+/**
+ * Opaque handle for a relay game-server session.
+ * Created by `relay_server_create`, destroyed by `relay_server_destroy`.
+ */
+typedef struct relay_RelayServer relay_RelayServer;
+
+#ifdef __cplusplus
+extern "C" {
+#endif // __cplusplus
+
+/**
+ * Create a new relay client.
+ * Returns null on failure (invalid bind_address string).
+ * The returned pointer must be freed with `relay_client_destroy`.
+ */
+struct relay_RelayClient *relay_client_create(const char *bind_address);
+
+/**
+ * Destroy a relay client previously created with `relay_client_create`.
+ * Passing null is a no-op.
+ */
+void relay_client_destroy(struct relay_RelayClient *handle);
+
+/**
+ * Open a relay session to server at `server_address` (e.g. "1.2.3.4:7777").
+ * `client_secret_key` must point to exactly SESSION_PRIVATE_KEY_BYTES (32) bytes.
+ * No-op if handle is null or server_address is invalid.
+ */
+void relay_client_open_session(struct relay_RelayClient *handle,
+                               const char *server_address,
+                               const uint8_t *client_secret_key);
+
+/**
+ * Close the current relay session.
+ * No-op if handle is null.
+ */
+void relay_client_close_session(struct relay_RelayClient *handle);
+
+/**
+ * Queue a game payload for sending via relay (or direct if no route).
+ * `data` must point to `bytes` bytes. No-op if handle is null.
+ */
+void relay_client_send_packet(struct relay_RelayClient *handle, const uint8_t *data, int bytes);
+
+/**
+ * Pop the next received game payload into `out` (caller-provided buffer of `max_bytes`).
+ * Returns the number of bytes written, or 0 if no packet is available.
+ * No-op and returns 0 if handle is null.
+ */
+int relay_client_recv_packet(struct relay_RelayClient *handle, uint8_t *out, int max_bytes);
+
+/**
+ * Create a new relay server.
+ * Returns null on failure (invalid bind_address string).
+ * The returned pointer must be freed with `relay_server_destroy`.
+ */
+struct relay_RelayServer *relay_server_create(const char *bind_address);
+
+/**
+ * Destroy a relay server previously created with `relay_server_create`.
+ * Passing null is a no-op.
+ */
+void relay_server_destroy(struct relay_RelayServer *handle);
+
+/**
+ * Register a session (called when relay-backend pushes session keys via HTTP).
+ * `session_private_key` must point to exactly SESSION_PRIVATE_KEY_BYTES (32) bytes.
+ * `relay_address` is the last relay hop address string (e.g. "10.0.0.1:4000").
+ * No-op if handle is null.
+ */
+void relay_server_register_session(struct relay_RelayServer *handle,
+                                   uint64_t session_id,
+                                   uint8_t session_version,
+                                   const uint8_t *session_private_key,
+                                   const char *relay_address);
+
+/**
+ * Expire (remove) a session.
+ * No-op if handle is null or session not found.
+ */
+void relay_server_expire_session(struct relay_RelayServer *handle, uint64_t session_id);
+
+/**
+ * Send a game payload to `session_id` via the last relay hop.
+ * `data` must point to `bytes` bytes.
+ * `magic` must point to 8 bytes.
+ * `from_address` is the server's own address string (e.g. "10.0.0.2:9000").
+ * No-op if handle is null.
+ */
+void relay_server_send_packet(struct relay_RelayServer *handle,
+                              uint64_t session_id,
+                              const uint8_t *data,
+                              int bytes,
+                              const uint8_t *magic,
+                              const char *from_address);
+
+/**
+ * Pop the next received game payload into `out` (caller-provided buffer of `max_bytes`).
+ * On success, writes the originating session_id into `*out_session_id`.
+ * Returns the number of bytes written, or 0 if no packet is available.
+ * No-op and returns 0 if handle is null.
+ */
+int relay_server_recv_packet(struct relay_RelayServer *handle,
+                             uint64_t *out_session_id,
+                             uint8_t *out,
+                             int max_bytes);
+
+#ifdef __cplusplus
+}  // extern "C"
+#endif  // __cplusplus
+
 #endif  /* RELAY_GENERATED_H */

@@ -36,4 +36,4 @@ pub mod server;
 pub mod tokens;
 
 // Placeholder mods - to be implemented in subsequent steps
-// pub mod ffi;
+pub mod ffi;
