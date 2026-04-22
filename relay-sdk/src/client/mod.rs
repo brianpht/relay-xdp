@@ -568,7 +568,7 @@ mod tests {
 
     #[test]
     fn client_destroy_stops_pump() {
-        let (mut inner, mut client) = make_pair();
+        let (mut inner, client) = make_pair();
         drop(client); // triggers Destroy command via Drop
         let result = inner.pump_commands();
         assert!(!result);

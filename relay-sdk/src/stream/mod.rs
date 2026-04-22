@@ -275,6 +275,7 @@ pub type SerializeResult<T> = Result<T, SerializeError>;
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(unused_imports, unused_assignments)]
 mod tests {
     use super::*;
     use crate::{
