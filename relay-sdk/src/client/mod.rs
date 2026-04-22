@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use crate::address::Address;
 use crate::constants::*;
 use crate::crypto::XCHACHA_KEY_BYTES;
-use crate::packets::{ContinueResponsePacket, RouteResponsePacket, PACKET_BODY_OFFSET, ROUTE_RESPONSE_BYTES};
+use crate::packets::{ContinueResponsePacket, RouteResponsePacket, PACKET_BODY_OFFSET};
 use crate::route::trackers::ReplayProtection;
 use crate::route::{read_header, RouteManager, HEADER_BYTES};
 
@@ -254,23 +254,9 @@ impl ClientInner {
             PACKET_TYPE_ROUTE_RESPONSE => {
                 // Decode and verify relay header HMAC before confirming the route.
                 // Any packet with type=2 but without a valid header is silently dropped.
-                let pkt = match RouteResponsePacket::decode(data) {
-                    Ok(p) => p,
-                    Err(_) => return None,
-                };
-                let private_key = match self.route_manager.get_pending_route_private_key() {
-                    Some(k) => k,
-                    None => return None,
-                };
-                if read_header(
-                    PACKET_TYPE_ROUTE_RESPONSE,
-                    &private_key,
-                    &pkt.relay_header,
-                )
-                .is_none()
-                {
-                    return None;
-                }
+                let pkt = RouteResponsePacket::decode(data).ok()?;
+                let private_key = self.route_manager.get_pending_route_private_key()?;
+                read_header(PACKET_TYPE_ROUTE_RESPONSE, &private_key, &pkt.relay_header)?;
                 let (kbps_up, kbps_down) = self.route_manager.confirm_pending_route();
                 let _ = (kbps_up, kbps_down);
                 self.emit_route_changed();
@@ -278,23 +264,13 @@ impl ClientInner {
             }
             PACKET_TYPE_CONTINUE_RESPONSE => {
                 // Decode and verify relay header HMAC before confirming the continue.
-                let pkt = match ContinueResponsePacket::decode(data) {
-                    Ok(p) => p,
-                    Err(_) => return None,
-                };
-                let private_key = match self.route_manager.get_current_route_private_key() {
-                    Some(k) => k,
-                    None => return None,
-                };
-                if read_header(
+                let pkt = ContinueResponsePacket::decode(data).ok()?;
+                let private_key = self.route_manager.get_current_route_private_key()?;
+                read_header(
                     PACKET_TYPE_CONTINUE_RESPONSE,
                     &private_key,
                     &pkt.relay_header,
-                )
-                .is_none()
-                {
-                    return None;
-                }
+                )?;
                 self.route_manager.confirm_continue_route();
                 self.emit_route_changed();
                 None
@@ -630,7 +606,10 @@ mod tests {
 // ── Helper: build a pending route state for tests ────────────────────────────
 
 #[cfg(test)]
-fn setup_pending_route(inner: &mut ClientInner, client: &mut Client) -> [u8; SESSION_PRIVATE_KEY_BYTES] {
+fn setup_pending_route(
+    inner: &mut ClientInner,
+    client: &mut Client,
+) -> [u8; SESSION_PRIVATE_KEY_BYTES] {
     use crate::tokens::encrypt_route_token;
     use relay_xdp_common::RouteToken;
 
@@ -653,9 +632,15 @@ fn setup_pending_route(inner: &mut ClientInner, client: &mut Client) -> [u8; SES
     let mut tokens = Vec::new();
     tokens.extend_from_slice(&enc);
     tokens.extend_from_slice(&[0u8; ENCRYPTED_ROUTE_TOKEN_BYTES]);
-    let ext = Address::V4 { octets: [10, 0, 0, 1], port: 5000 };
+    let ext = Address::V4 {
+        octets: [10, 0, 0, 1],
+        port: 5000,
+    };
     client.open_session(
-        Address::V4 { octets: [1, 2, 3, 4], port: 9999 },
+        Address::V4 {
+            octets: [1, 2, 3, 4],
+            port: 9999,
+        },
         client_key,
     );
     inner.pump_commands();
@@ -669,36 +654,51 @@ fn setup_pending_route(inner: &mut ClientInner, client: &mut Client) -> [u8; SES
 #[cfg(test)]
 mod security_tests {
     use super::*;
-    use crate::packets::RouteResponsePacket;
+    use crate::packets::{RouteResponsePacket, ROUTE_RESPONSE_BYTES};
     use crate::route::{write_header, HEADER_BYTES};
 
     #[test]
     fn route_response_spoofed_hmac_does_not_confirm_route() {
         let (mut inner, mut client) = ClientInner::create();
         let _pk = setup_pending_route(&mut inner, &mut client);
-        assert!(inner.route_manager.get_pending_route_private_key().is_some());
+        assert!(inner
+            .route_manager
+            .get_pending_route_private_key()
+            .is_some());
 
         // Build a ROUTE_RESPONSE with an all-zero (invalid) HMAC.
         let bad_hdr = [0u8; HEADER_BYTES];
-        let pkt = RouteResponsePacket { relay_header: bad_hdr };
+        let pkt = RouteResponsePacket {
+            relay_header: bad_hdr,
+        };
         let mut buf = [0u8; ROUTE_RESPONSE_BYTES];
         pkt.encode(&mut buf).unwrap();
 
         inner.process_incoming(&buf);
 
         // Route must NOT be active after a spoofed ROUTE_RESPONSE.
-        assert!(!inner.route_manager.has_network_next_route(),
-            "route must not be confirmed with invalid header HMAC");
+        assert!(
+            !inner.route_manager.has_network_next_route(),
+            "route must not be confirmed with invalid header HMAC"
+        );
         // Pending route must still be outstanding.
-        assert!(inner.route_manager.get_pending_route_private_key().is_some(),
-            "pending route must remain pending after rejected ROUTE_RESPONSE");
+        assert!(
+            inner
+                .route_manager
+                .get_pending_route_private_key()
+                .is_some(),
+            "pending route must remain pending after rejected ROUTE_RESPONSE"
+        );
     }
 
     #[test]
     fn route_response_valid_hmac_confirms_route() {
         let (mut inner, mut client) = ClientInner::create();
         let session_pk = setup_pending_route(&mut inner, &mut client);
-        assert!(inner.route_manager.get_pending_route_private_key().is_some());
+        assert!(inner
+            .route_manager
+            .get_pending_route_private_key()
+            .is_some());
 
         // Build a ROUTE_RESPONSE with a valid HMAC matching the pending session.
         let mut hdr = [0u8; HEADER_BYTES];
@@ -714,11 +714,11 @@ mod security_tests {
         let mut buf = [0u8; ROUTE_RESPONSE_BYTES];
         pkt.encode(&mut buf).unwrap();
 
-
         inner.process_incoming(&buf);
 
-        assert!(inner.route_manager.has_network_next_route(),
-            "route must be confirmed with valid header HMAC");
+        assert!(
+            inner.route_manager.has_network_next_route(),
+            "route must be confirmed with valid header HMAC"
+        );
     }
 }
-

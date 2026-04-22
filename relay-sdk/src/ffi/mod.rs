@@ -16,6 +16,11 @@
 //   Arc<Mutex<VecDeque<T>>> queues. The opaque pointer itself must only be
 //   used from one thread at a time (no concurrent calls on the same handle).
 
+// Safety: all extern "C" entry points perform explicit null checks on every
+// raw pointer argument before any dereference. Suppressing the lint here is
+// intentional - these are FFI boundary functions with documented contracts.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 use std::panic::catch_unwind;
@@ -94,7 +99,12 @@ pub extern "C" fn relay_client_open_session(
             Err(_) => return,
         };
         let mut key = [0u8; SESSION_PRIVATE_KEY_BYTES];
-        unsafe { key.copy_from_slice(std::slice::from_raw_parts(client_secret_key, SESSION_PRIVATE_KEY_BYTES)) };
+        unsafe {
+            key.copy_from_slice(std::slice::from_raw_parts(
+                client_secret_key,
+                SESSION_PRIVATE_KEY_BYTES,
+            ))
+        };
         h.client.open_session(addr, key);
         h.inner.pump_commands();
     });
@@ -242,7 +252,8 @@ pub extern "C" fn relay_server_register_session(
                 SESSION_PRIVATE_KEY_BYTES,
             ))
         };
-        h.server.register_session(session_id, session_version, key, addr);
+        h.server
+            .register_session(session_id, session_version, key, addr);
         h.inner.pump_commands();
     });
 }
@@ -276,7 +287,12 @@ pub extern "C" fn relay_server_send_packet(
     from_address: *const c_char,
 ) {
     let _ = catch_unwind(|| {
-        if handle.is_null() || data.is_null() || magic.is_null() || from_address.is_null() || bytes <= 0 {
+        if handle.is_null()
+            || data.is_null()
+            || magic.is_null()
+            || from_address.is_null()
+            || bytes <= 0
+        {
             return;
         }
         let h = unsafe { &mut *handle };
@@ -345,14 +361,20 @@ mod tests {
     fn ffi_client_create_valid_address() {
         let addr = cstr("127.0.0.1:7777");
         let h = relay_client_create(addr.as_ptr());
-        assert!(!h.is_null(), "relay_client_create must return non-null for valid address");
+        assert!(
+            !h.is_null(),
+            "relay_client_create must return non-null for valid address"
+        );
         relay_client_destroy(h);
     }
 
     #[test]
     fn ffi_client_create_null_address_returns_null() {
         let h = relay_client_create(std::ptr::null());
-        assert!(h.is_null(), "relay_client_create must return null for null address");
+        assert!(
+            h.is_null(),
+            "relay_client_create must return null for null address"
+        );
     }
 
     #[test]
@@ -406,7 +428,10 @@ mod tests {
     fn ffi_server_create_valid_address() {
         let addr = cstr("0.0.0.0:9000");
         let h = relay_server_create(addr.as_ptr());
-        assert!(!h.is_null(), "relay_server_create must return non-null for valid address");
+        assert!(
+            !h.is_null(),
+            "relay_server_create must return non-null for valid address"
+        );
         relay_server_destroy(h);
     }
 
@@ -414,7 +439,10 @@ mod tests {
     fn ffi_server_create_invalid_address_returns_null() {
         let bad = cstr("not_an_address");
         let h = relay_server_create(bad.as_ptr());
-        assert!(h.is_null(), "relay_server_create must return null for invalid address");
+        assert!(
+            h.is_null(),
+            "relay_server_create must return null for invalid address"
+        );
     }
 
     #[test]
@@ -456,7 +484,14 @@ mod tests {
     fn ffi_server_null_handle_ops_are_noop() {
         let null: *mut RelayServer = std::ptr::null_mut();
         relay_server_expire_session(null, 0);
-        relay_server_send_packet(null, 0, std::ptr::null(), 0, std::ptr::null(), std::ptr::null());
+        relay_server_send_packet(
+            null,
+            0,
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
         let n = relay_server_recv_packet(null, std::ptr::null_mut(), std::ptr::null_mut(), 0);
         assert_eq!(n, 0);
     }

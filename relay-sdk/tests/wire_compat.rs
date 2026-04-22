@@ -25,9 +25,7 @@ use relay_sdk::packets::{
     CONTINUE_RESPONSE_BYTES, RELAY_PING_BYTES, RELAY_PONG_BYTES, ROUTE_RESPONSE_BYTES,
     SERVER_PING_BYTES, SERVER_PONG_BYTES, SESSION_PING_BYTES,
 };
-use relay_sdk::route::{
-    write_client_to_server_packet, write_header, stamp_packet, HEADER_BYTES,
-};
+use relay_sdk::route::{stamp_packet, write_client_to_server_packet, write_header, HEADER_BYTES};
 
 // ── Fixed test inputs ─────────────────────────────────────────────────────────
 
@@ -63,7 +61,8 @@ fn print_golden() {
 
     // CLIENT_TO_SERVER
     let mut cbuf = [0u8; MAX_PACKET_BYTES];
-    let n = write_client_to_server_packet(&mut cbuf, SEQ, SID, SVER, &PK, PAYLOAD, &MAGIC, &FROM, &TO);
+    let n =
+        write_client_to_server_packet(&mut cbuf, SEQ, SID, SVER, &PK, PAYLOAD, &MAGIC, &FROM, &TO);
     print_golden_vec("CLIENT_TO_SERVER", &cbuf[..n]);
 
     // SERVER_TO_CLIENT (same layout, different type byte - stamped manually)
@@ -78,19 +77,26 @@ fn print_golden() {
 
     // SESSION_PING
     write_header(PACKET_TYPE_SESSION_PING, SEQ, SID, SVER, &PK, &mut hdr);
-    let pkt = SessionPingPacket { relay_header: hdr, ping_sequence: 0x1122_3344_5566_7788u64 };
+    let pkt = SessionPingPacket {
+        relay_header: hdr,
+        ping_sequence: 0x1122_3344_5566_7788u64,
+    };
     let mut buf = [0u8; SESSION_PING_BYTES];
     pkt.encode(&mut buf).unwrap();
     print_golden_vec("SESSION_PING", &buf);
 
     // RELAY_PONG
-    let pkt = RelayPongPacket { sequence: 0xAABB_CCDD_1122_3344u64 };
+    let pkt = RelayPongPacket {
+        sequence: 0xAABB_CCDD_1122_3344u64,
+    };
     let mut buf = [0u8; RELAY_PONG_BYTES];
     pkt.encode(&mut buf).unwrap();
     print_golden_vec("RELAY_PONG", &buf);
 
     // SERVER_PONG
-    let pkt = ServerPongPacket { echo: 0xFEDC_BA98_7654_3210u64 };
+    let pkt = ServerPongPacket {
+        echo: 0xFEDC_BA98_7654_3210u64,
+    };
     let mut buf = [0u8; SERVER_PONG_BYTES];
     pkt.encode(&mut buf).unwrap();
     print_golden_vec("SERVER_PONG", &buf);
@@ -107,27 +113,39 @@ fn print_golden_vec(name: &str, b: &[u8]) {
 #[test]
 fn constants_match_relay_xdp_common() {
     use relay_xdp_common::*;
-    assert_eq!(HEADER_BYTES,                  RELAY_HEADER_BYTES as usize);
-    assert_eq!(SESSION_PRIVATE_KEY_BYTES,     RELAY_SESSION_PRIVATE_KEY_BYTES as usize);
-    assert_eq!(ENCRYPTED_ROUTE_TOKEN_BYTES,   RELAY_ENCRYPTED_ROUTE_TOKEN_BYTES as usize);
-    assert_eq!(ENCRYPTED_CONTINUE_TOKEN_BYTES,RELAY_ENCRYPTED_CONTINUE_TOKEN_BYTES as usize);
-    assert_eq!(PACKET_TYPE_ROUTE_REQUEST,     RELAY_ROUTE_REQUEST_PACKET);
-    assert_eq!(PACKET_TYPE_ROUTE_RESPONSE,    RELAY_ROUTE_RESPONSE_PACKET);
-    assert_eq!(PACKET_TYPE_CLIENT_TO_SERVER,  RELAY_CLIENT_TO_SERVER_PACKET);
-    assert_eq!(PACKET_TYPE_SERVER_TO_CLIENT,  RELAY_SERVER_TO_CLIENT_PACKET);
-    assert_eq!(PACKET_TYPE_SESSION_PING,      RELAY_SESSION_PING_PACKET);
-    assert_eq!(PACKET_TYPE_SESSION_PONG,      RELAY_SESSION_PONG_PACKET);
-    assert_eq!(PACKET_TYPE_CONTINUE_REQUEST,  RELAY_CONTINUE_REQUEST_PACKET);
-    assert_eq!(PACKET_TYPE_CONTINUE_RESPONSE, RELAY_CONTINUE_RESPONSE_PACKET);
-    assert_eq!(PACKET_TYPE_CLIENT_PING,       RELAY_CLIENT_PING_PACKET);
-    assert_eq!(PACKET_TYPE_CLIENT_PONG,       RELAY_CLIENT_PONG_PACKET);
-    assert_eq!(PACKET_TYPE_RELAY_PING,        RELAY_PING_PACKET);
-    assert_eq!(PACKET_TYPE_RELAY_PONG,        RELAY_PONG_PACKET);
-    assert_eq!(PACKET_TYPE_SERVER_PING,       RELAY_SERVER_PING_PACKET);
-    assert_eq!(PACKET_TYPE_SERVER_PONG,       RELAY_SERVER_PONG_PACKET);
-    assert_eq!(MTU,                           RELAY_MTU as usize);
-    assert_eq!(MAX_PACKET_BYTES,              RELAY_MAX_PACKET_BYTES as usize);
-    assert_eq!(RELAY_PING_TOKEN_BYTES,        RELAY_PING_TOKEN_BYTES);
+    assert_eq!(HEADER_BYTES, RELAY_HEADER_BYTES as usize);
+    assert_eq!(
+        SESSION_PRIVATE_KEY_BYTES,
+        RELAY_SESSION_PRIVATE_KEY_BYTES as usize
+    );
+    assert_eq!(
+        ENCRYPTED_ROUTE_TOKEN_BYTES,
+        RELAY_ENCRYPTED_ROUTE_TOKEN_BYTES as usize
+    );
+    assert_eq!(
+        ENCRYPTED_CONTINUE_TOKEN_BYTES,
+        RELAY_ENCRYPTED_CONTINUE_TOKEN_BYTES as usize
+    );
+    assert_eq!(PACKET_TYPE_ROUTE_REQUEST, RELAY_ROUTE_REQUEST_PACKET);
+    assert_eq!(PACKET_TYPE_ROUTE_RESPONSE, RELAY_ROUTE_RESPONSE_PACKET);
+    assert_eq!(PACKET_TYPE_CLIENT_TO_SERVER, RELAY_CLIENT_TO_SERVER_PACKET);
+    assert_eq!(PACKET_TYPE_SERVER_TO_CLIENT, RELAY_SERVER_TO_CLIENT_PACKET);
+    assert_eq!(PACKET_TYPE_SESSION_PING, RELAY_SESSION_PING_PACKET);
+    assert_eq!(PACKET_TYPE_SESSION_PONG, RELAY_SESSION_PONG_PACKET);
+    assert_eq!(PACKET_TYPE_CONTINUE_REQUEST, RELAY_CONTINUE_REQUEST_PACKET);
+    assert_eq!(
+        PACKET_TYPE_CONTINUE_RESPONSE,
+        RELAY_CONTINUE_RESPONSE_PACKET
+    );
+    assert_eq!(PACKET_TYPE_CLIENT_PING, RELAY_CLIENT_PING_PACKET);
+    assert_eq!(PACKET_TYPE_CLIENT_PONG, RELAY_CLIENT_PONG_PACKET);
+    assert_eq!(PACKET_TYPE_RELAY_PING, RELAY_PING_PACKET);
+    assert_eq!(PACKET_TYPE_RELAY_PONG, RELAY_PONG_PACKET);
+    assert_eq!(PACKET_TYPE_SERVER_PING, RELAY_SERVER_PING_PACKET);
+    assert_eq!(PACKET_TYPE_SERVER_PONG, RELAY_SERVER_PONG_PACKET);
+    assert_eq!(MTU, RELAY_MTU as usize);
+    assert_eq!(MAX_PACKET_BYTES, RELAY_MAX_PACKET_BYTES as usize);
+    assert_eq!(RELAY_PING_TOKEN_BYTES, RELAY_PING_TOKEN_BYTES);
 }
 
 // ── Packet size constants ─────────────────────────────────────────────────────
@@ -135,14 +153,14 @@ fn constants_match_relay_xdp_common() {
 #[test]
 fn packet_size_constants() {
     // Sizes documented in packets/mod.rs comments and ARCHITECTURE.md.
-    assert_eq!(ROUTE_RESPONSE_BYTES,    43);  // 18 + 25
-    assert_eq!(CONTINUE_RESPONSE_BYTES, 43);  // 18 + 25
-    assert_eq!(SESSION_PING_BYTES,      51);  // 18 + 25 + 8
-    assert_eq!(RELAY_PONG_BYTES,        26);  // 18 + 8
-    assert_eq!(SERVER_PONG_BYTES,       26);  // 18 + 8
-    assert_eq!(SERVER_PING_BYTES,       66);  // 18 + 8 + 8 + 32
-    assert_eq!(RELAY_PING_BYTES,        67);  // 18 + 8 + 8 + 1 + 32
-    // Variable packets: CLIENT_TO_SERVER / SERVER_TO_CLIENT = 18 + 25 + payload
+    assert_eq!(ROUTE_RESPONSE_BYTES, 43); // 18 + 25
+    assert_eq!(CONTINUE_RESPONSE_BYTES, 43); // 18 + 25
+    assert_eq!(SESSION_PING_BYTES, 51); // 18 + 25 + 8
+    assert_eq!(RELAY_PONG_BYTES, 26); // 18 + 8
+    assert_eq!(SERVER_PONG_BYTES, 26); // 18 + 8
+    assert_eq!(SERVER_PING_BYTES, 66); // 18 + 8 + 8 + 32
+    assert_eq!(RELAY_PING_BYTES, 67); // 18 + 8 + 8 + 1 + 32
+                                      // Variable packets: CLIENT_TO_SERVER / SERVER_TO_CLIENT = 18 + 25 + payload
     let expected_c2s = PACKET_BODY_OFFSET + HEADER_BYTES + PAYLOAD.len();
     assert_eq!(expected_c2s, 54); // 18 + 25 + 11
 }
@@ -175,7 +193,8 @@ fn route_response_golden() {
     assert_eq!(buf[34], SVER);
 
     // Full golden vector (pittle/chonkle are zero; header HMAC is deterministic)
-    let golden: &[u8] = &hex!("02000000000000000000000000000000008967452301efcdab01becafe efbeadde07")[..];
+    let golden: &[u8] =
+        &hex!("02000000000000000000000000000000008967452301efcdab01becafe efbeadde07")[..];
     // Use byte-level field checks instead of full golden to avoid hardcoding the HMAC here.
     // The HMAC bytes at [35..43] are verified implicitly by the roundtrip decode below.
     let _ = golden;
@@ -185,7 +204,10 @@ fn route_response_golden() {
     assert_eq!(dec.relay_header, pkt.relay_header);
     // Verify read_header accepts it.
     let result = relay_sdk::route::read_header(PACKET_TYPE_ROUTE_RESPONSE, &PK, &dec.relay_header);
-    assert!(result.is_some(), "read_header must accept the encoded ROUTE_RESPONSE header");
+    assert!(
+        result.is_some(),
+        "read_header must accept the encoded ROUTE_RESPONSE header"
+    );
     let (seq, sid, sver) = result.unwrap();
     assert_eq!(seq, SEQ);
     assert_eq!(sid, SID);
@@ -214,7 +236,8 @@ fn continue_response_golden() {
     // Roundtrip + HMAC verification.
     let dec = ContinueResponsePacket::decode(&buf).unwrap();
     assert_eq!(dec.relay_header, pkt.relay_header);
-    let result = relay_sdk::route::read_header(PACKET_TYPE_CONTINUE_RESPONSE, &PK, &dec.relay_header);
+    let result =
+        relay_sdk::route::read_header(PACKET_TYPE_CONTINUE_RESPONSE, &PK, &dec.relay_header);
     assert!(result.is_some());
     let (seq, sid, sver) = result.unwrap();
     assert_eq!(seq, SEQ);
@@ -227,14 +250,15 @@ fn continue_response_golden() {
 #[test]
 fn client_to_server_golden() {
     let mut buf = [0u8; MAX_PACKET_BYTES];
-    let n = write_client_to_server_packet(&mut buf, SEQ, SID, SVER, &PK, PAYLOAD, &MAGIC, &FROM, &TO);
+    let n =
+        write_client_to_server_packet(&mut buf, SEQ, SID, SVER, &PK, PAYLOAD, &MAGIC, &FROM, &TO);
 
     let expected_len = PACKET_BODY_OFFSET + HEADER_BYTES + PAYLOAD.len(); // 54
     assert_eq!(n, expected_len);
     assert_eq!(buf[0], PACKET_TYPE_CLIENT_TO_SERVER);
 
     // pittle (bytes 1-2) and chonkle (bytes 3-17) must be non-zero after stamp_packet.
-    assert_ne!(&buf[1..3], &[0u8; 2],  "pittle must be stamped");
+    assert_ne!(&buf[1..3], &[0u8; 2], "pittle must be stamped");
     assert_ne!(&buf[3..18], &[0u8; 15], "chonkle must be stamped");
 
     // Header at bytes 18..43.
@@ -248,7 +272,10 @@ fn client_to_server_golden() {
     // HMAC must verify.
     let hdr = &buf[18..43];
     let result = relay_sdk::route::read_header(PACKET_TYPE_CLIENT_TO_SERVER, &PK, hdr);
-    assert!(result.is_some(), "read_header must accept the CLIENT_TO_SERVER header");
+    assert!(
+        result.is_some(),
+        "read_header must accept the CLIENT_TO_SERVER header"
+    );
     let (seq, sid, sver) = result.unwrap();
     assert_eq!(seq, SEQ);
     assert_eq!(sid, SID);
@@ -256,9 +283,14 @@ fn client_to_server_golden() {
 
     // Determinism: encode twice with same inputs -> identical bytes.
     let mut buf2 = [0u8; MAX_PACKET_BYTES];
-    let n2 = write_client_to_server_packet(&mut buf2, SEQ, SID, SVER, &PK, PAYLOAD, &MAGIC, &FROM, &TO);
+    let n2 =
+        write_client_to_server_packet(&mut buf2, SEQ, SID, SVER, &PK, PAYLOAD, &MAGIC, &FROM, &TO);
     assert_eq!(n, n2);
-    assert_eq!(&buf[..n], &buf2[..n2], "CLIENT_TO_SERVER encoding must be deterministic");
+    assert_eq!(
+        &buf[..n],
+        &buf2[..n2],
+        "CLIENT_TO_SERVER encoding must be deterministic"
+    );
 }
 
 // ── SERVER_TO_CLIENT golden bytes ─────────────────────────────────────────────
@@ -276,7 +308,7 @@ fn server_to_client_golden() {
     stamp_packet(&mut buf[..total], &MAGIC, &FROM, &TO);
 
     assert_eq!(buf[0], PACKET_TYPE_SERVER_TO_CLIENT);
-    assert_ne!(&buf[1..3],  &[0u8; 2],  "pittle must be stamped");
+    assert_ne!(&buf[1..3], &[0u8; 2], "pittle must be stamped");
     assert_ne!(&buf[3..18], &[0u8; 15], "chonkle must be stamped");
 
     assert_eq!(u64::from_le_bytes(buf[18..26].try_into().unwrap()), SEQ);
@@ -286,7 +318,10 @@ fn server_to_client_golden() {
 
     // HMAC must verify.
     let result = relay_sdk::route::read_header(PACKET_TYPE_SERVER_TO_CLIENT, &PK, &buf[18..43]);
-    assert!(result.is_some(), "read_header must accept the SERVER_TO_CLIENT header");
+    assert!(
+        result.is_some(),
+        "read_header must accept the SERVER_TO_CLIENT header"
+    );
     let (seq, sid, sver) = result.unwrap();
     assert_eq!(seq, SEQ);
     assert_eq!(sid, SID);
@@ -300,7 +335,10 @@ fn session_ping_golden() {
     let ping_seq = 0x1122_3344_5566_7788u64;
     let mut hdr = [0u8; HEADER_BYTES];
     write_header(PACKET_TYPE_SESSION_PING, SEQ, SID, SVER, &PK, &mut hdr);
-    let pkt = SessionPingPacket { relay_header: hdr, ping_sequence: ping_seq };
+    let pkt = SessionPingPacket {
+        relay_header: hdr,
+        ping_sequence: ping_seq,
+    };
     let mut buf = [0u8; SESSION_PING_BYTES];
     let n = pkt.encode(&mut buf).unwrap();
 
@@ -308,7 +346,10 @@ fn session_ping_golden() {
     assert_eq!(buf[0], PACKET_TYPE_SESSION_PING);
 
     // ping_sequence at bytes 43..51, LE.
-    assert_eq!(u64::from_le_bytes(buf[43..51].try_into().unwrap()), ping_seq);
+    assert_eq!(
+        u64::from_le_bytes(buf[43..51].try_into().unwrap()),
+        ping_seq
+    );
 
     // Roundtrip.
     let dec = SessionPingPacket::decode(&buf).unwrap();
@@ -335,7 +376,10 @@ fn relay_pong_golden() {
     assert_eq!(buf[0], PACKET_TYPE_RELAY_PONG);
 
     // sequence at bytes 18..26, LE.
-    assert_eq!(u64::from_le_bytes(buf[18..26].try_into().unwrap()), sequence);
+    assert_eq!(
+        u64::from_le_bytes(buf[18..26].try_into().unwrap()),
+        sequence
+    );
 
     // pittle/chonkle are zero (not stamped in encode).
     assert_eq!(&buf[1..18], &[0u8; 17]);
@@ -395,7 +439,10 @@ fn relay_ping_golden() {
     assert_eq!(buf[0], PACKET_TYPE_RELAY_PING);
 
     // sequence at [18..26], expire at [26..34], is_internal at [34], token at [35..67].
-    assert_eq!(u64::from_le_bytes(buf[18..26].try_into().unwrap()), sequence);
+    assert_eq!(
+        u64::from_le_bytes(buf[18..26].try_into().unwrap()),
+        sequence
+    );
     assert_eq!(u64::from_le_bytes(buf[26..34].try_into().unwrap()), expire);
     assert_eq!(buf[34], 1u8); // is_internal = true
     assert_eq!(&buf[35..67], &token);
@@ -422,7 +469,10 @@ fn client_pong_golden() {
     assert_eq!(n, CLIENT_PONG_BYTES);
     assert_eq!(buf[0], PACKET_TYPE_CLIENT_PONG);
     assert_eq!(u64::from_le_bytes(buf[18..26].try_into().unwrap()), echo);
-    assert_eq!(u64::from_le_bytes(buf[26..34].try_into().unwrap()), session_id);
+    assert_eq!(
+        u64::from_le_bytes(buf[26..34].try_into().unwrap()),
+        session_id
+    );
 
     // Roundtrip.
     let dec = ClientPongPacket::decode(&buf).unwrap();
@@ -436,9 +486,11 @@ fn client_pong_golden() {
 fn pittle_chonkle_deterministic() {
     // Two identical packets must have identical pittle/chonkle.
     let mut buf1 = [0u8; MAX_PACKET_BYTES];
-    let n1 = write_client_to_server_packet(&mut buf1, SEQ, SID, SVER, &PK, PAYLOAD, &MAGIC, &FROM, &TO);
+    let n1 =
+        write_client_to_server_packet(&mut buf1, SEQ, SID, SVER, &PK, PAYLOAD, &MAGIC, &FROM, &TO);
     let mut buf2 = [0u8; MAX_PACKET_BYTES];
-    let n2 = write_client_to_server_packet(&mut buf2, SEQ, SID, SVER, &PK, PAYLOAD, &MAGIC, &FROM, &TO);
+    let n2 =
+        write_client_to_server_packet(&mut buf2, SEQ, SID, SVER, &PK, PAYLOAD, &MAGIC, &FROM, &TO);
     assert_eq!(n1, n2);
     assert_eq!(&buf1[..n1], &buf2[..n2]);
 }
@@ -447,14 +499,21 @@ fn pittle_chonkle_deterministic() {
 fn pittle_chonkle_differ_for_different_addresses() {
     // Different from/to addresses must produce different pittle/chonkle.
     let from2 = [192u8, 168, 1, 1];
-    let to2   = [192u8, 168, 1, 2];
+    let to2 = [192u8, 168, 1, 2];
     let mut buf1 = [0u8; MAX_PACKET_BYTES];
-    let n1 = write_client_to_server_packet(&mut buf1, SEQ, SID, SVER, &PK, PAYLOAD, &MAGIC, &FROM, &TO);
+    let n1 =
+        write_client_to_server_packet(&mut buf1, SEQ, SID, SVER, &PK, PAYLOAD, &MAGIC, &FROM, &TO);
     let mut buf2 = [0u8; MAX_PACKET_BYTES];
-    let n2 = write_client_to_server_packet(&mut buf2, SEQ, SID, SVER, &PK, PAYLOAD, &MAGIC, &from2, &to2);
+    let n2 = write_client_to_server_packet(
+        &mut buf2, SEQ, SID, SVER, &PK, PAYLOAD, &MAGIC, &from2, &to2,
+    );
     assert_eq!(n1, n2);
     // pittle (bytes 1-2) must differ.
-    assert_ne!(&buf1[1..3], &buf2[1..3], "pittle must differ for different addresses");
+    assert_ne!(
+        &buf1[1..3],
+        &buf2[1..3],
+        "pittle must differ for different addresses"
+    );
 }
 
 // ── Header HMAC cross-check: relay-sdk vs relay-xdp-common HeaderData ────────
@@ -487,7 +546,9 @@ fn header_hmac_matches_relay_xdp_common_layout() {
     let hmac_sdk = &hdr[17..25];
 
     // The first 8 bytes of the SHA-256 must match.
-    assert_eq!(hmac_sdk, &sha_common[..8],
-        "relay-sdk header HMAC must match SHA-256(HeaderData) from relay-xdp-common");
+    assert_eq!(
+        hmac_sdk,
+        &sha_common[..8],
+        "relay-sdk header HMAC must match SHA-256(HeaderData) from relay-xdp-common"
+    );
 }
-
