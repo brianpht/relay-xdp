@@ -6,13 +6,12 @@
 // RouteToken:   plaintext 71B -> encrypted 111B  (RELAY_ENCRYPTED_ROUTE_TOKEN_BYTES)
 // ContinueToken: plaintext 17B -> encrypted  57B  (RELAY_ENCRYPTED_CONTINUE_TOKEN_BYTES)
 
-use crate::constants::{
-    ENCRYPTED_ROUTE_TOKEN_BYTES, ENCRYPTED_CONTINUE_TOKEN_BYTES,
-    SESSION_PRIVATE_KEY_BYTES,
+use crate::constants::{ENCRYPTED_CONTINUE_TOKEN_BYTES, ENCRYPTED_ROUTE_TOKEN_BYTES};
+use crate::crypto::{
+    xchacha_decrypt, xchacha_encrypt, CryptoError, XCHACHA_KEY_BYTES, XCHACHA_NONCE_BYTES,
 };
-use crate::crypto::{xchacha_encrypt, xchacha_decrypt, CryptoError, XCHACHA_NONCE_BYTES, XCHACHA_KEY_BYTES};
-use relay_xdp_common::{RouteToken, ContinueToken};
 use rand::RngCore;
+use relay_xdp_common::{ContinueToken, RouteToken};
 use thiserror::Error;
 
 pub const ROUTE_TOKEN_BYTES: usize = 71;
@@ -68,7 +67,11 @@ fn continue_token_from_bytes(bytes: &[u8; CONTINUE_TOKEN_BYTES]) -> ContinueToke
     // Safety: ContinueToken is #[repr(C, packed)], all bit patterns valid for its field types.
     unsafe {
         let mut t = std::mem::MaybeUninit::<ContinueToken>::uninit();
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), t.as_mut_ptr() as *mut u8, CONTINUE_TOKEN_BYTES);
+        std::ptr::copy_nonoverlapping(
+            bytes.as_ptr(),
+            t.as_mut_ptr() as *mut u8,
+            CONTINUE_TOKEN_BYTES,
+        );
         t.assume_init()
     }
 }
@@ -99,7 +102,10 @@ pub fn decrypt_route_token(
     let ciphertext = &data[XCHACHA_NONCE_BYTES..];
     let plaintext = xchacha_decrypt(ciphertext, nonce, key, &[])?;
     if plaintext.len() != ROUTE_TOKEN_BYTES {
-        return Err(TokenError::SizeMismatch { expected: ROUTE_TOKEN_BYTES, got: plaintext.len() });
+        return Err(TokenError::SizeMismatch {
+            expected: ROUTE_TOKEN_BYTES,
+            got: plaintext.len(),
+        });
     }
     let bytes: &[u8; ROUTE_TOKEN_BYTES] = plaintext.as_slice().try_into().unwrap();
     Ok(route_token_from_bytes(bytes))
@@ -131,7 +137,10 @@ pub fn decrypt_continue_token(
     let ciphertext = &data[XCHACHA_NONCE_BYTES..];
     let plaintext = xchacha_decrypt(ciphertext, nonce, key, &[])?;
     if plaintext.len() != CONTINUE_TOKEN_BYTES {
-        return Err(TokenError::SizeMismatch { expected: CONTINUE_TOKEN_BYTES, got: plaintext.len() });
+        return Err(TokenError::SizeMismatch {
+            expected: CONTINUE_TOKEN_BYTES,
+            got: plaintext.len(),
+        });
     }
     let bytes: &[u8; CONTINUE_TOKEN_BYTES] = plaintext.as_slice().try_into().unwrap();
     Ok(continue_token_from_bytes(bytes))
@@ -142,7 +151,8 @@ pub fn decrypt_continue_token(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use relay_xdp_common::{RouteToken, ContinueToken};
+    use crate::constants::SESSION_PRIVATE_KEY_BYTES;
+    use relay_xdp_common::{ContinueToken, RouteToken};
 
     fn make_route_token() -> RouteToken {
         RouteToken {
@@ -195,7 +205,7 @@ mod tests {
 
     #[test]
     fn route_token_wrong_key_fails() {
-        let key     = [0x42u8; XCHACHA_KEY_BYTES];
+        let key = [0x42u8; XCHACHA_KEY_BYTES];
         let bad_key = [0x99u8; XCHACHA_KEY_BYTES];
         let enc = encrypt_route_token(&make_route_token(), &key);
         assert!(decrypt_route_token(&enc, &bad_key).is_err());
@@ -220,7 +230,7 @@ mod tests {
 
     #[test]
     fn continue_token_wrong_key_fails() {
-        let key     = [0x33u8; XCHACHA_KEY_BYTES];
+        let key = [0x33u8; XCHACHA_KEY_BYTES];
         let bad_key = [0x77u8; XCHACHA_KEY_BYTES];
         let enc = encrypt_continue_token(&make_continue_token(), &key);
         assert!(decrypt_continue_token(&enc, &bad_key).is_err());
@@ -242,4 +252,3 @@ mod tests {
         assert_eq!(enc.len(), 57);
     }
 }
-

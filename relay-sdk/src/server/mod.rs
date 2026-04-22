@@ -19,40 +19,40 @@
 //   3. send_packet(session_id, payload) -> SERVER_TO_CLIENT packet via SendRaw
 //   4. expire_session(session_id) / drop()
 
-use std::collections::VecDeque;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use crate::address::Address;
 use crate::constants::*;
-use crate::route::{write_header, address_ipv4_bytes, HEADER_BYTES as ROUTE_HEADER_BYTES};
 use crate::route::trackers::ReplayProtection;
+use crate::route::{address_ipv4_bytes, write_header, HEADER_BYTES as ROUTE_HEADER_BYTES};
 
 // ── Server state constants ────────────────────────────────────────────────────
 
 pub const SERVER_STATE_CLOSED: i32 = 0;
-pub const SERVER_STATE_OPEN:   i32 = 1;
+pub const SERVER_STATE_OPEN: i32 = 1;
 
 // ── Per-session state ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct SessionInfo {
-    pub session_id:          u64,
-    pub session_version:     u8,
+    pub session_id: u64,
+    pub session_version: u8,
     pub session_private_key: [u8; SESSION_PRIVATE_KEY_BYTES],
     /// Address of the last relay hop (where SERVER_TO_CLIENT goes).
-    pub relay_address:       Address,
+    pub relay_address: Address,
     /// Running send sequence for SERVER_TO_CLIENT packets.
-    pub send_sequence:       u64,
-    pub replay_protection:   ReplayProtection,
+    pub send_sequence: u64,
+    pub replay_protection: ReplayProtection,
 }
 
 impl SessionInfo {
     pub fn new(
-        session_id:          u64,
-        session_version:     u8,
+        session_id: u64,
+        session_version: u8,
         session_private_key: [u8; SESSION_PRIVATE_KEY_BYTES],
-        relay_address:       Address,
+        relay_address: Address,
     ) -> Self {
         SessionInfo {
             session_id,
@@ -75,15 +75,20 @@ pub enum Command {
     Close,
     /// Register or refresh a session (key pushed by backend HTTP).
     RegisterSession {
-        session_id:          u64,
-        session_version:     u8,
+        session_id: u64,
+        session_version: u8,
         session_private_key: [u8; SESSION_PRIVATE_KEY_BYTES],
-        relay_address:       Address,
+        relay_address: Address,
     },
     /// Expire / remove a session.
     ExpireSession { session_id: u64 },
     /// Send a game payload to a specific session (via relay).
-    SendPacket { session_id: u64, payload: Vec<u8>, magic: [u8; 8], from_address: Address },
+    SendPacket {
+        session_id: u64,
+        payload: Vec<u8>,
+        magic: [u8; 8],
+        from_address: Address,
+    },
     /// Shut down the inner half.
     Destroy,
 }
@@ -105,15 +110,15 @@ pub enum Notify {
 // ── Shared queue type aliases ─────────────────────────────────────────────────
 
 pub type CommandQueue = Arc<Mutex<VecDeque<Command>>>;
-pub type NotifyQueue  = Arc<Mutex<VecDeque<Notify>>>;
+pub type NotifyQueue = Arc<Mutex<VecDeque<Notify>>>;
 
 // ── ServerInner ───────────────────────────────────────────────────────────────
 
 pub struct ServerInner {
     commands: CommandQueue,
-    notify:   NotifyQueue,
+    notify: NotifyQueue,
 
-    pub state:        i32,
+    pub state: i32,
     pub bind_address: Address,
 
     // Sessions indexed by session_id.
@@ -127,23 +132,23 @@ impl ServerInner {
     /// Create a linked (ServerInner, Server) pair sharing the same queues.
     pub fn create() -> (ServerInner, Server) {
         let commands: CommandQueue = Arc::new(Mutex::new(VecDeque::new()));
-        let notify:   NotifyQueue  = Arc::new(Mutex::new(VecDeque::new()));
+        let notify: NotifyQueue = Arc::new(Mutex::new(VecDeque::new()));
 
         let inner = ServerInner {
             commands: Arc::clone(&commands),
-            notify:   Arc::clone(&notify),
-            state:        SERVER_STATE_CLOSED,
+            notify: Arc::clone(&notify),
+            state: SERVER_STATE_CLOSED,
             bind_address: Address::None,
-            sessions:     HashMap::new(),
-            send_buf:     Box::new([0u8; MAX_PACKET_BYTES]),
+            sessions: HashMap::new(),
+            send_buf: Box::new([0u8; MAX_PACKET_BYTES]),
         };
 
         let server = Server {
             commands,
             notify,
-            state:         SERVER_STATE_CLOSED,
-            num_sessions:  0,
-            bind_address:  Address::None,
+            state: SERVER_STATE_CLOSED,
+            num_sessions: 0,
+            bind_address: Address::None,
         };
 
         (inner, server)
@@ -170,7 +175,7 @@ impl ServerInner {
 
             Command::Open { bind_address } => {
                 self.bind_address = bind_address;
-                self.state        = SERVER_STATE_OPEN;
+                self.state = SERVER_STATE_OPEN;
                 self.sessions.clear();
             }
 
@@ -179,10 +184,20 @@ impl ServerInner {
                 self.sessions.clear();
             }
 
-            Command::RegisterSession { session_id, session_version, session_private_key, relay_address } => {
+            Command::RegisterSession {
+                session_id,
+                session_version,
+                session_private_key,
+                relay_address,
+            } => {
                 self.sessions.insert(
                     session_id,
-                    SessionInfo::new(session_id, session_version, session_private_key, relay_address),
+                    SessionInfo::new(
+                        session_id,
+                        session_version,
+                        session_private_key,
+                        relay_address,
+                    ),
                 );
                 self.push_notify(Notify::SessionRegistered { session_id });
             }
@@ -192,7 +207,12 @@ impl ServerInner {
                 self.push_notify(Notify::SessionExpired { session_id });
             }
 
-            Command::SendPacket { session_id, payload, magic, from_address } => {
+            Command::SendPacket {
+                session_id,
+                payload,
+                magic,
+                from_address,
+            } => {
                 self.send_packet_inner(session_id, &payload, &magic, &from_address);
             }
         }
@@ -203,11 +223,17 @@ impl ServerInner {
     /// Process a raw incoming UDP packet.
     /// Returns Some((session_id, payload)) if a verified game payload was extracted.
     pub fn process_incoming(&mut self, data: &[u8]) -> Option<(u64, Vec<u8>)> {
-        if data.is_empty() { return None; }
-        if data[0] != PACKET_TYPE_CLIENT_TO_SERVER { return None; }
+        if data.is_empty() {
+            return None;
+        }
+        if data[0] != PACKET_TYPE_CLIENT_TO_SERVER {
+            return None;
+        }
 
         let body_off = PACKET_BODY_OFFSET;
-        if data.len() < body_off + ROUTE_HEADER_BYTES { return None; }
+        if data.len() < body_off + ROUTE_HEADER_BYTES {
+            return None;
+        }
 
         let header = &data[body_off..body_off + ROUTE_HEADER_BYTES];
 
@@ -219,8 +245,12 @@ impl ServerInner {
                 &sess.session_private_key,
                 header,
             ) {
-                if sid != sess.session_id || sver != sess.session_version { continue; }
-                if sess.replay_protection.already_received(seq) { return None; }
+                if sid != sess.session_id || sver != sess.session_version {
+                    continue;
+                }
+                if sess.replay_protection.already_received(seq) {
+                    return None;
+                }
                 verified = Some((sess.session_id, seq));
                 break;
             }
@@ -232,9 +262,14 @@ impl ServerInner {
                 sess.replay_protection.advance_sequence(seq);
             }
             let payload_off = body_off + ROUTE_HEADER_BYTES;
-            if data.len() <= payload_off { return None; }
+            if data.len() <= payload_off {
+                return None;
+            }
             let payload = data[payload_off..].to_vec();
-            self.push_notify(Notify::PacketReceived { session_id, payload: payload.clone() });
+            self.push_notify(Notify::PacketReceived {
+                session_id,
+                payload: payload.clone(),
+            });
             return Some((session_id, payload));
         }
         None
@@ -242,8 +277,17 @@ impl ServerInner {
 
     // ── Send SERVER_TO_CLIENT ─────────────────────────────────────────────────
 
-    fn send_packet_inner(&mut self, session_id: u64, payload: &[u8], magic: &[u8; 8], from_address: &Address) {
-        let sess = match self.sessions.get_mut(&session_id) { Some(s) => s, None => return };
+    fn send_packet_inner(
+        &mut self,
+        session_id: u64,
+        payload: &[u8],
+        magic: &[u8; 8],
+        from_address: &Address,
+    ) {
+        let sess = match self.sessions.get_mut(&session_id) {
+            Some(s) => s,
+            None => return,
+        };
         let seq = sess.send_sequence;
         sess.send_sequence += 1;
         let to_address = match &sess.relay_address {
@@ -259,14 +303,17 @@ impl ServerInner {
         //   [18..43]  header (ROUTE_HEADER_BYTES = 25)
         //   [43..]    payload
         let total = PACKET_BODY_OFFSET + ROUTE_HEADER_BYTES + payload.len();
-        if total > MAX_PACKET_BYTES { return; }
+        if total > MAX_PACKET_BYTES {
+            return;
+        }
 
         let buf = self.send_buf.as_mut();
         buf[0] = PACKET_TYPE_SERVER_TO_CLIENT;
         // Write header into buf[18..43].
-        let header_slice: &mut [u8; ROUTE_HEADER_BYTES] =
-            (&mut buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + ROUTE_HEADER_BYTES])
-                .try_into().unwrap();
+        let header_slice: &mut [u8; ROUTE_HEADER_BYTES] = (&mut buf
+            [PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + ROUTE_HEADER_BYTES])
+            .try_into()
+            .unwrap();
         write_header(
             PACKET_TYPE_SERVER_TO_CLIENT,
             seq,
@@ -280,8 +327,8 @@ impl ServerInner {
         // stamp pittle + chonkle.
         crate::route::stamp_packet(&mut buf[..total], magic, &from_bytes, &to_address);
 
-        let to    = sess.relay_address.clone();
-        let data  = buf[..total].to_vec();
+        let to = sess.relay_address;
+        let data = buf[..total].to_vec();
         self.push_notify(Notify::SendRaw { to, data });
     }
 
@@ -291,7 +338,9 @@ impl ServerInner {
         self.sessions.get(&session_id)
     }
 
-    pub fn session_count(&self) -> usize { self.sessions.len() }
+    pub fn session_count(&self) -> usize {
+        self.sessions.len()
+    }
 
     fn push_notify(&self, n: Notify) {
         self.notify.lock().unwrap().push_back(n);
@@ -302,17 +351,17 @@ impl ServerInner {
 
 pub struct Server {
     commands: CommandQueue,
-    notify:   NotifyQueue,
+    notify: NotifyQueue,
 
-    pub state:         i32,
-    pub num_sessions:  usize,
-    pub bind_address:  Address,
+    pub state: i32,
+    pub num_sessions: usize,
+    pub bind_address: Address,
 }
 
 impl Server {
     /// Open the server.
     pub fn open(&mut self, bind_address: Address) {
-        self.bind_address = bind_address.clone();
+        self.bind_address = bind_address;
         self.push_command(Command::Open { bind_address });
         self.state = SERVER_STATE_OPEN;
     }
@@ -320,20 +369,23 @@ impl Server {
     /// Close the server.
     pub fn close(&mut self) {
         self.push_command(Command::Close);
-        self.state        = SERVER_STATE_CLOSED;
+        self.state = SERVER_STATE_CLOSED;
         self.num_sessions = 0;
     }
 
     /// Register a session (called when backend pushes session keys via HTTP).
     pub fn register_session(
         &mut self,
-        session_id:          u64,
-        session_version:     u8,
+        session_id: u64,
+        session_version: u8,
         session_private_key: [u8; SESSION_PRIVATE_KEY_BYTES],
-        relay_address:       Address,
+        relay_address: Address,
     ) {
         self.push_command(Command::RegisterSession {
-            session_id, session_version, session_private_key, relay_address,
+            session_id,
+            session_version,
+            session_private_key,
+            relay_address,
         });
     }
 
@@ -343,7 +395,13 @@ impl Server {
     }
 
     /// Send a game payload to `session_id` via the relay hop.
-    pub fn send_packet(&mut self, session_id: u64, payload: &[u8], magic: [u8; 8], from_address: Address) {
+    pub fn send_packet(
+        &mut self,
+        session_id: u64,
+        payload: &[u8],
+        magic: [u8; 8],
+        from_address: Address,
+    ) {
         self.push_command(Command::SendPacket {
             session_id,
             payload: payload.to_vec(),
@@ -365,10 +423,16 @@ impl Server {
 
     fn apply_notify(&mut self, n: Notify) {
         match n {
-            Notify::SessionRegistered { .. } => { self.num_sessions += 1; }
-            Notify::SessionExpired    { .. } => { if self.num_sessions > 0 { self.num_sessions -= 1; } }
-            Notify::PacketReceived    { .. } => {}
-            Notify::SendRaw           { .. } => {}
+            Notify::SessionRegistered { .. } => {
+                self.num_sessions += 1;
+            }
+            Notify::SessionExpired { .. } => {
+                if self.num_sessions > 0 {
+                    self.num_sessions -= 1;
+                }
+            }
+            Notify::PacketReceived { .. } => {}
+            Notify::SendRaw { .. } => {}
         }
     }
 
@@ -378,7 +442,10 @@ impl Server {
             let n = { self.notify.lock().unwrap().pop_front() };
             match n {
                 None => return None,
-                Some(Notify::PacketReceived { session_id, payload }) => return Some((session_id, payload)),
+                Some(Notify::PacketReceived {
+                    session_id,
+                    payload,
+                }) => return Some((session_id, payload)),
                 Some(n) => self.apply_notify(n),
             }
         }
@@ -396,8 +463,12 @@ impl Server {
         }
     }
 
-    pub fn is_open(&self) -> bool { self.state == SERVER_STATE_OPEN }
-    pub fn state(&self)   -> i32  { self.state }
+    pub fn is_open(&self) -> bool {
+        self.state == SERVER_STATE_OPEN
+    }
+    pub fn state(&self) -> i32 {
+        self.state
+    }
 
     fn push_command(&self, c: Command) {
         self.commands.lock().unwrap().push_back(c);
@@ -420,9 +491,21 @@ mod tests {
         ServerInner::create()
     }
 
-    fn addr() -> Address { Address::V4 { octets: [127, 0, 0, 1], port: 7777 } }
-    fn relay_addr() -> Address { Address::V4 { octets: [10, 0, 0, 1], port: 4000 } }
-    fn priv_key() -> [u8; SESSION_PRIVATE_KEY_BYTES] { [0x42u8; SESSION_PRIVATE_KEY_BYTES] }
+    fn addr() -> Address {
+        Address::V4 {
+            octets: [127, 0, 0, 1],
+            port: 7777,
+        }
+    }
+    fn relay_addr() -> Address {
+        Address::V4 {
+            octets: [10, 0, 0, 1],
+            port: 4000,
+        }
+    }
+    fn priv_key() -> [u8; SESSION_PRIVATE_KEY_BYTES] {
+        [0x42u8; SESSION_PRIVATE_KEY_BYTES]
+    }
 
     #[test]
     fn server_initial_state_is_closed() {
@@ -516,30 +599,38 @@ mod tests {
 
     #[test]
     fn server_client_to_server_with_valid_header_extracts_payload() {
-        use crate::route::{write_header, stamp_packet, address_ipv4_bytes};
+        use crate::route::{address_ipv4_bytes, stamp_packet, write_header};
         let (mut inner, mut server) = make_pair();
         server.open(addr());
         inner.pump_commands();
 
-        let session_id  = 0xCAFE_BABEu64;
+        let session_id = 0xCAFE_BABEu64;
         let session_ver = 2u8;
-        let key         = priv_key();
+        let key = priv_key();
         server.register_session(session_id, session_ver, key, relay_addr());
         inner.pump_commands();
 
         // Build a CLIENT_TO_SERVER packet with a valid header.
         let payload = b"game data";
-        let seq     = 1u64;
-        let total   = PACKET_BODY_OFFSET + ROUTE_HEADER_BYTES + payload.len();
+        let seq = 1u64;
+        let total = PACKET_BODY_OFFSET + ROUTE_HEADER_BYTES + payload.len();
         let mut buf = vec![0u8; total];
         buf[0] = PACKET_TYPE_CLIENT_TO_SERVER;
-        let header_slice: &mut [u8; ROUTE_HEADER_BYTES] =
-            (&mut buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + ROUTE_HEADER_BYTES])
-                .try_into().unwrap();
-        write_header(PACKET_TYPE_CLIENT_TO_SERVER, seq, session_id, session_ver, &key, header_slice);
+        let header_slice: &mut [u8; ROUTE_HEADER_BYTES] = (&mut buf
+            [PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + ROUTE_HEADER_BYTES])
+            .try_into()
+            .unwrap();
+        write_header(
+            PACKET_TYPE_CLIENT_TO_SERVER,
+            seq,
+            session_id,
+            session_ver,
+            &key,
+            header_slice,
+        );
         buf[PACKET_BODY_OFFSET + ROUTE_HEADER_BYTES..].copy_from_slice(payload);
         let from_bytes = address_ipv4_bytes(&addr());
-        let to_bytes   = address_ipv4_bytes(&relay_addr());
+        let to_bytes = address_ipv4_bytes(&relay_addr());
         stamp_packet(&mut buf, &[0u8; 8], &from_bytes, &to_bytes);
 
         let result = inner.process_incoming(&buf);
@@ -551,29 +642,37 @@ mod tests {
 
     #[test]
     fn server_client_to_server_replay_is_rejected() {
-        use crate::route::{write_header, stamp_packet, address_ipv4_bytes};
+        use crate::route::{address_ipv4_bytes, stamp_packet, write_header};
         let (mut inner, mut server) = make_pair();
         server.open(addr());
         inner.pump_commands();
 
-        let session_id  = 0xAABBCCDD_u64;
+        let session_id = 0xAABBCCDD_u64;
         let session_ver = 1u8;
-        let key         = priv_key();
+        let key = priv_key();
         server.register_session(session_id, session_ver, key, relay_addr());
         inner.pump_commands();
 
         let payload = b"hello";
-        let seq     = 5u64;
-        let total   = PACKET_BODY_OFFSET + ROUTE_HEADER_BYTES + payload.len();
+        let seq = 5u64;
+        let total = PACKET_BODY_OFFSET + ROUTE_HEADER_BYTES + payload.len();
         let mut buf = vec![0u8; total];
         buf[0] = PACKET_TYPE_CLIENT_TO_SERVER;
-        let header_slice: &mut [u8; ROUTE_HEADER_BYTES] =
-            (&mut buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + ROUTE_HEADER_BYTES])
-                .try_into().unwrap();
-        write_header(PACKET_TYPE_CLIENT_TO_SERVER, seq, session_id, session_ver, &key, header_slice);
+        let header_slice: &mut [u8; ROUTE_HEADER_BYTES] = (&mut buf
+            [PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + ROUTE_HEADER_BYTES])
+            .try_into()
+            .unwrap();
+        write_header(
+            PACKET_TYPE_CLIENT_TO_SERVER,
+            seq,
+            session_id,
+            session_ver,
+            &key,
+            header_slice,
+        );
         buf[PACKET_BODY_OFFSET + ROUTE_HEADER_BYTES..].copy_from_slice(payload);
         let from_bytes = address_ipv4_bytes(&addr());
-        let to_bytes   = address_ipv4_bytes(&relay_addr());
+        let to_bytes = address_ipv4_bytes(&relay_addr());
         stamp_packet(&mut buf, &[0u8; 8], &from_bytes, &to_bytes);
 
         // First receive OK.
@@ -582,4 +681,3 @@ mod tests {
         assert!(inner.process_incoming(&buf).is_none());
     }
 }
-

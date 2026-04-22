@@ -1,9 +1,7 @@
-/// Port of next_bitpacker.h — BitWriter + BitReader
-///
-/// Wire format: little-endian, bits packed right-to-left into 64-bit scratch,
-/// flushed as 32-bit little-endian dwords.
-
-use crate::constants::MAX_PACKET_BYTES;
+//! Port of next_bitpacker.h - BitWriter + BitReader
+//!
+//! Wire format: little-endian, bits packed right-to-left into 64-bit scratch,
+//! flushed as 32-bit little-endian dwords.
 
 // ── BitWriter ──────────────────────────────────────────────────────────────
 
@@ -22,7 +20,10 @@ pub struct BitWriter {
 impl BitWriter {
     /// `bytes` must be a multiple of 4.
     pub fn new(bytes: usize) -> Self {
-        assert!(bytes % 4 == 0, "buffer must be a multiple of 4 bytes");
+        assert!(
+            bytes.is_multiple_of(4),
+            "buffer must be a multiple of 4 bytes"
+        );
         let num_words = bytes / 4;
         BitWriter {
             data: vec![0u32; num_words],
@@ -37,7 +38,7 @@ impl BitWriter {
 
     /// Write `bits` low bits of `value` (1..=32).
     pub fn write_bits(&mut self, value: u32, bits: u32) {
-        debug_assert!(bits >= 1 && bits <= 32);
+        debug_assert!((1..=32).contains(&bits));
         debug_assert!(self.bits_written + bits as usize <= self.num_bits);
         debug_assert!(
             bits == 32 || (value as u64) < (1u64 << bits),
@@ -64,12 +65,12 @@ impl BitWriter {
         if remainder != 0 {
             self.write_bits(0, (8 - remainder) as u32);
         }
-        debug_assert!(self.bits_written % 8 == 0);
+        debug_assert!(self.bits_written.is_multiple_of(8));
     }
 
     /// Copy `bytes` bytes into the stream (must be byte-aligned first).
     pub fn write_bytes(&mut self, data: &[u8]) {
-        debug_assert!(self.bits_written % 8 == 0);
+        debug_assert!(self.bits_written.is_multiple_of(8));
         // Flush scratch so the current partial word is stored
         self.flush_bits();
         let byte_offset = self.bits_written / 8;
@@ -110,12 +111,16 @@ impl BitWriter {
     }
 
     pub fn get_bytes_written(&self) -> usize {
-        (self.bits_written + 7) / 8
+        self.bits_written.div_ceil(8)
     }
 
     pub fn get_align_bits(&self) -> u32 {
         let r = self.bits_written % 8;
-        if r == 0 { 0 } else { (8 - r) as u32 }
+        if r == 0 {
+            0
+        } else {
+            (8 - r) as u32
+        }
     }
 }
 
@@ -150,7 +155,7 @@ impl<'a> BitReader<'a> {
 
     /// Read `bits` bits (1..=32). Caller must call `would_read_past_end` first.
     pub fn read_bits(&mut self, bits: u32) -> u32 {
-        debug_assert!(bits >= 1 && bits <= 32);
+        debug_assert!((1..=32).contains(&bits));
         debug_assert!(!self.would_read_past_end(bits));
 
         while self.scratch_bits < bits {
@@ -171,7 +176,11 @@ impl<'a> BitReader<'a> {
             self.word_index += 1;
         }
 
-        let mask = if bits == 32 { u32::MAX } else { (1u32 << bits) - 1 };
+        let mask = if bits == 32 {
+            u32::MAX
+        } else {
+            (1u32 << bits) - 1
+        };
         let value = (self.scratch as u32) & mask;
         self.scratch >>= bits;
         self.scratch_bits -= bits;
@@ -195,7 +204,7 @@ impl<'a> BitReader<'a> {
 
     /// Read `n` bytes into `out` (must be byte-aligned).
     pub fn read_bytes(&mut self, out: &mut [u8]) {
-        debug_assert!(self.bits_read % 8 == 0);
+        debug_assert!(self.bits_read.is_multiple_of(8));
         let start = self.bits_read / 8;
         out.copy_from_slice(&self.data[start..start + out.len()]);
         self.bits_read += out.len() * 8;
@@ -229,22 +238,22 @@ impl<'a> BitReader<'a> {
 
     pub fn get_align_bits(&self) -> u32 {
         let r = self.bits_read % 8;
-        if r == 0 { 0 } else { (8 - r) as u32 }
+        if r == 0 {
+            0
+        } else {
+            (8 - r) as u32
+        }
     }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 fn bytemuck_cast_slice(s: &[u32]) -> &[u8] {
-    unsafe {
-        std::slice::from_raw_parts(s.as_ptr() as *const u8, s.len() * 4)
-    }
+    unsafe { std::slice::from_raw_parts(s.as_ptr() as *const u8, s.len() * 4) }
 }
 
 fn bytemuck_cast_slice_mut(s: &mut [u32]) -> &mut [u8] {
-    unsafe {
-        std::slice::from_raw_parts_mut(s.as_mut_ptr() as *mut u8, s.len() * 4)
-    }
+    unsafe { std::slice::from_raw_parts_mut(s.as_mut_ptr() as *mut u8, s.len() * 4) }
 }
 
 pub fn bits_required(min: i32, max: i32) -> u32 {
@@ -297,7 +306,7 @@ mod tests {
     fn align_padding_zeros() {
         let mut w = BitWriter::new(4);
         w.write_bits(0b101, 3); // 3 bits
-        w.write_align();         // pad to 8 bits
+        w.write_align(); // pad to 8 bits
         w.flush_bits();
         let data = w.get_data().to_vec();
         let mut r = BitReader::new(&data);
@@ -341,4 +350,3 @@ mod tests {
         assert_eq!(&out, payload);
     }
 }
-

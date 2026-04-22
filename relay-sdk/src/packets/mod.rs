@@ -25,16 +25,16 @@ use crate::constants::*;
 use crate::route::HEADER_BYTES;
 use thiserror::Error;
 pub const PACKET_BODY_OFFSET: usize = 18;
-pub const ROUTE_RESPONSE_BYTES:    usize = PACKET_BODY_OFFSET + HEADER_BYTES;               // 43
-pub const SESSION_PING_BYTES:      usize = PACKET_BODY_OFFSET + HEADER_BYTES + 8;           // 51
-pub const SESSION_PONG_BYTES:      usize = PACKET_BODY_OFFSET + HEADER_BYTES + 8;           // 51
-pub const CONTINUE_RESPONSE_BYTES: usize = PACKET_BODY_OFFSET + HEADER_BYTES;               // 43
-pub const CLIENT_PING_BYTES:       usize = PACKET_BODY_OFFSET + 8 + 8 + 8 + RELAY_PING_TOKEN_BYTES; // 74
-pub const CLIENT_PONG_BYTES:       usize = PACKET_BODY_OFFSET + 8 + 8;                       // 34
-pub const RELAY_PING_BYTES:        usize = PACKET_BODY_OFFSET + 8 + 8 + 1 + RELAY_PING_TOKEN_BYTES; // 67
-pub const RELAY_PONG_BYTES:        usize = PACKET_BODY_OFFSET + 8;                           // 26
-pub const SERVER_PING_BYTES:       usize = PACKET_BODY_OFFSET + 8 + 8 + RELAY_PING_TOKEN_BYTES;     // 66
-pub const SERVER_PONG_BYTES:       usize = PACKET_BODY_OFFSET + 8;                           // 26
+pub const ROUTE_RESPONSE_BYTES: usize = PACKET_BODY_OFFSET + HEADER_BYTES; // 43
+pub const SESSION_PING_BYTES: usize = PACKET_BODY_OFFSET + HEADER_BYTES + 8; // 51
+pub const SESSION_PONG_BYTES: usize = PACKET_BODY_OFFSET + HEADER_BYTES + 8; // 51
+pub const CONTINUE_RESPONSE_BYTES: usize = PACKET_BODY_OFFSET + HEADER_BYTES; // 43
+pub const CLIENT_PING_BYTES: usize = PACKET_BODY_OFFSET + 8 + 8 + 8 + RELAY_PING_TOKEN_BYTES; // 74
+pub const CLIENT_PONG_BYTES: usize = PACKET_BODY_OFFSET + 8 + 8; // 34
+pub const RELAY_PING_BYTES: usize = PACKET_BODY_OFFSET + 8 + 8 + 1 + RELAY_PING_TOKEN_BYTES; // 67
+pub const RELAY_PONG_BYTES: usize = PACKET_BODY_OFFSET + 8; // 26
+pub const SERVER_PING_BYTES: usize = PACKET_BODY_OFFSET + 8 + 8 + RELAY_PING_TOKEN_BYTES; // 66
+pub const SERVER_PONG_BYTES: usize = PACKET_BODY_OFFSET + 8; // 26
 #[derive(Debug, Error)]
 pub enum PacketError {
     #[error("buffer too small: need {need}, got {got}")]
@@ -66,7 +66,8 @@ impl RouteResponsePacket {
     pub fn encode(&self, buf: &mut [u8]) -> Result<usize, PacketError> {
         require_size(buf, ROUTE_RESPONSE_BYTES)?;
         buf[0] = PACKET_TYPE_ROUTE_RESPONSE;
-        buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + HEADER_BYTES].copy_from_slice(&self.relay_header);
+        buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + HEADER_BYTES]
+            .copy_from_slice(&self.relay_header);
         Ok(ROUTE_RESPONSE_BYTES)
     }
 }
@@ -74,7 +75,7 @@ impl RouteResponsePacket {
 /// Body: relay_header[25] + ping_sequence[8]
 #[derive(Debug, Clone)]
 pub struct SessionPingPacket {
-    pub relay_header:  [u8; HEADER_BYTES],
+    pub relay_header: [u8; HEADER_BYTES],
     pub ping_sequence: u64,
 }
 impl SessionPingPacket {
@@ -83,12 +84,16 @@ impl SessionPingPacket {
         let mut hdr = [0u8; HEADER_BYTES];
         hdr.copy_from_slice(&buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + HEADER_BYTES]);
         let seq = read_u64(buf, PACKET_BODY_OFFSET + HEADER_BYTES);
-        Ok(Self { relay_header: hdr, ping_sequence: seq })
+        Ok(Self {
+            relay_header: hdr,
+            ping_sequence: seq,
+        })
     }
     pub fn encode(&self, buf: &mut [u8]) -> Result<usize, PacketError> {
         require_size(buf, SESSION_PING_BYTES)?;
         buf[0] = PACKET_TYPE_SESSION_PING;
-        buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + HEADER_BYTES].copy_from_slice(&self.relay_header);
+        buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + HEADER_BYTES]
+            .copy_from_slice(&self.relay_header);
         buf[PACKET_BODY_OFFSET + HEADER_BYTES..PACKET_BODY_OFFSET + HEADER_BYTES + 8]
             .copy_from_slice(&self.ping_sequence.to_le_bytes());
         Ok(SESSION_PING_BYTES)
@@ -98,8 +103,8 @@ impl SessionPingPacket {
 /// Same layout as SESSION_PING.
 #[derive(Debug, Clone)]
 pub struct SessionPongPacket {
-    pub relay_header:   [u8; HEADER_BYTES],
-    pub pong_sequence:  u64,
+    pub relay_header: [u8; HEADER_BYTES],
+    pub pong_sequence: u64,
 }
 impl SessionPongPacket {
     pub fn decode(buf: &[u8]) -> Result<Self, PacketError> {
@@ -107,12 +112,16 @@ impl SessionPongPacket {
         let mut hdr = [0u8; HEADER_BYTES];
         hdr.copy_from_slice(&buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + HEADER_BYTES]);
         let seq = read_u64(buf, PACKET_BODY_OFFSET + HEADER_BYTES);
-        Ok(Self { relay_header: hdr, pong_sequence: seq })
+        Ok(Self {
+            relay_header: hdr,
+            pong_sequence: seq,
+        })
     }
     pub fn encode(&self, buf: &mut [u8]) -> Result<usize, PacketError> {
         require_size(buf, SESSION_PONG_BYTES)?;
         buf[0] = PACKET_TYPE_SESSION_PONG;
-        buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + HEADER_BYTES].copy_from_slice(&self.relay_header);
+        buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + HEADER_BYTES]
+            .copy_from_slice(&self.relay_header);
         buf[PACKET_BODY_OFFSET + HEADER_BYTES..PACKET_BODY_OFFSET + HEADER_BYTES + 8]
             .copy_from_slice(&self.pong_sequence.to_le_bytes());
         Ok(SESSION_PONG_BYTES)
@@ -134,7 +143,8 @@ impl ContinueResponsePacket {
     pub fn encode(&self, buf: &mut [u8]) -> Result<usize, PacketError> {
         require_size(buf, CONTINUE_RESPONSE_BYTES)?;
         buf[0] = PACKET_TYPE_CONTINUE_RESPONSE;
-        buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + HEADER_BYTES].copy_from_slice(&self.relay_header);
+        buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + HEADER_BYTES]
+            .copy_from_slice(&self.relay_header);
         Ok(CONTINUE_RESPONSE_BYTES)
     }
 }
@@ -142,10 +152,10 @@ impl ContinueResponsePacket {
 /// Body: echo(8) + session_id(8) + expire_timestamp(8) + ping_token(32)
 #[derive(Debug, Clone)]
 pub struct ClientPingPacket {
-    pub echo:            u64,
-    pub session_id:      u64,
+    pub echo: u64,
+    pub session_id: u64,
     pub expire_timestamp: u64,
-    pub ping_token:      [u8; RELAY_PING_TOKEN_BYTES],
+    pub ping_token: [u8; RELAY_PING_TOKEN_BYTES],
 }
 impl ClientPingPacket {
     pub fn decode(buf: &[u8]) -> Result<Self, PacketError> {
@@ -154,10 +164,10 @@ impl ClientPingPacket {
         let mut tok = [0u8; RELAY_PING_TOKEN_BYTES];
         tok.copy_from_slice(&buf[o + 24..o + 24 + RELAY_PING_TOKEN_BYTES]);
         Ok(Self {
-            echo:             read_u64(buf, o),
-            session_id:       read_u64(buf, o + 8),
+            echo: read_u64(buf, o),
+            session_id: read_u64(buf, o + 8),
             expire_timestamp: read_u64(buf, o + 16),
-            ping_token:       tok,
+            ping_token: tok,
         })
     }
     pub fn encode(&self, buf: &mut [u8]) -> Result<usize, PacketError> {
@@ -175,14 +185,17 @@ impl ClientPingPacket {
 /// Body: echo(8) + session_id(8)
 #[derive(Debug, Clone)]
 pub struct ClientPongPacket {
-    pub echo:       u64,
+    pub echo: u64,
     pub session_id: u64,
 }
 impl ClientPongPacket {
     pub fn decode(buf: &[u8]) -> Result<Self, PacketError> {
         check_type_size(buf, PACKET_TYPE_CLIENT_PONG, CLIENT_PONG_BYTES)?;
         let o = PACKET_BODY_OFFSET;
-        Ok(Self { echo: read_u64(buf, o), session_id: read_u64(buf, o + 8) })
+        Ok(Self {
+            echo: read_u64(buf, o),
+            session_id: read_u64(buf, o + 8),
+        })
     }
     pub fn encode(&self, buf: &mut [u8]) -> Result<usize, PacketError> {
         require_size(buf, CLIENT_PONG_BYTES)?;
@@ -197,10 +210,10 @@ impl ClientPongPacket {
 /// Body: sequence(8) + expire_timestamp(8) + is_internal(1) + ping_token(32)
 #[derive(Debug, Clone)]
 pub struct RelayPingPacket {
-    pub sequence:        u64,
+    pub sequence: u64,
     pub expire_timestamp: u64,
-    pub is_internal:     bool,
-    pub ping_token:      [u8; RELAY_PING_TOKEN_BYTES],
+    pub is_internal: bool,
+    pub ping_token: [u8; RELAY_PING_TOKEN_BYTES],
 }
 impl RelayPingPacket {
     pub fn decode(buf: &[u8]) -> Result<Self, PacketError> {
@@ -209,10 +222,10 @@ impl RelayPingPacket {
         let mut tok = [0u8; RELAY_PING_TOKEN_BYTES];
         tok.copy_from_slice(&buf[o + 17..o + 17 + RELAY_PING_TOKEN_BYTES]);
         Ok(Self {
-            sequence:         read_u64(buf, o),
+            sequence: read_u64(buf, o),
             expire_timestamp: read_u64(buf, o + 8),
-            is_internal:      buf[o + 16] != 0,
-            ping_token:       tok,
+            is_internal: buf[o + 16] != 0,
+            ping_token: tok,
         })
     }
     pub fn encode(&self, buf: &mut [u8]) -> Result<usize, PacketError> {
@@ -235,12 +248,15 @@ pub struct RelayPongPacket {
 impl RelayPongPacket {
     pub fn decode(buf: &[u8]) -> Result<Self, PacketError> {
         check_type_size(buf, PACKET_TYPE_RELAY_PONG, RELAY_PONG_BYTES)?;
-        Ok(Self { sequence: read_u64(buf, PACKET_BODY_OFFSET) })
+        Ok(Self {
+            sequence: read_u64(buf, PACKET_BODY_OFFSET),
+        })
     }
     pub fn encode(&self, buf: &mut [u8]) -> Result<usize, PacketError> {
         require_size(buf, RELAY_PONG_BYTES)?;
         buf[0] = PACKET_TYPE_RELAY_PONG;
-        buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + 8].copy_from_slice(&self.sequence.to_le_bytes());
+        buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + 8]
+            .copy_from_slice(&self.sequence.to_le_bytes());
         Ok(RELAY_PONG_BYTES)
     }
 }
@@ -248,9 +264,9 @@ impl RelayPongPacket {
 /// Body: echo(8) + expire_timestamp(8) + ping_token(32)
 #[derive(Debug, Clone)]
 pub struct ServerPingPacket {
-    pub echo:            u64,
+    pub echo: u64,
     pub expire_timestamp: u64,
-    pub ping_token:      [u8; RELAY_PING_TOKEN_BYTES],
+    pub ping_token: [u8; RELAY_PING_TOKEN_BYTES],
 }
 impl ServerPingPacket {
     pub fn decode(buf: &[u8]) -> Result<Self, PacketError> {
@@ -259,9 +275,9 @@ impl ServerPingPacket {
         let mut tok = [0u8; RELAY_PING_TOKEN_BYTES];
         tok.copy_from_slice(&buf[o + 16..o + 16 + RELAY_PING_TOKEN_BYTES]);
         Ok(Self {
-            echo:             read_u64(buf, o),
+            echo: read_u64(buf, o),
             expire_timestamp: read_u64(buf, o + 8),
-            ping_token:       tok,
+            ping_token: tok,
         })
     }
     pub fn encode(&self, buf: &mut [u8]) -> Result<usize, PacketError> {
@@ -283,7 +299,9 @@ pub struct ServerPongPacket {
 impl ServerPongPacket {
     pub fn decode(buf: &[u8]) -> Result<Self, PacketError> {
         check_type_size(buf, PACKET_TYPE_SERVER_PONG, SERVER_PONG_BYTES)?;
-        Ok(Self { echo: read_u64(buf, PACKET_BODY_OFFSET) })
+        Ok(Self {
+            echo: read_u64(buf, PACKET_BODY_OFFSET),
+        })
     }
     pub fn encode(&self, buf: &mut [u8]) -> Result<usize, PacketError> {
         require_size(buf, SERVER_PONG_BYTES)?;
@@ -308,79 +326,108 @@ pub enum Packet {
     ServerPong(ServerPongPacket),
     // CLIENT_TO_SERVER and SERVER_TO_CLIENT carry variable payloads;
     // they are decoded by RouteManager (header verification needed first).
-    ClientToServer { relay_header: [u8; HEADER_BYTES], payload_offset: usize },
-    ServerToClient { relay_header: [u8; HEADER_BYTES], payload_offset: usize },
+    ClientToServer {
+        relay_header: [u8; HEADER_BYTES],
+        payload_offset: usize,
+    },
+    ServerToClient {
+        relay_header: [u8; HEADER_BYTES],
+        payload_offset: usize,
+    },
 }
 pub fn decode(buf: &[u8]) -> Result<Packet, PacketError> {
     if buf.is_empty() {
         return Err(PacketError::TooSmall { need: 1, got: 0 });
     }
     match buf[0] {
-        t if t == PACKET_TYPE_ROUTE_RESPONSE    => Ok(Packet::RouteResponse(RouteResponsePacket::decode(buf)?)),
-        t if t == PACKET_TYPE_SESSION_PING      => Ok(Packet::SessionPing(SessionPingPacket::decode(buf)?)),
-        t if t == PACKET_TYPE_SESSION_PONG      => Ok(Packet::SessionPong(SessionPongPacket::decode(buf)?)),
-        t if t == PACKET_TYPE_CONTINUE_RESPONSE => Ok(Packet::ContinueResponse(ContinueResponsePacket::decode(buf)?)),
-        t if t == PACKET_TYPE_CLIENT_PING       => Ok(Packet::ClientPing(ClientPingPacket::decode(buf)?)),
-        t if t == PACKET_TYPE_CLIENT_PONG       => Ok(Packet::ClientPong(ClientPongPacket::decode(buf)?)),
-        t if t == PACKET_TYPE_RELAY_PING        => Ok(Packet::RelayPing(RelayPingPacket::decode(buf)?)),
-        t if t == PACKET_TYPE_RELAY_PONG        => Ok(Packet::RelayPong(RelayPongPacket::decode(buf)?)),
-        t if t == PACKET_TYPE_SERVER_PING       => Ok(Packet::ServerPing(ServerPingPacket::decode(buf)?)),
-        t if t == PACKET_TYPE_SERVER_PONG       => Ok(Packet::ServerPong(ServerPongPacket::decode(buf)?)),
-        t if t == PACKET_TYPE_CLIENT_TO_SERVER  => {
+        t if t == PACKET_TYPE_ROUTE_RESPONSE => {
+            Ok(Packet::RouteResponse(RouteResponsePacket::decode(buf)?))
+        }
+        t if t == PACKET_TYPE_SESSION_PING => {
+            Ok(Packet::SessionPing(SessionPingPacket::decode(buf)?))
+        }
+        t if t == PACKET_TYPE_SESSION_PONG => {
+            Ok(Packet::SessionPong(SessionPongPacket::decode(buf)?))
+        }
+        t if t == PACKET_TYPE_CONTINUE_RESPONSE => Ok(Packet::ContinueResponse(
+            ContinueResponsePacket::decode(buf)?,
+        )),
+        t if t == PACKET_TYPE_CLIENT_PING => Ok(Packet::ClientPing(ClientPingPacket::decode(buf)?)),
+        t if t == PACKET_TYPE_CLIENT_PONG => Ok(Packet::ClientPong(ClientPongPacket::decode(buf)?)),
+        t if t == PACKET_TYPE_RELAY_PING => Ok(Packet::RelayPing(RelayPingPacket::decode(buf)?)),
+        t if t == PACKET_TYPE_RELAY_PONG => Ok(Packet::RelayPong(RelayPongPacket::decode(buf)?)),
+        t if t == PACKET_TYPE_SERVER_PING => Ok(Packet::ServerPing(ServerPingPacket::decode(buf)?)),
+        t if t == PACKET_TYPE_SERVER_PONG => Ok(Packet::ServerPong(ServerPongPacket::decode(buf)?)),
+        t if t == PACKET_TYPE_CLIENT_TO_SERVER => {
             if buf.len() < PACKET_BODY_OFFSET + HEADER_BYTES {
-                return Err(PacketError::TooSmall { need: PACKET_BODY_OFFSET + HEADER_BYTES, got: buf.len() });
+                return Err(PacketError::TooSmall {
+                    need: PACKET_BODY_OFFSET + HEADER_BYTES,
+                    got: buf.len(),
+                });
             }
             let mut hdr = [0u8; HEADER_BYTES];
             hdr.copy_from_slice(&buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + HEADER_BYTES]);
-            Ok(Packet::ClientToServer { relay_header: hdr, payload_offset: PACKET_BODY_OFFSET + HEADER_BYTES })
+            Ok(Packet::ClientToServer {
+                relay_header: hdr,
+                payload_offset: PACKET_BODY_OFFSET + HEADER_BYTES,
+            })
         }
-        t if t == PACKET_TYPE_SERVER_TO_CLIENT  => {
+        t if t == PACKET_TYPE_SERVER_TO_CLIENT => {
             if buf.len() < PACKET_BODY_OFFSET + HEADER_BYTES {
-                return Err(PacketError::TooSmall { need: PACKET_BODY_OFFSET + HEADER_BYTES, got: buf.len() });
+                return Err(PacketError::TooSmall {
+                    need: PACKET_BODY_OFFSET + HEADER_BYTES,
+                    got: buf.len(),
+                });
             }
             let mut hdr = [0u8; HEADER_BYTES];
             hdr.copy_from_slice(&buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + HEADER_BYTES]);
-            Ok(Packet::ServerToClient { relay_header: hdr, payload_offset: PACKET_BODY_OFFSET + HEADER_BYTES })
+            Ok(Packet::ServerToClient {
+                relay_header: hdr,
+                payload_offset: PACKET_BODY_OFFSET + HEADER_BYTES,
+            })
         }
-        t => Err(PacketError::WrongType { expected: 0, got: t }),
+        t => Err(PacketError::WrongType {
+            expected: 0,
+            got: t,
+        }),
     }
 }
 // ── Validation helpers ────────────────────────────────────────────────────────
 fn check_type_size(buf: &[u8], expected_type: u8, expected_size: usize) -> Result<(), PacketError> {
-    if buf.len() < 1 {
+    if buf.is_empty() {
         return Err(PacketError::TooSmall { need: 1, got: 0 });
     }
     if buf[0] != expected_type {
-        return Err(PacketError::WrongType { expected: expected_type, got: buf[0] });
+        return Err(PacketError::WrongType {
+            expected: expected_type,
+            got: buf[0],
+        });
     }
     if buf.len() != expected_size {
-        return Err(PacketError::WrongSize { expected: expected_size, got: buf.len() });
+        return Err(PacketError::WrongSize {
+            expected: expected_size,
+            got: buf.len(),
+        });
     }
     Ok(())
 }
 fn require_size(buf: &[u8], need: usize) -> Result<(), PacketError> {
     if buf.len() < need {
-        Err(PacketError::TooSmall { need, got: buf.len() })
+        Err(PacketError::TooSmall {
+            need,
+            got: buf.len(),
+        })
     } else {
         Ok(())
     }
 }
 // ── Packet type constants (re-exported from constants for convenience) ─────────
 pub use crate::constants::{
-    PACKET_TYPE_ROUTE_REQUEST    as PACKET_TYPE_ROUTE_REQUEST,
-    PACKET_TYPE_ROUTE_RESPONSE   as PACKET_TYPE_ROUTE_RESPONSE,
-    PACKET_TYPE_CLIENT_TO_SERVER as PACKET_TYPE_CLIENT_TO_SERVER,
-    PACKET_TYPE_SERVER_TO_CLIENT as PACKET_TYPE_SERVER_TO_CLIENT,
-    PACKET_TYPE_SESSION_PING     as PACKET_TYPE_SESSION_PING,
-    PACKET_TYPE_SESSION_PONG     as PACKET_TYPE_SESSION_PONG,
-    PACKET_TYPE_CONTINUE_REQUEST as PACKET_TYPE_CONTINUE_REQUEST,
-    PACKET_TYPE_CONTINUE_RESPONSE as PACKET_TYPE_CONTINUE_RESPONSE,
-    PACKET_TYPE_CLIENT_PING      as PACKET_TYPE_CLIENT_PING,
-    PACKET_TYPE_CLIENT_PONG      as PACKET_TYPE_CLIENT_PONG,
-    PACKET_TYPE_RELAY_PING       as PACKET_TYPE_RELAY_PING,
-    PACKET_TYPE_RELAY_PONG       as PACKET_TYPE_RELAY_PONG,
-    PACKET_TYPE_SERVER_PING      as PACKET_TYPE_SERVER_PING,
-    PACKET_TYPE_SERVER_PONG      as PACKET_TYPE_SERVER_PONG,
+    PACKET_TYPE_CLIENT_PING, PACKET_TYPE_CLIENT_PONG, PACKET_TYPE_CLIENT_TO_SERVER,
+    PACKET_TYPE_CONTINUE_REQUEST, PACKET_TYPE_CONTINUE_RESPONSE, PACKET_TYPE_RELAY_PING,
+    PACKET_TYPE_RELAY_PONG, PACKET_TYPE_ROUTE_REQUEST, PACKET_TYPE_ROUTE_RESPONSE,
+    PACKET_TYPE_SERVER_PING, PACKET_TYPE_SERVER_PONG, PACKET_TYPE_SERVER_TO_CLIENT,
+    PACKET_TYPE_SESSION_PING, PACKET_TYPE_SESSION_PONG,
 };
 // ── Tests ─────────────────────────────────────────────────────────────────────
 #[cfg(test)]
@@ -389,16 +436,16 @@ mod tests {
     // ── Fixed-size packet size assertions ─────────────────────────────────────
     #[test]
     fn packet_size_constants() {
-        assert_eq!(ROUTE_RESPONSE_BYTES,    43);
-        assert_eq!(SESSION_PING_BYTES,      51);
-        assert_eq!(SESSION_PONG_BYTES,      51);
+        assert_eq!(ROUTE_RESPONSE_BYTES, 43);
+        assert_eq!(SESSION_PING_BYTES, 51);
+        assert_eq!(SESSION_PONG_BYTES, 51);
         assert_eq!(CONTINUE_RESPONSE_BYTES, 43);
-        assert_eq!(CLIENT_PING_BYTES,       74);
-        assert_eq!(CLIENT_PONG_BYTES,       34);
-        assert_eq!(RELAY_PING_BYTES,        67);
-        assert_eq!(RELAY_PONG_BYTES,        26);
-        assert_eq!(SERVER_PING_BYTES,       66);
-        assert_eq!(SERVER_PONG_BYTES,       26);
+        assert_eq!(CLIENT_PING_BYTES, 74);
+        assert_eq!(CLIENT_PONG_BYTES, 34);
+        assert_eq!(RELAY_PING_BYTES, 67);
+        assert_eq!(RELAY_PONG_BYTES, 26);
+        assert_eq!(SERVER_PING_BYTES, 66);
+        assert_eq!(SERVER_PONG_BYTES, 26);
     }
     // ── RouteResponse roundtrip ───────────────────────────────────────────────
     #[test]
@@ -427,7 +474,10 @@ mod tests {
     #[test]
     fn session_ping_roundtrip() {
         let hdr = [0x11u8; HEADER_BYTES];
-        let pkt = SessionPingPacket { relay_header: hdr, ping_sequence: 0xDEAD_BEEF_1234_5678 };
+        let pkt = SessionPingPacket {
+            relay_header: hdr,
+            ping_sequence: 0xDEAD_BEEF_1234_5678,
+        };
         let mut buf = [0u8; SESSION_PING_BYTES];
         let len = pkt.encode(&mut buf).unwrap();
         assert_eq!(len, SESSION_PING_BYTES);
@@ -471,7 +521,10 @@ mod tests {
     fn client_ping_roundtrip() {
         let tok = [0x77u8; RELAY_PING_TOKEN_BYTES];
         let pkt = ClientPingPacket {
-            echo: 0xCAFE, session_id: 0xBEEF, expire_timestamp: 1234567, ping_token: tok,
+            echo: 0xCAFE,
+            session_id: 0xBEEF,
+            expire_timestamp: 1234567,
+            ping_token: tok,
         };
         let mut buf = [0u8; CLIENT_PING_BYTES];
         let len = pkt.encode(&mut buf).unwrap();
@@ -486,7 +539,10 @@ mod tests {
     // ── ClientPong roundtrip ──────────────────────────────────────────────────
     #[test]
     fn client_pong_roundtrip() {
-        let pkt = ClientPongPacket { echo: 0xCAFE, session_id: 0xBEEF };
+        let pkt = ClientPongPacket {
+            echo: 0xCAFE,
+            session_id: 0xBEEF,
+        };
         let mut buf = [0u8; CLIENT_PONG_BYTES];
         pkt.encode(&mut buf).unwrap();
         assert_eq!(buf[0], PACKET_TYPE_CLIENT_PONG);
@@ -498,7 +554,11 @@ mod tests {
     #[test]
     fn server_ping_roundtrip() {
         let tok = [0x33u8; RELAY_PING_TOKEN_BYTES];
-        let pkt = ServerPingPacket { echo: 7777, expire_timestamp: 8888, ping_token: tok };
+        let pkt = ServerPingPacket {
+            echo: 7777,
+            expire_timestamp: 8888,
+            ping_token: tok,
+        };
         let mut buf = [0u8; SERVER_PING_BYTES];
         let len = pkt.encode(&mut buf).unwrap();
         assert_eq!(len, SERVER_PING_BYTES);

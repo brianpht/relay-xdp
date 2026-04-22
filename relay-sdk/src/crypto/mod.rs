@@ -7,10 +7,10 @@
 // All NaCl / BLAKE2 / Ed25519 / KX from rust-sdk are intentionally omitted.
 
 use chacha20poly1305::{
-    XChaCha20Poly1305,
     aead::{Aead, KeyInit, Payload},
+    XChaCha20Poly1305,
 };
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -66,7 +66,10 @@ pub fn xchacha_encrypt(
     cipher
         .encrypt(
             nonce.into(),
-            Payload { msg: plaintext, aad },
+            Payload {
+                msg: plaintext,
+                aad,
+            },
         )
         .expect("XChaCha20-Poly1305 encrypt should not fail with valid key/nonce")
 }
@@ -90,7 +93,10 @@ pub fn xchacha_decrypt(
     cipher
         .decrypt(
             nonce.into(),
-            Payload { msg: ciphertext, aad },
+            Payload {
+                msg: ciphertext,
+                aad,
+            },
         )
         .map_err(|_| CryptoError::DecryptFailed)
 }
@@ -105,10 +111,7 @@ mod tests {
     fn sha256_known_vector() {
         // SHA-256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
         let hash = hash_sha256(b"");
-        assert_eq!(
-            hash[..4],
-            [0xe3, 0xb0, 0xc4, 0x42]
-        );
+        assert_eq!(hash[..4], [0xe3, 0xb0, 0xc4, 0x42]);
     }
 
     #[test]
@@ -168,4 +171,3 @@ mod tests {
         assert!(xchacha_decrypt(&short, &nonce, &key, &[]).is_err());
     }
 }
-

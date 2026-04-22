@@ -7,7 +7,7 @@
 //
 // Constants match relay-xdp-common: RELAY_ADDRESS_NONE/IPV4/IPV6
 
-use crate::constants::{ADDRESS_NONE, ADDRESS_IPV4, ADDRESS_IPV6};
+use crate::constants::{ADDRESS_IPV4, ADDRESS_IPV6, ADDRESS_NONE};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
@@ -25,19 +25,14 @@ pub enum AddressError {
 
 // ── Address ────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Address {
+    #[default]
     None,
     /// IPv4 address. `octets` are in network byte order (big-endian).
     V4 { octets: [u8; 4], port: u16 },
     /// IPv6 address. `words` are in network byte order (host u16 values).
     V6 { words: [u16; 8], port: u16 },
-}
-
-impl Default for Address {
-    fn default() -> Self {
-        Address::None
-    }
 }
 
 impl Address {
@@ -68,8 +63,8 @@ impl Address {
     pub fn encoded_len(&self) -> usize {
         match self {
             Address::None => 1,
-            Address::V4 { .. } => 7,   // 1 + 4 + 2
-            Address::V6 { .. } => 19,  // 1 + 16 + 2
+            Address::V4 { .. } => 7,  // 1 + 4 + 2
+            Address::V6 { .. } => 19, // 1 + 16 + 2
         }
     }
 
@@ -86,7 +81,10 @@ impl Address {
             }
             Address::V4 { octets, port } => {
                 if buf.len() < 7 {
-                    return Err(AddressError::BufferTooSmall { need: 7, have: buf.len() });
+                    return Err(AddressError::BufferTooSmall {
+                        need: 7,
+                        have: buf.len(),
+                    });
                 }
                 buf[0] = ADDRESS_IPV4;
                 buf[1..5].copy_from_slice(octets);
@@ -95,7 +93,10 @@ impl Address {
             }
             Address::V6 { words, port } => {
                 if buf.len() < 19 {
-                    return Err(AddressError::BufferTooSmall { need: 19, have: buf.len() });
+                    return Err(AddressError::BufferTooSmall {
+                        need: 19,
+                        have: buf.len(),
+                    });
                 }
                 buf[0] = ADDRESS_IPV6;
                 for (i, w) in words.iter().enumerate() {
@@ -118,7 +119,10 @@ impl Address {
             t if t == ADDRESS_NONE => Ok((Address::None, 1)),
             t if t == ADDRESS_IPV4 => {
                 if buf.len() < 7 {
-                    return Err(AddressError::BufferTooSmall { need: 7, have: buf.len() });
+                    return Err(AddressError::BufferTooSmall {
+                        need: 7,
+                        have: buf.len(),
+                    });
                 }
                 let octets = [buf[1], buf[2], buf[3], buf[4]];
                 let port = u16::from_le_bytes([buf[5], buf[6]]);
@@ -126,7 +130,10 @@ impl Address {
             }
             t if t == ADDRESS_IPV6 => {
                 if buf.len() < 19 {
-                    return Err(AddressError::BufferTooSmall { need: 19, have: buf.len() });
+                    return Err(AddressError::BufferTooSmall {
+                        need: 19,
+                        have: buf.len(),
+                    });
                 }
                 let mut words = [0u16; 8];
                 for (i, w) in words.iter_mut().enumerate() {
@@ -145,12 +152,15 @@ impl fmt::Display for Address {
         match self {
             Address::None => write!(f, "NONE"),
             Address::V4 { octets, port } => {
-                write!(f, "{}.{}.{}.{}:{}", octets[0], octets[1], octets[2], octets[3], port)
+                write!(
+                    f,
+                    "{}.{}.{}.{}:{}",
+                    octets[0], octets[1], octets[2], octets[3], port
+                )
             }
             Address::V6 { words, port } => {
                 let addr = Ipv6Addr::new(
-                    words[0], words[1], words[2], words[3],
-                    words[4], words[5], words[6], words[7],
+                    words[0], words[1], words[2], words[3], words[4], words[5], words[6], words[7],
                 );
                 write!(f, "[{}]:{}", addr, port)
             }
@@ -165,7 +175,9 @@ impl FromStr for Address {
         if s.eq_ignore_ascii_case("none") {
             return Ok(Address::None);
         }
-        let sa: SocketAddr = s.parse().map_err(|e: std::net::AddrParseError| e.to_string())?;
+        let sa: SocketAddr = s
+            .parse()
+            .map_err(|e: std::net::AddrParseError| e.to_string())?;
         Ok(Address::from(sa))
     }
 }
@@ -173,8 +185,14 @@ impl FromStr for Address {
 impl From<SocketAddr> for Address {
     fn from(sa: SocketAddr) -> Self {
         match sa.ip() {
-            IpAddr::V4(v4) => Address::V4 { octets: v4.octets(), port: sa.port() },
-            IpAddr::V6(v6) => Address::V6 { words: v6.segments(), port: sa.port() },
+            IpAddr::V4(v4) => Address::V4 {
+                octets: v4.octets(),
+                port: sa.port(),
+            },
+            IpAddr::V6(v6) => Address::V6 {
+                words: v6.segments(),
+                port: sa.port(),
+            },
         }
     }
 }
@@ -209,13 +227,19 @@ mod tests {
 
     #[test]
     fn ipv4_roundtrip() {
-        let a = Address::V4 { octets: [192, 168, 1, 1], port: 40000 };
+        let a = Address::V4 {
+            octets: [192, 168, 1, 1],
+            port: 40000,
+        };
         assert_eq!(roundtrip(a), a);
     }
 
     #[test]
     fn ipv6_roundtrip() {
-        let a = Address::V6 { words: [0x2001, 0xdb8, 0, 0, 0, 0, 0, 1], port: 443 };
+        let a = Address::V6 {
+            words: [0x2001, 0xdb8, 0, 0, 0, 0, 0, 1],
+            port: 443,
+        };
         assert_eq!(roundtrip(a), a);
     }
 
@@ -227,12 +251,21 @@ mod tests {
     #[test]
     fn parse_ipv4() {
         let a: Address = "127.0.0.1:8080".parse().unwrap();
-        assert_eq!(a, Address::V4 { octets: [127, 0, 0, 1], port: 8080 });
+        assert_eq!(
+            a,
+            Address::V4 {
+                octets: [127, 0, 0, 1],
+                port: 8080
+            }
+        );
     }
 
     #[test]
     fn display_ipv4() {
-        let a = Address::V4 { octets: [10, 0, 0, 1], port: 9999 };
+        let a = Address::V4 {
+            octets: [10, 0, 0, 1],
+            port: 9999,
+        };
         assert_eq!(a.to_string(), "10.0.0.1:9999");
     }
 
@@ -240,19 +273,36 @@ mod tests {
     fn ipv4_wire_bytes() {
         // 10.0.0.1:40000 -> [1][10][0][0][1][0x40][0x9C]
         // port 40000 = 0x9C40, LE -> [0x40, 0x9C]
-        let a = Address::V4 { octets: [10, 0, 0, 1], port: 40000 };
+        let a = Address::V4 {
+            octets: [10, 0, 0, 1],
+            port: 40000,
+        };
         let mut buf = [0u8; 8];
         let n = a.encode(&mut buf).unwrap();
         assert_eq!(n, 7);
-        assert_eq!(buf[0], 1);                          // ADDRESS_IPV4
-        assert_eq!(&buf[1..5], &[10, 0, 0, 1]);         // octets BE
+        assert_eq!(buf[0], 1); // ADDRESS_IPV4
+        assert_eq!(&buf[1..5], &[10, 0, 0, 1]); // octets BE
         assert_eq!(u16::from_le_bytes([buf[5], buf[6]]), 40000); // port LE
     }
 
     #[test]
     fn encoded_len() {
         assert_eq!(Address::None.encoded_len(), 1);
-        assert_eq!(Address::V4 { octets: [0; 4], port: 0 }.encoded_len(), 7);
-        assert_eq!(Address::V6 { words: [0; 8], port: 0 }.encoded_len(), 19);
+        assert_eq!(
+            Address::V4 {
+                octets: [0; 4],
+                port: 0
+            }
+            .encoded_len(),
+            7
+        );
+        assert_eq!(
+            Address::V6 {
+                words: [0; 8],
+                port: 0
+            }
+            .encoded_len(),
+            19
+        );
     }
 }

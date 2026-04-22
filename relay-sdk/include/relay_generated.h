@@ -128,6 +128,12 @@
 
 #define relay_RELAY_PING_KEY_BYTES 32
 
+#define relay_CLIENT_STATE_CLOSED 0
+
+#define relay_CLIENT_STATE_OPEN 1
+
+#define relay_CLIENT_STATE_ERROR -1
+
 /**
  * XChaCha20-Poly1305 nonce size in bytes (matches relay-xdp-common XCHACHA20POLY1305_NONCE_SIZE).
  */
@@ -147,10 +153,6 @@
  * SHA-256 output size.
  */
 #define relay_SHA256_BYTES 32
-
-#define relay_ROUTE_TOKEN_BYTES 71
-
-#define relay_CONTINUE_TOKEN_BYTES 17
 
 #define relay_ROUTE_RESPONSE_BYTES (relay_PACKET_BODY_OFFSET + relay_HEADER_BYTES)
 
@@ -172,14 +174,12 @@
 
 #define relay_SERVER_PONG_BYTES (relay_PACKET_BODY_OFFSET + 8)
 
-#define relay_CLIENT_STATE_CLOSED 0
-
-#define relay_CLIENT_STATE_OPEN 1
-
-#define relay_CLIENT_STATE_ERROR -1
-
 #define relay_SERVER_STATE_CLOSED 0
 
 #define relay_SERVER_STATE_OPEN 1
+
+#define relay_ROUTE_TOKEN_BYTES 71
+
+#define relay_CONTINUE_TOKEN_BYTES 17
 
 #endif  /* RELAY_GENERATED_H */

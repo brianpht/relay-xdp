@@ -1,10 +1,10 @@
-/// Port of route sub-trackers from sdk/include/:
-///   next_replay_protection.h
-///   next_packet_loss_tracker.h
-///   next_ping_history.h
-///   next_bandwidth_limiter.h
-///
-/// These are building blocks for RouteManager (mod.rs in this directory).
+//! Port of route sub-trackers from sdk/include/:
+//!   next_replay_protection.h
+//!   next_packet_loss_tracker.h
+//!   next_ping_history.h
+//!   next_bandwidth_limiter.h
+//!
+//! These are building blocks for RouteManager (mod.rs in this directory).
 
 use crate::constants::*;
 
@@ -18,11 +18,10 @@ pub struct ReplayProtection {
 
 impl ReplayProtection {
     pub fn new() -> Self {
-        let mut rp = ReplayProtection {
+        ReplayProtection {
             most_recent_sequence: 0,
             received_packet: Box::new([u64::MAX; REPLAY_PROTECTION_BUFFER_SIZE]),
-        };
-        rp
+        }
     }
 
     pub fn reset(&mut self) {
@@ -52,7 +51,9 @@ impl ReplayProtection {
 }
 
 impl Default for ReplayProtection {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── PacketLossTracker ──────────────────────────────────────────────────────
@@ -88,11 +89,9 @@ impl PacketLossTracker {
     /// Returns number of lost packets since last call.
     pub fn update(&mut self) -> u32 {
         let start = self.last_packet_processed + 1;
-        let finish = if self.most_recent_packet_received > PACKET_LOSS_TRACKER_SAFETY {
-            self.most_recent_packet_received - PACKET_LOSS_TRACKER_SAFETY
-        } else {
-            0
-        };
+        let finish = self
+            .most_recent_packet_received
+            .saturating_sub(PACKET_LOSS_TRACKER_SAFETY);
 
         if finish > start && finish - start > PACKET_LOSS_TRACKER_HISTORY as u64 {
             self.last_packet_processed = self.most_recent_packet_received;
@@ -114,7 +113,9 @@ impl PacketLossTracker {
 }
 
 impl Default for PacketLossTracker {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── PingHistory ────────────────────────────────────────────────────────────
@@ -142,11 +143,13 @@ impl PingHistory {
     pub fn new() -> Self {
         PingHistory {
             sequence: 0,
-            entries: Box::new([PingHistoryEntry {
-                sequence: u64::MAX,
-                time_ping_sent: -1.0,
-                time_pong_received: -1.0,
-            }; PING_HISTORY_ENTRY_COUNT]),
+            entries: Box::new(
+                [PingHistoryEntry {
+                    sequence: u64::MAX,
+                    time_ping_sent: -1.0,
+                    time_pong_received: -1.0,
+                }; PING_HISTORY_ENTRY_COUNT],
+            ),
         }
     }
 
@@ -182,19 +185,26 @@ impl PingHistory {
     pub fn route_stats(&self, start: f64, end: f64) -> RouteStats {
         let safety = PING_SAFETY;
         let start = start.max(safety);
-        let mut stats = RouteStats { rtt: 0.0, jitter: 0.0, packet_loss: 100.0 };
+        let mut stats = RouteStats {
+            rtt: 0.0,
+            jitter: 0.0,
+            packet_loss: 100.0,
+        };
 
         // Find most recent ping that got a pong
         let mut most_recent_pong = 0.0f64;
         for e in self.entries.iter() {
-            if e.time_ping_sent >= start && e.time_ping_sent <= end
+            if e.time_ping_sent >= start
+                && e.time_ping_sent <= end
                 && e.time_pong_received >= e.time_ping_sent
                 && e.time_pong_received > most_recent_pong
             {
                 most_recent_pong = e.time_pong_received;
             }
         }
-        if most_recent_pong <= 0.0 { return stats; }
+        if most_recent_pong <= 0.0 {
+            return stats;
+        }
         let end = most_recent_pong - safety;
 
         let mut min_rtt = f64::MAX;
@@ -205,7 +215,9 @@ impl PingHistory {
                 num_sent += 1;
                 if e.time_pong_received >= e.time_ping_sent {
                     let rtt = e.time_pong_received - e.time_ping_sent;
-                    if rtt < min_rtt { min_rtt = rtt; }
+                    if rtt < min_rtt {
+                        min_rtt = rtt;
+                    }
                     num_recv += 1;
                 }
             }
@@ -218,7 +230,8 @@ impl PingHistory {
             let mut total_err = 0.0f64;
             let mut jitter_samples = 0;
             for e in self.entries.iter() {
-                if e.time_ping_sent >= start && e.time_ping_sent <= end
+                if e.time_ping_sent >= start
+                    && e.time_ping_sent <= end
                     && e.time_pong_received > e.time_ping_sent
                 {
                     let rtt = e.time_pong_received - e.time_ping_sent;
@@ -235,7 +248,9 @@ impl PingHistory {
 }
 
 impl Default for PingHistory {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── BandwidthLimiter ───────────────────────────────────────────────────────
@@ -248,7 +263,11 @@ pub struct BandwidthLimiter {
 
 impl BandwidthLimiter {
     pub fn new() -> Self {
-        BandwidthLimiter { bits_sent: 0, last_check_time: -100.0, average_kbps: 0.0 }
+        BandwidthLimiter {
+            bits_sent: 0,
+            last_check_time: -100.0,
+            average_kbps: 0.0,
+        }
     }
 
     pub fn reset(&mut self) {
@@ -258,23 +277,31 @@ impl BandwidthLimiter {
     }
 
     fn add_sample(&mut self, kbps: f64) {
-        if self.average_kbps == 0.0 && kbps != 0.0 { self.average_kbps = kbps; return; }
-        if self.average_kbps != 0.0 && kbps == 0.0 { self.average_kbps = 0.0; return; }
+        if self.average_kbps == 0.0 && kbps != 0.0 {
+            self.average_kbps = kbps;
+            return;
+        }
+        if self.average_kbps != 0.0 && kbps == 0.0 {
+            self.average_kbps = 0.0;
+            return;
+        }
         let delta = kbps - self.average_kbps;
-        if delta < 0.000001 { self.average_kbps = kbps; return; }
+        if delta < 0.000001 {
+            self.average_kbps = kbps;
+            return;
+        }
         self.average_kbps += delta * 0.1;
     }
 
     /// Returns `true` if the packet would exceed `kbps_allowed`.
     pub fn add_packet(&mut self, current_time: f64, kbps_allowed: u32, packet_bits: u32) -> bool {
         let invalid = self.last_check_time < 0.0;
-        let new_period = (current_time - self.last_check_time) >= BANDWIDTH_LIMITER_INTERVAL - 0.00001;
+        let new_period =
+            (current_time - self.last_check_time) >= BANDWIDTH_LIMITER_INTERVAL - 0.00001;
 
         if invalid || new_period {
             if new_period {
-                let kbps = self.bits_sent as f64
-                    / (current_time - self.last_check_time)
-                    / 1000.0;
+                let kbps = self.bits_sent as f64 / (current_time - self.last_check_time) / 1000.0;
                 self.add_sample(kbps);
             }
             self.bits_sent = 0;
@@ -295,7 +322,9 @@ pub fn wire_packet_bits(payload_bytes: usize) -> u32 {
 }
 
 impl Default for BandwidthLimiter {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -341,7 +370,9 @@ mod tests {
         let mut tracker = PacketLossTracker::new();
         // send 0..100, skip 50
         for i in 0u64..100 {
-            if i != 50 { tracker.packet_received(i); }
+            if i != 50 {
+                tracker.packet_received(i);
+            }
         }
         for _ in 0..(PACKET_LOSS_TRACKER_SAFETY + 5) as u64 {
             tracker.packet_received(100);
@@ -378,4 +409,3 @@ mod tests {
         assert!(bits > 0);
     }
 }
-

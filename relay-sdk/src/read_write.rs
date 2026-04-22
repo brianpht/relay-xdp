@@ -1,7 +1,7 @@
-/// Port of sdk/include/next_read_write.h
-///
-/// Flat little-endian byte serialization used by tokens and packet headers.
-/// This is distinct from the bitpacking stream (mod stream).
+//! Port of sdk/include/next_read_write.h
+//!
+//! Flat little-endian byte serialization used by tokens and packet headers.
+//! This is distinct from the bitpacking stream (mod stream).
 
 use crate::address::Address;
 use crate::constants::*;
@@ -30,7 +30,9 @@ impl<'a> WriteBuf<'a> {
         WriteBuf { buf, pos: 0 }
     }
 
-    pub fn pos(&self) -> usize { self.pos }
+    pub fn pos(&self) -> usize {
+        self.pos
+    }
 
     pub fn write_u8(&mut self, v: u8) -> RwResult<()> {
         self.check_write(1)?;
@@ -78,7 +80,9 @@ impl<'a> WriteBuf<'a> {
             }
             Address::V6 { words, port } => {
                 self.write_u8(ADDRESS_IPV6)?;
-                for w in words { self.write_u16_le(*w)?; }
+                for w in words {
+                    self.write_u16_le(*w)?;
+                }
                 self.write_u16_le(*port)
             }
         }
@@ -105,9 +109,13 @@ impl<'a> ReadBuf<'a> {
         ReadBuf { buf, pos: 0 }
     }
 
-    pub fn pos(&self) -> usize { self.pos }
+    pub fn pos(&self) -> usize {
+        self.pos
+    }
 
-    pub fn remaining(&self) -> usize { self.buf.len() - self.pos }
+    pub fn remaining(&self) -> usize {
+        self.buf.len() - self.pos
+    }
 
     pub fn read_u8(&mut self) -> RwResult<u8> {
         self.check_read(1)?;
@@ -165,7 +173,9 @@ impl<'a> ReadBuf<'a> {
             }
             t if t == ADDRESS_IPV6 => {
                 let mut words = [0u16; 8];
-                for w in words.iter_mut() { *w = self.read_u16_le()?; }
+                for w in words.iter_mut() {
+                    *w = self.read_u16_le()?;
+                }
                 let port = self.read_u16_le()?;
                 Ok(Address::V6 { words, port })
             }
@@ -208,7 +218,10 @@ mod tests {
 
     #[test]
     fn roundtrip_address_ipv4() {
-        let addr = Address::V4 { octets: [10, 0, 0, 1], port: 40000 };
+        let addr = Address::V4 {
+            octets: [10, 0, 0, 1],
+            port: 40000,
+        };
         let mut buf = [0u8; 16];
         let mut w = WriteBuf::new(&mut buf);
         w.write_address(&addr).unwrap();
@@ -219,7 +232,10 @@ mod tests {
 
     #[test]
     fn roundtrip_address_ipv6() {
-        let addr = Address::V6 { words: [0x2001, 0xdb8, 0, 0, 0, 0, 0, 1], port: 443 };
+        let addr = Address::V6 {
+            words: [0x2001, 0xdb8, 0, 0, 0, 0, 0, 1],
+            port: 443,
+        };
         let mut buf = [0u8; 32];
         let mut w = WriteBuf::new(&mut buf);
         w.write_address(&addr).unwrap();
@@ -242,4 +258,3 @@ mod tests {
         assert!(w.write_u16_le(1).is_err());
     }
 }
-

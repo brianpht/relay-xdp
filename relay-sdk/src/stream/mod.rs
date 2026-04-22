@@ -1,16 +1,18 @@
-/// Port of next_stream.h — WriteStream / ReadStream + serialize macros.
-///
-/// Design: a single `trait Stream` with const IS_WRITING allows callers
-/// to write one `serialize_*` function body that compiles to both read
-/// and write paths (same as the C++ template trick).
+//! Port of next_stream.h - WriteStream / ReadStream + serialize macros.
+//!
+//! Design: a single `trait Stream` with const IS_WRITING allows callers
+//! to write one `serialize_*` function body that compiles to both read
+//! and write paths (same as the C++ template trick).
 
-use crate::bitpacker::{BitReader, BitWriter, bits_required};
+use crate::bitpacker::{bits_required, BitReader, BitWriter};
 
 // ── Trait ──────────────────────────────────────────────────────────────────
 
 pub trait Stream {
     const IS_WRITING: bool;
-    fn is_writing(&self) -> bool { Self::IS_WRITING }
+    fn is_writing(&self) -> bool {
+        Self::IS_WRITING
+    }
     fn serialize_bits(&mut self, value: &mut u32, bits: u32) -> bool;
     fn serialize_bytes(&mut self, data: &mut [u8]) -> bool;
     fn serialize_align(&mut self) -> bool;
@@ -47,7 +49,9 @@ pub struct WriteStream {
 
 impl WriteStream {
     pub fn new(bytes: usize) -> Self {
-        WriteStream { writer: BitWriter::new(bytes) }
+        WriteStream {
+            writer: BitWriter::new(bytes),
+        }
     }
 
     pub fn flush(&mut self) {
@@ -99,7 +103,9 @@ pub struct ReadStream<'a> {
 
 impl<'a> ReadStream<'a> {
     pub fn new(data: &'a [u8]) -> Self {
-        ReadStream { reader: BitReader::new(data) }
+        ReadStream {
+            reader: BitReader::new(data),
+        }
     }
 }
 
@@ -142,7 +148,7 @@ impl<'a> Stream for ReadStream<'a> {
     }
 
     fn get_bytes_processed(&self) -> usize {
-        (self.reader.get_bits_read() + 7) / 8
+        self.reader.get_bits_read().div_ceil(8)
     }
 }
 
@@ -159,7 +165,9 @@ macro_rules! serialize_bits {
             return Err($crate::stream::SerializeError::ReadPastEnd);
         }
         if !writing {
-            $value = tmp.try_into().map_err(|_| $crate::stream::SerializeError::OutOfRange)?;
+            $value = tmp
+                .try_into()
+                .map_err(|_| $crate::stream::SerializeError::OutOfRange)?;
         }
     }};
 }
@@ -191,7 +199,9 @@ macro_rules! serialize_int {
             return Err($crate::stream::SerializeError::OutOfRange);
         }
         if !writing {
-            $value = tmp.try_into().map_err(|_| $crate::stream::SerializeError::OutOfRange)?;
+            $value = tmp
+                .try_into()
+                .map_err(|_| $crate::stream::SerializeError::OutOfRange)?;
         }
     }};
 }
@@ -202,8 +212,16 @@ macro_rules! serialize_uint64 {
     ($stream:expr, $value:expr) => {{
         use $crate::stream::Stream;
         let writing = $stream.is_writing();
-        let mut lo: u32 = if writing { ($value & 0xFFFF_FFFF) as u32 } else { 0 };
-        let mut hi: u32 = if writing { (($value >> 32) & 0xFFFF_FFFF) as u32 } else { 0 };
+        let mut lo: u32 = if writing {
+            ($value & 0xFFFF_FFFF) as u32
+        } else {
+            0
+        };
+        let mut hi: u32 = if writing {
+            (($value >> 32) & 0xFFFF_FFFF) as u32
+        } else {
+            0
+        };
         if !$stream.serialize_bits(&mut lo, 32) {
             return Err($crate::stream::SerializeError::ReadPastEnd);
         }
@@ -259,7 +277,10 @@ pub type SerializeResult<T> = Result<T, SerializeError>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{serialize_bits, serialize_bool, serialize_float, serialize_int, serialize_uint64, serialize_bytes};
+    use crate::{
+        serialize_bits, serialize_bool, serialize_bytes, serialize_float, serialize_int,
+        serialize_uint64,
+    };
 
     fn write_read<F1, F2>(write_fn: F1, read_fn: F2)
     where
@@ -277,40 +298,85 @@ mod tests {
     #[test]
     fn bits_roundtrip() {
         write_read(
-            |s| { let mut v = 42u32; serialize_bits!(s, v, 6u32); Ok(()) },
-            |s| { let mut v = 0u32; serialize_bits!(s, v, 6u32); assert_eq!(v, 42); Ok(()) },
+            |s| {
+                let mut v = 42u32;
+                serialize_bits!(s, v, 6u32);
+                Ok(())
+            },
+            |s| {
+                let mut v = 0u32;
+                serialize_bits!(s, v, 6u32);
+                assert_eq!(v, 42);
+                Ok(())
+            },
         );
     }
 
     #[test]
     fn bool_roundtrip() {
         write_read(
-            |s| { let mut v = true; serialize_bool!(s, v); Ok(()) },
-            |s| { let mut v = false; serialize_bool!(s, v); assert!(v); Ok(()) },
+            |s| {
+                let mut v = true;
+                serialize_bool!(s, v);
+                Ok(())
+            },
+            |s| {
+                let mut v = false;
+                serialize_bool!(s, v);
+                assert!(v);
+                Ok(())
+            },
         );
     }
 
     #[test]
     fn int_roundtrip() {
         write_read(
-            |s| { let mut v = -5i32; serialize_int!(s, v, -10i32, 10i32); Ok(()) },
-            |s| { let mut v = 0i32; serialize_int!(s, v, -10i32, 10i32); assert_eq!(v, -5); Ok(()) },
+            |s| {
+                let mut v = -5i32;
+                serialize_int!(s, v, -10i32, 10i32);
+                Ok(())
+            },
+            |s| {
+                let mut v = 0i32;
+                serialize_int!(s, v, -10i32, 10i32);
+                assert_eq!(v, -5);
+                Ok(())
+            },
         );
     }
 
     #[test]
     fn uint64_roundtrip() {
         write_read(
-            |s| { let mut v = 0xDEAD_BEEF_CAFE_BABEu64; serialize_uint64!(s, v); Ok(()) },
-            |s| { let mut v = 0u64; serialize_uint64!(s, v); assert_eq!(v, 0xDEAD_BEEF_CAFE_BABEu64); Ok(()) },
+            |s| {
+                let mut v = 0xDEAD_BEEF_CAFE_BABEu64;
+                serialize_uint64!(s, v);
+                Ok(())
+            },
+            |s| {
+                let mut v = 0u64;
+                serialize_uint64!(s, v);
+                assert_eq!(v, 0xDEAD_BEEF_CAFE_BABEu64);
+                Ok(())
+            },
         );
     }
 
     #[test]
     fn float_roundtrip() {
         write_read(
-            |s| { let mut v = 3.14f32; serialize_float!(s, v); Ok(()) },
-            |s| { let mut v = 0.0f32; serialize_float!(s, v); assert_eq!(v, 3.14f32); Ok(()) },
+            |s| {
+                let mut v = 3.14f32;
+                serialize_float!(s, v);
+                Ok(())
+            },
+            |s| {
+                let mut v = 0.0f32;
+                serialize_float!(s, v);
+                assert_eq!(v, 3.14f32);
+                Ok(())
+            },
         );
     }
 
@@ -318,7 +384,11 @@ mod tests {
     fn bytes_roundtrip() {
         let payload = b"hello_world";
         write_read(
-            |s| { let mut d = payload.clone(); serialize_bytes!(s, &mut d[..]); Ok(()) },
+            |s| {
+                let mut d = payload.clone();
+                serialize_bytes!(s, &mut d[..]);
+                Ok(())
+            },
             |s| {
                 let mut out = [0u8; 11];
                 serialize_bytes!(s, &mut out[..]);
@@ -337,4 +407,3 @@ mod tests {
         assert!(!rs.serialize_bits(&mut v, 9));
     }
 }
-

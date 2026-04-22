@@ -29,11 +29,11 @@ pub mod route;
 
 // Stub - will be rewritten in step 3
 pub mod address;
-pub mod crypto;
-pub mod tokens;
-pub mod packets;
 pub mod client;
+pub mod crypto;
+pub mod packets;
 pub mod server;
+pub mod tokens;
 
 // Placeholder mods - to be implemented in subsequent steps
 // pub mod ffi;
