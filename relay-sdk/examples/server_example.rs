@@ -15,12 +15,10 @@
 
 use relay_sdk::address::Address;
 use relay_sdk::constants::SESSION_PRIVATE_KEY_BYTES;
+use relay_sdk::constants::{MAX_PACKET_BYTES, PACKET_BODY_OFFSET, PACKET_TYPE_CLIENT_TO_SERVER};
 use relay_sdk::platform;
 use relay_sdk::route::{address_ipv4_bytes, stamp_packet, write_header, HEADER_BYTES};
 use relay_sdk::server::{ServerInner, SERVER_STATE_CLOSED, SERVER_STATE_OPEN};
-use relay_sdk::constants::{
-    MAX_PACKET_BYTES, PACKET_BODY_OFFSET, PACKET_TYPE_CLIENT_TO_SERVER,
-};
 
 fn main() {
     // ── 1. Platform: check connection type and set socket buffers ─────────────
@@ -77,7 +75,10 @@ fn main() {
     inner.pump_commands();
     server.drain_notify(); // applies SessionRegistered -> increments num_sessions
     assert_eq!(server.num_sessions, 1);
-    println!("[server] session registered: id=0x{session_id:016X}, count={}", server.num_sessions);
+    println!(
+        "[server] session registered: id=0x{session_id:016X}, count={}",
+        server.num_sessions
+    );
 
     // ── 5. Receive a CLIENT_TO_SERVER packet ──────────────────────────────────
     //
@@ -197,10 +198,10 @@ fn build_client_to_server(
     let mut buf = vec![0u8; total];
     buf[0] = PACKET_TYPE_CLIENT_TO_SERVER;
 
-    let header_slice: &mut [u8; HEADER_BYTES] =
-        (&mut buf[PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + HEADER_BYTES])
-            .try_into()
-            .expect("infallible");
+    let header_slice: &mut [u8; HEADER_BYTES] = (&mut buf
+        [PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + HEADER_BYTES])
+        .try_into()
+        .expect("infallible");
     write_header(
         PACKET_TYPE_CLIENT_TO_SERVER,
         seq,
@@ -219,4 +220,3 @@ fn build_client_to_server(
     stamp_packet(&mut buf, &[0u8; 8], &from_bytes, &to_bytes);
     buf
 }
-

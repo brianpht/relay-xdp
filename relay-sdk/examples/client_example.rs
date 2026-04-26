@@ -80,8 +80,8 @@ fn main() {
     };
     client.route_update(
         UPDATE_TYPE_DIRECT,
-        0,       // num_tokens (0 for direct)
-        vec![],  // token bytes
+        0,        // num_tokens (0 for direct)
+        vec![],   // token bytes
         [0u8; 8], // magic (relay node identifier)
         client_ext,
     );
@@ -108,10 +108,7 @@ fn main() {
         // Network thread: flush any outbound packets queued by ClientInner.
         // In production these go to UdpSocket::send_to(data, to).
         while let Some((to, data)) = client.pop_send_raw() {
-            println!(
-                "[client->net] SendRaw: {} bytes -> {to}",
-                data.len()
-            );
+            println!("[client->net] SendRaw: {} bytes -> {to}", data.len());
         }
 
         // Network thread: deliver a simulated incoming SERVER_TO_CLIENT packet.
@@ -133,7 +130,7 @@ fn main() {
     // Here we send an empty token list just to show the API shape.
     client.route_update(
         UPDATE_TYPE_ROUTE,
-        0,        // num_tokens = 0 -> RouteManager will reject gracefully
+        0, // num_tokens = 0 -> RouteManager will reject gracefully
         vec![],
         [1, 2, 3, 4, 5, 6, 7, 8],
         client_ext,
@@ -186,4 +183,3 @@ fn main() {
     assert!(!alive);
     println!("[client] inner.pump_commands after destroy -> alive={alive}");
 }
-

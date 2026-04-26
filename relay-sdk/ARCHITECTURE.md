@@ -41,8 +41,13 @@ relay-sdk/
 |   |   +-- trackers.rs # ReplayProtection, PingHistory, BandwidthLimiter - copied from rust-sdk
 |   +-- client/         # ClientInner + Client handle
 |   +-- server/         # ServerInner + Server handle (final destination)
-|   +-- platform/       # time() monotonic clock - copied from rust-sdk
-|   +-- ffi/            # #[no_mangle] extern "C" exports - implemented
+|   +-- platform/       # time() + ConnectionType + socket buffer helpers (Linux: libc setsockopt/getsockopt)
+|   +-- ffi/            # #[no_mangle] extern "C" exports - 15 functions
++-- benches/
+|   +-- relay_sdk.rs    # criterion 0.5 benchmarks (18 functions across 5 groups)
++-- examples/
+|   +-- client_example.rs  # end-to-end game client integration walkthrough
+|   +-- server_example.rs  # end-to-end game server integration walkthrough
 +-- tests/
     +-- wire_compat.rs  # byte-level golden vector tests + constant compatibility
 ```
@@ -56,7 +61,7 @@ relay-sdk/
 | `bitpacker` | Copied from `rust-sdk` | Unchanged - 7 tests passing |
 | `stream` | Copied from `rust-sdk` | Unchanged - 7 tests passing |
 | `read_write` | Copied from `rust-sdk` | Unchanged - 5 tests passing |
-| `platform` | Copied from `rust-sdk` | Unchanged |
+| `platform` | Extended from `rust-sdk` | Added ConnectionType, connection_type(), socket buffer helpers - 4 tests |
 | `route/trackers` | Copied from `rust-sdk` | Unchanged - 8 tests passing |
 | `address` | Rewritten | rust-sdk uses bitstream; relay-sdk uses byte LE + RELAY_ADDRESS_* |
 | `crypto` | Rewritten (subset) | Only SHA-256 + XChaCha20-Poly1305; removed NaCl/BLAKE2/Ed25519/KX |
@@ -64,8 +69,8 @@ relay-sdk/
 | `packets` | Rewritten | 14 types (ID 1-14); encode/decode LE byte-level, no bitstream |
 | `route/mod` | Rewritten (pittle/chonkle copied) | HeaderData layout matches relay-xdp-common; state machine logic preserved |
 | `client` | New | RouteToken -> ROUTE_REQUEST -> forward payload hop-chain; HMAC verification on ROUTE_RESPONSE/CONTINUE_RESPONSE |
-| `server` | New | Final destination - receives from last relay hop |
-| `ffi` | New | 12 extern "C" functions; catch_unwind on all entry points; null-safe |
+| `server` | New | Final destination - receives from last relay hop; Notify::SendError + last_send_error |
+| `ffi` | New | 15 extern "C" functions; catch_unwind on all entry points; null-safe |
 
 ---
 
@@ -118,6 +123,56 @@ Key constants:
 | `ENCRYPTED_CONTINUE_TOKEN_BYTES` | 57 | nonce(24) + ContinueToken(17) + tag(16) |
 | `MAX_PACKET_BYTES` | 1384 | Maximum packet buffer size |
 | `MTU` | 1200 | Maximum relay payload |
+
+---
+
+### `mod platform`
+
+OS-level utilities. Linux implementation in `platform/linux.rs`; non-Linux stubs in `platform/mod.rs` provide the same API returning safe defaults.
+
+**Time:**
+
+| Function | Description |
+|---|---|
+| `time() -> f64` | Monotonic seconds since first call. Equivalent to `next_platform_time()` in C++. |
+
+**Connection type:**
+
+```rust
+pub enum ConnectionType { Unknown, Wired, Wifi, Cellular }
+
+pub fn connection_type() -> ConnectionType
+```
+
+Algorithm (Linux only):
+1. Parse `/proc/net/route` - find first entry with `Destination == 00000000` (default route interface).
+2. If `/sys/class/net/{iface}/wireless` directory exists -> `Wifi`.
+3. If `/sys/class/net/{iface}/uevent` contains line `DEVTYPE=wwan` -> `Cellular`.
+4. Otherwise -> `Wired`. Returns `Unknown` on any I/O error or no default route.
+
+Non-Linux stub always returns `ConnectionType::Unknown`.
+
+**Socket buffer helpers (Linux only, wraps `setsockopt`/`getsockopt` via `libc`):**
+
+| Function | Description |
+|---|---|
+| `set_socket_send_buffer_size(socket: &UdpSocket, size: usize) -> bool` | Sets `SO_SNDBUF`. Kernel may round up. Returns `true` on success. |
+| `set_socket_recv_buffer_size(socket: &UdpSocket, size: usize) -> bool` | Sets `SO_RCVBUF`. |
+| `get_socket_send_buffer_size(socket: &UdpSocket) -> usize` | Returns current `SO_SNDBUF` value, 0 on failure. |
+| `get_socket_recv_buffer_size(socket: &UdpSocket) -> usize` | Returns current `SO_RCVBUF` value, 0 on failure. |
+
+Non-Linux stubs return `false` / `0`.
+
+Usage pattern (call after `UdpSocket::bind`):
+
+```rust
+use relay_sdk::platform;
+let sock = UdpSocket::bind("0.0.0.0:0")?;
+platform::set_socket_send_buffer_size(&sock, 2 * 1024 * 1024);  // 2 MiB
+platform::set_socket_recv_buffer_size(&sock, 2 * 1024 * 1024);
+println!("conn={:?} sndbuf={}", platform::connection_type(),
+         platform::get_socket_send_buffer_size(&sock));
+```
 
 ---
 
@@ -356,10 +411,22 @@ UDP datagram arrives at server port
 ```
 Server::send_packet(session_id, payload, magic, from_address)
   +-> lookup session -> get relay_address + send_sequence
+  +-> check total size <= MAX_PACKET_BYTES; push Notify::SendError if exceeded
   +-> write_header() with PACKET_TYPE_SERVER_TO_CLIENT
   +-> stamp_packet() fills pittle + chonkle
   +-> push Notify::SendRaw { to: relay_address, data }
 ```
+
+**Error reporting:**
+
+`ServerInner` pushes `Notify::SendError { session_id, reason }` instead of silently returning when a send fails (e.g. payload exceeds `MAX_PACKET_BYTES`). The main-thread `Server` handle captures the most recent error:
+
+```rust
+pub last_send_error: Option<(u64, &'static str)>  // (session_id, reason)
+pub fn clear_last_send_error(&mut self)
+```
+
+`drain_notify()` applies `SendError` events; `clear_last_send_error()` resets the field. The `relay_server_last_send_error` / `relay_server_clear_last_send_error` FFI functions expose this to C callers.
 
 **Session provisioning:**
 - `session_private_key` comes from `RouteToken` pushed to the game server by `relay-backend` via HTTP
@@ -382,6 +449,7 @@ void            relay_client_open_session(relay_client_t*, const char* server_ad
 void            relay_client_close_session(relay_client_t*);
 void            relay_client_send_packet(relay_client_t*, const uint8_t* data, int bytes);
 int             relay_client_recv_packet(relay_client_t*, uint8_t* out, int max_bytes);
+uint32_t        relay_client_flags(relay_client_t*);
 
 // Server
 relay_server_t* relay_server_create(const char* bind_address);
@@ -391,19 +459,32 @@ void            relay_server_register_session(relay_server_t*, uint64_t session_
                                               const uint8_t* session_private_key,
                                               const char* relay_address);
 void            relay_server_expire_session(relay_server_t*, uint64_t session_id);
-void            relay_server_send_packet(relay_server_t*, uint64_t session_id,
+int             relay_server_send_packet(relay_server_t*, uint64_t session_id,
                                          const uint8_t* data, int bytes,
                                          const uint8_t* magic,
                                          const char* from_address);
 int             relay_server_recv_packet(relay_server_t*, uint64_t* out_session_id,
                                          uint8_t* out, int max_bytes);
+uint64_t        relay_server_last_send_error(relay_server_t*);
+void            relay_server_clear_last_send_error(relay_server_t*);
 ```
+
+**Function notes:**
+
+| Function | Notes |
+|---|---|
+| `relay_client_flags` | Returns bitfield of `FLAGS_BAD_ROUTE_TOKEN`, `FLAGS_ROUTE_EXPIRED`, etc. (see `constants.rs`). 0 = no fallback flags. |
+| `relay_server_send_packet` | Returns 0 = ok, -1 = error (null handle, null data, or payload > `MAX_PACKET_BYTES`). |
+| `relay_server_last_send_error` | Returns session\_id of the last failed send, or 0 if no error recorded. |
+| `relay_server_clear_last_send_error` | Resets the last-send-error field on the server handle. |
 
 **Safety contracts:**
 - `relay_client_create` / `relay_server_create`: return null on null/invalid `bind_address`
 - All `*_destroy`: null pointer is a no-op
-- All other functions: null handle or null data pointer is a no-op (returns 0 for int functions)
+- All other functions: null handle or null data pointer is a no-op (returns 0 for int/uint functions)
 - `relay_client_recv_packet` / `relay_server_recv_packet`: return 0 if no packet available
+- `relay_client_send_packet`: no-op if `bytes > MAX_PACKET_BYTES` (prevents out-of-bounds read)
+- Void-returning functions (`open_session`, `close_session`, `register_session`, `expire_session`, `clear_last_send_error`): panics inside `catch_unwind` are silently swallowed (no return channel)
 
 ---
 
@@ -443,10 +524,11 @@ relay-sdk
 +-- zeroize            1      # zero secret keys on drop
 +-- thiserror          1      # error derive
 +-- anyhow             1      # Result in userspace paths
++-- libc               0.2    # setsockopt/getsockopt for socket buffer helpers [Linux only]
 ```
 
 Build deps: `cbindgen 0.27`.
-Dev deps: `hex-literal 0.4` (golden vector tests).
+Dev deps: `hex-literal 0.4` (golden vector tests), `criterion 0.5` (benchmarks).
 
 ---
 
@@ -463,8 +545,10 @@ Dev deps: `hex-literal 0.4` (golden vector tests).
 - `pittle_chonkle_differ_for_different_addresses` - filter is address-sensitive
 - `header_hmac_matches_relay_xdp_common_layout` - SHA-256(HeaderData) computed from relay-xdp-common struct matches relay-sdk `write_header` output byte-for-byte
 
-Run: `cargo test -p relay-sdk` (106 unit + 14 wire compat tests).
+Run: `cargo test -p relay-sdk` (118 unit + 14 wire compat tests).
 Regenerate golden vectors: `cargo test -p relay-sdk wire_compat::print_golden -- --ignored --nocapture`
+Run examples: `cargo run --example client_example -p relay-sdk` / `cargo run --example server_example -p relay-sdk`
+Run benchmarks: `cargo bench -p relay-sdk`
 
 ---
 
@@ -475,7 +559,7 @@ Regenerate golden vectors: `cargo test -p relay-sdk wire_compat::print_golden --
 | `bitpacker` | Copied | Done | 7 |
 | `stream` | Copied | Done | 7 |
 | `read_write` | Copied | Done | 5 |
-| `platform` | Copied | Done | - |
+| `platform` | Extended | Done | 4 |
 | `route/trackers` | Copied | Done | 8 |
 | `address` | Rewritten | Done | 7 |
 | `crypto` | Rewritten | Done | 6 |
@@ -484,7 +568,7 @@ Regenerate golden vectors: `cargo test -p relay-sdk wire_compat::print_golden --
 | `route/mod` | Rewritten | Done | 21 |
 | `client` | New | Done | 10 |
 | `server` | New | Done | 10 |
-| `ffi` | New | Done | 13 |
+| `ffi` | New | Done | 21 |
 | `wire_compat` (integration) | New | Done | 14 |
 
-**Total: 106 unit + 14 integration = 120 tests. 0 failing. `cargo clippy -D warnings` clean. `cargo fmt` clean.**
+**Total: 118 unit + 14 integration = 132 tests. 0 failing. `cargo clippy -D warnings` clean. `cargo fmt` clean.**
