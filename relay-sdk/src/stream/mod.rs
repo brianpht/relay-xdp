@@ -368,6 +368,7 @@ mod tests {
     fn float_roundtrip() {
         write_read(
             |s| {
+                #[allow(clippy::approx_constant)]
                 let mut v = 3.14f32;
                 serialize_float!(s, v);
                 Ok(())
@@ -375,7 +376,9 @@ mod tests {
             |s| {
                 let mut v = 0.0f32;
                 serialize_float!(s, v);
-                assert_eq!(v, 3.14f32);
+                #[allow(clippy::approx_constant)]
+                let expected = 3.14f32;
+                assert_eq!(v, expected);
                 Ok(())
             },
         );
@@ -386,7 +389,7 @@ mod tests {
         let payload = b"hello_world";
         write_read(
             |s| {
-                let mut d = payload.clone();
+                let mut d = *payload;
                 serialize_bytes!(s, &mut d[..]);
                 Ok(())
             },

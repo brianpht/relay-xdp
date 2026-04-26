@@ -359,7 +359,7 @@ mod tests {
     #[test]
     fn packet_loss_no_loss() {
         let mut tracker = PacketLossTracker::new();
-        for i in 0..(PACKET_LOSS_TRACKER_SAFETY + 10) as u64 {
+        for i in 0..(PACKET_LOSS_TRACKER_SAFETY + 10) {
             tracker.packet_received(i);
         }
         assert_eq!(tracker.update(), 0);
@@ -374,7 +374,7 @@ mod tests {
                 tracker.packet_received(i);
             }
         }
-        for _ in 0..(PACKET_LOSS_TRACKER_SAFETY + 5) as u64 {
+        for _ in 0..(PACKET_LOSS_TRACKER_SAFETY + 5) {
             tracker.packet_received(100);
         }
         let lost = tracker.update();

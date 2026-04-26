@@ -32,4 +32,9 @@ cbindgen = "0.27"
 
 [dev-dependencies]
 hex-literal = "0.4"
+criterion = { version = "0.5", features = [] }
+
+[[bench]]
+name = "relay_sdk"
+harness = false
 

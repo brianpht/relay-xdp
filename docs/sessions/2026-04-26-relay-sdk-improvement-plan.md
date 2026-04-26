@@ -79,7 +79,13 @@
 
 **Ready to start (no dependencies):**
 
-3. **Medium:** `benchmarking` - Add `benches/` with `criterion` for packet encode/decode, HMAC write/read, token encrypt/decrypt, RouteManager state transitions
+3. **[DONE] Medium:** `benchmarking` - Added `benches/relay_sdk.rs` with criterion 0.5. 18 bench functions across 5 groups:
+   - `packet_codec`: route_response/session_ping/relay_ping encode+decode (~1-4 ns each)
+   - `header_hmac`: write_header (~91 ns), read_header valid/invalid (~73 ns) - SHA-256 dominates
+   - `filter`: generate_pittle (~12 ns), generate_chonkle (~24 ns) - FNV-1a per packet
+   - `token_crypto`: encrypt/decrypt route+continue tokens (~2.3 µs each) - XChaCha20-Poly1305
+   - `route_manager`: update_begin_next_route (token decrypt + state write), prepare_send_packet_256b (active route encode)
+   - Also fixed 5 pre-existing clippy warnings in `stream/mod.rs` and `route/trackers.rs` (approx_constant, clone_on_copy, unnecessary_cast)
 4. **Medium:** `ffi-safety` - Audit `src/ffi/mod.rs` for additional null checks; verify `CString::new(s).unwrap()` (line 355) cannot receive strings with embedded null bytes and harden if it can; ensure all `catch_unwind` paths return meaningful error codes rather than silent no-ops
 5. **Medium:** `platform-todo` - Implement socket buffer size detection and connection type detection in `src/platform/linux.rs`
 6. **Low:** `documentation` - Add `examples/` directory with client and server integration examples
@@ -102,4 +108,6 @@
 | M | `relay-sdk/src/tokens/mod.rs` |
 | M | `relay-sdk/src/read_write.rs` |
 | M | `relay-sdk/src/server/mod.rs` |
-| M | `relay-sdk/src/ffi/mod.rs` |
+| M | `relay-sdk/src/stream/mod.rs` |
+| M | `relay-sdk/src/route/trackers.rs` |
+| A | `relay-sdk/benches/relay_sdk.rs` |
