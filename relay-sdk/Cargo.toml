@@ -37,6 +37,12 @@ cbindgen = "0.27"
 hex-literal = "0.4"
 criterion = { version = "0.5", features = [] }
 
+[[example]]
+name = "client_example"
+
+[[example]]
+name = "server_example"
+
 [[bench]]
 name = "relay_sdk"
 harness = false

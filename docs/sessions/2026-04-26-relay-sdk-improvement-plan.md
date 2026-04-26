@@ -101,7 +101,16 @@
    - Added `libc = "0.2"` as `[target.'cfg(target_os = "linux")'.dependencies]`
    - 4 new tests: `time_is_non_negative_and_monotonic`, `connection_type_returns_a_variant`, `socket_send_buffer_set_and_get`, `socket_recv_buffer_set_and_get`
    - Test count: 132 total (118 unit + 14 integration)
-6. **Low:** `documentation` - Add `examples/` directory with client and server integration examples
+6. **[DONE] Low:** `documentation` - Added `examples/` directory with client and server integration examples:
+   - `examples/client_example.rs` - full walkthrough of the game client workflow:
+     - Platform: `connection_type()`, `set_socket_send/recv_buffer_size()`, `get_socket_send/recv_buffer_size()` with a real loopback socket
+     - `ClientInner::create()` -> `open_session` -> `route_update(DIRECT)` -> game loop (tick/send/recv) -> `route_update(ROUTE)` -> spoofed ROUTE_RESPONSE rejected by HMAC check -> `close_session` -> Destroy
+   - `examples/server_example.rs` - full walkthrough of the game server workflow:
+     - Platform buffer setup
+     - `ServerInner::create()` -> `open` -> `register_session` -> `process_incoming` -> `recv_packet` -> replay protection -> `send_packet` -> `pop_send_raw` -> oversized payload `SendError` -> `expire_session` -> close -> Destroy
+   - Both examples compile without warnings and run with correct output on loopback
+   - `[[example]]` entries added to `Cargo.toml`
+   - Test count unchanged: 132 total (118 unit + 14 integration)
 
 **Blocked (waiting on dependencies):**
 
@@ -125,4 +134,6 @@
 | M | `relay-sdk/src/route/trackers.rs` |
 | M | `relay-sdk/src/platform/linux.rs` |
 | M | `relay-sdk/src/platform/mod.rs` |
+| A | `relay-sdk/examples/client_example.rs` |
+| A | `relay-sdk/examples/server_example.rs` |
 | M | `relay-sdk/Cargo.toml` |
