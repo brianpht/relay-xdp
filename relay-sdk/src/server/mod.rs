@@ -766,7 +766,6 @@ mod tests {
 
     #[test]
     fn send_packet_uses_pooled_buf() {
-        use crate::route::{address_ipv4_bytes, stamp_packet, write_header};
         let (mut inner, mut server) = make_pair();
         server.open(addr());
         inner.pump_commands();
