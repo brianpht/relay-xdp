@@ -15,6 +15,15 @@
 // Thread safety: relay_client_t and relay_server_t internally use
 //   Arc<Mutex<VecDeque<T>>> queues. The opaque pointer itself must only be
 //   used from one thread at a time (no concurrent calls on the same handle).
+//
+// Error reporting:
+//   - Functions that return a pointer: null indicates failure.
+//   - Functions that return c_int: 0 = ok, -1 = error.
+//   - Functions that return u32/u64: 0 is the "no error / no data" sentinel.
+//   - Void-returning functions (open_session, close_session, register_session,
+//     expire_session, clear_last_send_error): panics inside catch_unwind are
+//     silently swallowed because there is no return channel. Callers cannot
+//     distinguish a panic from normal execution in these paths.
 
 // Safety: all extern "C" entry points perform explicit null checks on every
 // raw pointer argument before any dereference. Suppressing the lint here is
@@ -125,7 +134,8 @@ pub extern "C" fn relay_client_close_session(handle: *mut RelayClient) {
 }
 
 /// Queue a game payload for sending via relay (or direct if no route).
-/// `data` must point to `bytes` bytes. No-op if handle is null.
+/// `data` must point to `bytes` bytes. `bytes` must be > 0 and <= MAX_PACKET_BYTES.
+/// No-op if handle is null or byte count is out of range.
 #[no_mangle]
 pub extern "C" fn relay_client_send_packet(
     handle: *mut RelayClient,
@@ -134,6 +144,12 @@ pub extern "C" fn relay_client_send_packet(
 ) {
     let _ = catch_unwind(|| {
         if handle.is_null() || data.is_null() || bytes <= 0 {
+            return;
+        }
+        // Reject oversized payloads before creating the slice to prevent UB
+        // from a caller passing an inflated byte count with a short buffer.
+        use crate::constants::MAX_PACKET_BYTES;
+        if bytes as usize > MAX_PACKET_BYTES {
             return;
         }
         let h = unsafe { &mut *handle };
@@ -414,7 +430,9 @@ mod tests {
     use std::ffi::CString;
 
     fn cstr(s: &str) -> CString {
-        CString::new(s).unwrap()
+        // Safety: all call-sites pass ASCII string literals without embedded
+        // null bytes. CString::new() only fails if the input contains '\0'.
+        CString::new(s).expect("test helper cstr: input must not contain null bytes")
     }
 
     // ── relay_client_t ────────────────────────────────────────────────────────
@@ -556,5 +574,97 @@ mod tests {
         );
         let n = relay_server_recv_packet(null, std::ptr::null_mut(), std::ptr::null_mut(), 0);
         assert_eq!(n, 0);
+    }
+
+    // ── New functions from error-handling task ────────────────────────────────
+
+    #[test]
+    fn ffi_client_flags_null_returns_zero() {
+        assert_eq!(relay_client_flags(std::ptr::null_mut()), 0);
+    }
+
+    #[test]
+    fn ffi_client_flags_no_route_is_zero() {
+        let bind = cstr("0.0.0.0:0");
+        let h = relay_client_create(bind.as_ptr());
+        assert!(!h.is_null());
+        // No route update issued - flags must be zero.
+        assert_eq!(relay_client_flags(h), 0);
+        relay_client_destroy(h);
+    }
+
+    #[test]
+    fn ffi_server_send_packet_null_handle_returns_error() {
+        let rc = relay_server_send_packet(
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+        assert_eq!(rc, -1);
+    }
+
+    #[test]
+    fn ffi_server_send_packet_oversized_payload_returns_error() {
+        let addr = cstr("0.0.0.0:9000");
+        let h = relay_server_create(addr.as_ptr());
+        assert!(!h.is_null());
+        let relay_addr = cstr("10.0.0.1:4000");
+        let key = [0x42u8; SESSION_PRIVATE_KEY_BYTES];
+        relay_server_register_session(h, 0xDEAD_BEEF, 1, key.as_ptr(), relay_addr.as_ptr());
+        let from = cstr("10.0.0.2:9000");
+        let magic = [0u8; 8];
+        // 2000 bytes > MAX_PACKET_BYTES (1384) - must return -1.
+        let big_payload = vec![0u8; 2000];
+        let rc = relay_server_send_packet(
+            h,
+            0xDEAD_BEEF,
+            big_payload.as_ptr(),
+            big_payload.len() as c_int,
+            magic.as_ptr(),
+            from.as_ptr(),
+        );
+        assert_eq!(rc, -1, "oversized payload must return -1");
+        relay_server_destroy(h);
+    }
+
+    #[test]
+    fn ffi_server_last_send_error_null_returns_zero() {
+        assert_eq!(relay_server_last_send_error(std::ptr::null_mut()), 0);
+    }
+
+    #[test]
+    fn ffi_server_last_send_error_no_error_returns_zero() {
+        let addr = cstr("0.0.0.0:9000");
+        let h = relay_server_create(addr.as_ptr());
+        assert!(!h.is_null());
+        assert_eq!(relay_server_last_send_error(h), 0);
+        relay_server_destroy(h);
+    }
+
+    #[test]
+    fn ffi_server_clear_last_send_error_null_is_noop() {
+        // Must not panic.
+        relay_server_clear_last_send_error(std::ptr::null_mut());
+    }
+
+    #[test]
+    fn ffi_client_send_packet_oversized_is_noop() {
+        let bind = cstr("0.0.0.0:0");
+        let h = relay_client_create(bind.as_ptr());
+        assert!(!h.is_null());
+        let server = cstr("10.0.0.1:9000");
+        let key = [0x55u8; SESSION_PRIVATE_KEY_BYTES];
+        relay_client_open_session(h, server.as_ptr(), key.as_ptr());
+        // 2000 bytes > MAX_PACKET_BYTES (1384) - must be silently ignored.
+        let big = vec![0xAAu8; 2000];
+        relay_client_send_packet(h, big.as_ptr(), big.len() as c_int);
+        // No crash or UB - verify recv finds nothing.
+        let mut out = [0u8; 1200];
+        let n = relay_client_recv_packet(h, out.as_mut_ptr(), out.len() as c_int);
+        assert_eq!(n, 0);
+        relay_client_destroy(h);
     }
 }

@@ -228,7 +228,8 @@ void relay_client_close_session(struct relay_RelayClient *handle);
 
 /**
  * Queue a game payload for sending via relay (or direct if no route).
- * `data` must point to `bytes` bytes. No-op if handle is null.
+ * `data` must point to `bytes` bytes. `bytes` must be > 0 and <= MAX_PACKET_BYTES.
+ * No-op if handle is null or byte count is out of range.
  */
 void relay_client_send_packet(struct relay_RelayClient *handle, const uint8_t *data, int bytes);
 

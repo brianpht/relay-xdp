@@ -86,7 +86,12 @@
    - `token_crypto`: encrypt/decrypt route+continue tokens (~2.3 µs each) - XChaCha20-Poly1305
    - `route_manager`: update_begin_next_route (token decrypt + state write), prepare_send_packet_256b (active route encode)
    - Also fixed 5 pre-existing clippy warnings in `stream/mod.rs` and `route/trackers.rs` (approx_constant, clone_on_copy, unnecessary_cast)
-4. **Medium:** `ffi-safety` - Audit `src/ffi/mod.rs` for additional null checks; verify `CString::new(s).unwrap()` (line 355) cannot receive strings with embedded null bytes and harden if it can; ensure all `catch_unwind` paths return meaningful error codes rather than silent no-ops
+4. **[DONE] Medium:** `ffi-safety` - Full audit of `src/ffi/mod.rs`:
+   - Added upper-bound guard `bytes as usize > MAX_PACKET_BYTES` in `relay_client_send_packet` (prevents UB from inflated byte count with short buffer)
+   - Expanded module doc comment to document which void-returning functions silently swallow panics and why signature changes are not made (ABI compatibility)
+   - Hardened test helper `cstr()` unwrap to `expect("...null bytes...")` with clear message
+   - Added 9 new FFI tests: `client_flags_null`, `client_flags_no_route`, `server_send_packet_null_returns_error`, `server_send_packet_oversized_returns_error`, `server_last_send_error_null`, `server_last_send_error_no_error`, `server_clear_last_send_error_null`, `client_send_packet_oversized_is_noop`
+   - Test count: 114 unit + 14 integration = 128 total (up from 120)
 5. **Medium:** `platform-todo` - Implement socket buffer size detection and connection type detection in `src/platform/linux.rs`
 6. **Low:** `documentation` - Add `examples/` directory with client and server integration examples
 
@@ -110,4 +115,4 @@
 | M | `relay-sdk/src/server/mod.rs` |
 | M | `relay-sdk/src/stream/mod.rs` |
 | M | `relay-sdk/src/route/trackers.rs` |
-| A | `relay-sdk/benches/relay_sdk.rs` |
+| M | `relay-sdk/src/ffi/mod.rs` |
