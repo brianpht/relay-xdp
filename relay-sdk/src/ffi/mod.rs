@@ -170,6 +170,24 @@ pub extern "C" fn relay_client_recv_packet(
     .unwrap_or(0)
 }
 
+/// Return the current route flags bitmask for this client.
+/// Flags encode token validation errors and route state.
+/// See FLAGS_BAD_ROUTE_TOKEN, FLAGS_BAD_CONTINUE_TOKEN, etc. in relay_generated.h.
+/// Returns 0 if handle is null.
+#[no_mangle]
+pub extern "C" fn relay_client_flags(handle: *mut RelayClient) -> u32 {
+    catch_unwind(|| {
+        if handle.is_null() {
+            return 0u32;
+        }
+        let h = unsafe { &mut *handle };
+        h.inner.pump_commands();
+        h.client.drain_notify();
+        h.client.flags
+    })
+    .unwrap_or(0)
+}
+
 // ── relay_server_t ────────────────────────────────────────────────────────────
 
 /// Opaque handle for a relay game-server session.
@@ -276,7 +294,7 @@ pub extern "C" fn relay_server_expire_session(handle: *mut RelayServer, session_
 /// `data` must point to `bytes` bytes.
 /// `magic` must point to 8 bytes.
 /// `from_address` is the server's own address string (e.g. "10.0.0.2:9000").
-/// No-op if handle is null.
+/// Returns 0 on success, -1 if handle is null or payload is too large.
 #[no_mangle]
 pub extern "C" fn relay_server_send_packet(
     handle: *mut RelayServer,
@@ -285,15 +303,24 @@ pub extern "C" fn relay_server_send_packet(
     bytes: c_int,
     magic: *const u8,
     from_address: *const c_char,
-) {
-    let _ = catch_unwind(|| {
+) -> c_int {
+    catch_unwind(|| {
         if handle.is_null()
             || data.is_null()
             || magic.is_null()
             || from_address.is_null()
             || bytes <= 0
         {
-            return;
+            return -1i32;
+        }
+        // Pre-flight: reject oversized payloads before queuing.
+        use crate::constants::{MAX_PACKET_BYTES, PACKET_BODY_OFFSET};
+        use crate::route::HEADER_BYTES as ROUTE_HEADER_BYTES;
+        let max_payload = MAX_PACKET_BYTES
+            .saturating_sub(PACKET_BODY_OFFSET)
+            .saturating_sub(ROUTE_HEADER_BYTES);
+        if bytes as usize > max_payload {
+            return -1i32;
         }
         let h = unsafe { &mut *handle };
         let payload = unsafe { std::slice::from_raw_parts(data, bytes as usize) };
@@ -302,15 +329,50 @@ pub extern "C" fn relay_server_send_packet(
         let addr_str = unsafe {
             match CStr::from_ptr(from_address).to_str() {
                 Ok(s) => s,
-                Err(_) => return,
+                Err(_) => return -1i32,
             }
         };
         let from: Address = match addr_str.parse() {
             Ok(a) => a,
-            Err(_) => return,
+            Err(_) => return -1i32,
         };
         h.server.send_packet(session_id, payload, magic_buf, from);
         h.inner.pump_commands();
+        h.server.drain_notify();
+        0i32
+    })
+    .unwrap_or(-1)
+}
+
+/// Return the session_id from the last failed send, or 0 if no error is pending.
+/// Also drains any pending notifications to refresh the error state.
+/// Call `relay_server_clear_last_send_error` after handling the error.
+#[no_mangle]
+pub extern "C" fn relay_server_last_send_error(handle: *mut RelayServer) -> u64 {
+    catch_unwind(|| {
+        if handle.is_null() {
+            return 0u64;
+        }
+        let h = unsafe { &mut *handle };
+        h.inner.pump_commands();
+        h.server.drain_notify();
+        match h.server.last_send_error {
+            Some((session_id, _)) => session_id,
+            None => 0,
+        }
+    })
+    .unwrap_or(0)
+}
+
+/// Clear the last send error recorded on the server handle.
+#[no_mangle]
+pub extern "C" fn relay_server_clear_last_send_error(handle: *mut RelayServer) {
+    let _ = catch_unwind(|| {
+        if handle.is_null() {
+            return;
+        }
+        let h = unsafe { &mut *handle };
+        h.server.clear_last_send_error();
     });
 }
 

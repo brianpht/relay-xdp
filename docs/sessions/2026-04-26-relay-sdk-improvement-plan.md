@@ -65,10 +65,20 @@
 
 ## Next Steps
 
+**Completed:**
+
+1. **[DONE] High:** `performance-unwraps` - Replaced all production `try_into().unwrap()` with `expect("infallible: ...")`: `route/mod.rs` (2 sites), `tokens/mod.rs` (4 sites), `read_write.rs` (3 sites), `server/mod.rs` (1 site).
+2. **[DONE] High:** `error-handling` - Propagated errors through the system:
+   - Added `Notify::SendError { session_id, reason }` variant to server Notify enum
+   - `send_packet_inner` now pushes `SendError` instead of silently returning on oversized payload
+   - Added `last_send_error: Option<(u64, &'static str)>` field to `Server` struct
+   - Added `Server::clear_last_send_error()` accessor
+   - Added `relay_client_flags(handle) -> u32` to FFI (surfaces `FLAGS_BAD_ROUTE_TOKEN`, `FLAGS_BAD_CONTINUE_TOKEN`, etc.)
+   - Changed `relay_server_send_packet` FFI signature from `void` to `c_int` (0=ok, -1=error) with pre-flight payload size check
+   - Added `relay_server_last_send_error(handle) -> u64` and `relay_server_clear_last_send_error(handle)` to FFI
+
 **Ready to start (no dependencies):**
 
-1. **High:** `performance-unwraps` - Fix ~10 high/medium tier `unwrap()` calls: propagate `Result` for `encode().unwrap()` in `src/client/mod.rs` (lines 675/715) and `src/server/mod.rs` (line 316); replace infallible `try_into().unwrap()` in `src/tokens/mod.rs` and `src/read_write.rs` with `expect("infallible: ...")`. Do NOT change `Mutex::lock().unwrap()` patterns.
-2. **High:** `error-handling` - Propagate existing typed errors (`TokenError`, `ReadWriteError`) up through `Client`/`Server` public method signatures into `ffi` error codes. Error enum foundation (`TokenError`, `ReadWriteError`, `CryptoError`) is already in place; do not redefine.
 3. **Medium:** `benchmarking` - Add `benches/` with `criterion` for packet encode/decode, HMAC write/read, token encrypt/decrypt, RouteManager state transitions
 4. **Medium:** `ffi-safety` - Audit `src/ffi/mod.rs` for additional null checks; verify `CString::new(s).unwrap()` (line 355) cannot receive strings with embedded null bytes and harden if it can; ensure all `catch_unwind` paths return meaningful error codes rather than silent no-ops
 5. **Medium:** `platform-todo` - Implement socket buffer size detection and connection type detection in `src/platform/linux.rs`
@@ -88,3 +98,8 @@
 | Status | File |
 |--------|------|
 | A | `docs/sessions/2026-04-26-relay-sdk-improvement-plan.md` |
+| M | `relay-sdk/src/route/mod.rs` |
+| M | `relay-sdk/src/tokens/mod.rs` |
+| M | `relay-sdk/src/read_write.rs` |
+| M | `relay-sdk/src/server/mod.rs` |
+| M | `relay-sdk/src/ffi/mod.rs` |

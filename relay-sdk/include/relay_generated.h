@@ -240,6 +240,14 @@ void relay_client_send_packet(struct relay_RelayClient *handle, const uint8_t *d
 int relay_client_recv_packet(struct relay_RelayClient *handle, uint8_t *out, int max_bytes);
 
 /**
+ * Return the current route flags bitmask for this client.
+ * Flags encode token validation errors and route state.
+ * See FLAGS_BAD_ROUTE_TOKEN, FLAGS_BAD_CONTINUE_TOKEN, etc. in relay_generated.h.
+ * Returns 0 if handle is null.
+ */
+uint32_t relay_client_flags(struct relay_RelayClient *handle);
+
+/**
  * Create a new relay server.
  * Returns null on failure (invalid bind_address string).
  * The returned pointer must be freed with `relay_server_destroy`.
@@ -275,14 +283,26 @@ void relay_server_expire_session(struct relay_RelayServer *handle, uint64_t sess
  * `data` must point to `bytes` bytes.
  * `magic` must point to 8 bytes.
  * `from_address` is the server's own address string (e.g. "10.0.0.2:9000").
- * No-op if handle is null.
+ * Returns 0 on success, -1 if handle is null or payload is too large.
  */
-void relay_server_send_packet(struct relay_RelayServer *handle,
-                              uint64_t session_id,
-                              const uint8_t *data,
-                              int bytes,
-                              const uint8_t *magic,
-                              const char *from_address);
+int relay_server_send_packet(struct relay_RelayServer *handle,
+                             uint64_t session_id,
+                             const uint8_t *data,
+                             int bytes,
+                             const uint8_t *magic,
+                             const char *from_address);
+
+/**
+ * Return the session_id from the last failed send, or 0 if no error is pending.
+ * Also drains any pending notifications to refresh the error state.
+ * Call `relay_server_clear_last_send_error` after handling the error.
+ */
+uint64_t relay_server_last_send_error(struct relay_RelayServer *handle);
+
+/**
+ * Clear the last send error recorded on the server handle.
+ */
+void relay_server_clear_last_send_error(struct relay_RelayServer *handle);
 
 /**
  * Pop the next received game payload into `out` (caller-provided buffer of `max_bytes`).

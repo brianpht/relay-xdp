@@ -98,7 +98,9 @@ pub fn decrypt_route_token(
     data: &[u8; ENCRYPTED_ROUTE_TOKEN_BYTES],
     key: &[u8; XCHACHA_KEY_BYTES],
 ) -> Result<RouteToken, TokenError> {
-    let nonce: &[u8; XCHACHA_NONCE_BYTES] = data[..XCHACHA_NONCE_BYTES].try_into().unwrap();
+    let nonce: &[u8; XCHACHA_NONCE_BYTES] = data[..XCHACHA_NONCE_BYTES]
+        .try_into()
+        .expect("infallible: data is [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] >= XCHACHA_NONCE_BYTES");
     let ciphertext = &data[XCHACHA_NONCE_BYTES..];
     let plaintext = xchacha_decrypt(ciphertext, nonce, key, &[])?;
     if plaintext.len() != ROUTE_TOKEN_BYTES {
@@ -107,7 +109,10 @@ pub fn decrypt_route_token(
             got: plaintext.len(),
         });
     }
-    let bytes: &[u8; ROUTE_TOKEN_BYTES] = plaintext.as_slice().try_into().unwrap();
+    let bytes: &[u8; ROUTE_TOKEN_BYTES] = plaintext
+        .as_slice()
+        .try_into()
+        .expect("infallible: length verified by SizeMismatch guard above");
     Ok(route_token_from_bytes(bytes))
 }
 
@@ -133,7 +138,9 @@ pub fn decrypt_continue_token(
     data: &[u8; ENCRYPTED_CONTINUE_TOKEN_BYTES],
     key: &[u8; XCHACHA_KEY_BYTES],
 ) -> Result<ContinueToken, TokenError> {
-    let nonce: &[u8; XCHACHA_NONCE_BYTES] = data[..XCHACHA_NONCE_BYTES].try_into().unwrap();
+    let nonce: &[u8; XCHACHA_NONCE_BYTES] = data[..XCHACHA_NONCE_BYTES]
+        .try_into()
+        .expect("infallible: data is [u8; ENCRYPTED_CONTINUE_TOKEN_BYTES] >= XCHACHA_NONCE_BYTES");
     let ciphertext = &data[XCHACHA_NONCE_BYTES..];
     let plaintext = xchacha_decrypt(ciphertext, nonce, key, &[])?;
     if plaintext.len() != CONTINUE_TOKEN_BYTES {
@@ -142,7 +149,10 @@ pub fn decrypt_continue_token(
             got: plaintext.len(),
         });
     }
-    let bytes: &[u8; CONTINUE_TOKEN_BYTES] = plaintext.as_slice().try_into().unwrap();
+    let bytes: &[u8; CONTINUE_TOKEN_BYTES] = plaintext
+        .as_slice()
+        .try_into()
+        .expect("infallible: length verified by SizeMismatch guard above");
     Ok(continue_token_from_bytes(bytes))
 }
 

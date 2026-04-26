@@ -126,21 +126,33 @@ impl<'a> ReadBuf<'a> {
 
     pub fn read_u16_le(&mut self) -> RwResult<u16> {
         self.check_read(2)?;
-        let v = u16::from_le_bytes(self.buf[self.pos..self.pos + 2].try_into().unwrap());
+        let v = u16::from_le_bytes(
+            self.buf[self.pos..self.pos + 2]
+                .try_into()
+                .expect("infallible: slice length == 2 guaranteed by check_read(2) above"),
+        );
         self.pos += 2;
         Ok(v)
     }
 
     pub fn read_u32_le(&mut self) -> RwResult<u32> {
         self.check_read(4)?;
-        let v = u32::from_le_bytes(self.buf[self.pos..self.pos + 4].try_into().unwrap());
+        let v = u32::from_le_bytes(
+            self.buf[self.pos..self.pos + 4]
+                .try_into()
+                .expect("infallible: slice length == 4 guaranteed by check_read(4) above"),
+        );
         self.pos += 4;
         Ok(v)
     }
 
     pub fn read_u64_le(&mut self) -> RwResult<u64> {
         self.check_read(8)?;
-        let v = u64::from_le_bytes(self.buf[self.pos..self.pos + 8].try_into().unwrap());
+        let v = u64::from_le_bytes(
+            self.buf[self.pos..self.pos + 8]
+                .try_into()
+                .expect("infallible: slice length == 8 guaranteed by check_read(8) above"),
+        );
         self.pos += 8;
         Ok(v)
     }

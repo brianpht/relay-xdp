@@ -105,6 +105,11 @@ pub enum Notify {
     SessionRegistered { session_id: u64 },
     /// Session was expired.
     SessionExpired { session_id: u64 },
+    /// A send_packet call failed (e.g. payload exceeded MAX_PACKET_BYTES).
+    SendError {
+        session_id: u64,
+        reason: &'static str,
+    },
 }
 
 // ── Shared queue type aliases ─────────────────────────────────────────────────
@@ -149,6 +154,7 @@ impl ServerInner {
             state: SERVER_STATE_CLOSED,
             num_sessions: 0,
             bind_address: Address::None,
+            last_send_error: None,
         };
 
         (inner, server)
@@ -304,6 +310,10 @@ impl ServerInner {
         //   [43..]    payload
         let total = PACKET_BODY_OFFSET + ROUTE_HEADER_BYTES + payload.len();
         if total > MAX_PACKET_BYTES {
+            self.push_notify(Notify::SendError {
+                session_id,
+                reason: "payload too large for MAX_PACKET_BYTES",
+            });
             return;
         }
 
@@ -313,7 +323,7 @@ impl ServerInner {
         let header_slice: &mut [u8; ROUTE_HEADER_BYTES] = (&mut buf
             [PACKET_BODY_OFFSET..PACKET_BODY_OFFSET + ROUTE_HEADER_BYTES])
             .try_into()
-            .unwrap();
+            .expect("infallible: slice is exactly ROUTE_HEADER_BYTES wide");
         write_header(
             PACKET_TYPE_SERVER_TO_CLIENT,
             seq,
@@ -356,6 +366,10 @@ pub struct Server {
     pub state: i32,
     pub num_sessions: usize,
     pub bind_address: Address,
+    /// Last send error from the network thread, if any.
+    /// Set when send_packet_inner fails (e.g. oversized payload).
+    /// Cleared by `clear_last_send_error()`.
+    pub last_send_error: Option<(u64, &'static str)>,
 }
 
 impl Server {
@@ -431,6 +445,9 @@ impl Server {
                     self.num_sessions -= 1;
                 }
             }
+            Notify::SendError { session_id, reason } => {
+                self.last_send_error = Some((session_id, reason));
+            }
             Notify::PacketReceived { .. } => {}
             Notify::SendRaw { .. } => {}
         }
@@ -468,6 +485,10 @@ impl Server {
     }
     pub fn state(&self) -> i32 {
         self.state
+    }
+    /// Clear the last recorded send error.
+    pub fn clear_last_send_error(&mut self) {
+        self.last_send_error = None;
     }
 
     fn push_command(&self, c: Command) {

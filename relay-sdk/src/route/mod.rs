@@ -169,8 +169,16 @@ pub fn read_header(
     if header.len() < HEADER_BYTES {
         return None;
     }
-    let sequence = u64::from_le_bytes(header[0..8].try_into().unwrap());
-    let session_id = u64::from_le_bytes(header[8..16].try_into().unwrap());
+    let sequence = u64::from_le_bytes(
+        header[0..8]
+            .try_into()
+            .expect("infallible: header.len() >= HEADER_BYTES (25) checked above"),
+    );
+    let session_id = u64::from_le_bytes(
+        header[8..16]
+            .try_into()
+            .expect("infallible: header.len() >= HEADER_BYTES (25) checked above"),
+    );
     let session_version = header[16];
     let sha = hash_sha256(&make_header_data(
         private_key,
