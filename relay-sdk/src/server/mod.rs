@@ -6,6 +6,12 @@
 //
 // IPC: Arc<Mutex<VecDeque<T>>> queues only.
 //
+// Performance (task 7 + 8):
+//   - Outbound SERVER_TO_CLIENT packets use BytePool (no per-packet heap alloc).
+//   - pump_commands() drains the entire command queue under a single lock.
+//   - Notify items are accumulated locally and flushed under a single lock
+//     at the end of each pump_commands() / process_incoming() call.
+//
 // Role: receives CLIENT_TO_SERVER_PACKET from the last relay hop,
 //       verifies the header using per-session session_private_key,
 //       and extracts the game payload.
@@ -25,6 +31,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::address::Address;
 use crate::constants::*;
+use crate::pool::{BytePool, PooledBuf};
 use crate::route::trackers::ReplayProtection;
 use crate::route::{address_ipv4_bytes, write_header, HEADER_BYTES as ROUTE_HEADER_BYTES};
 
@@ -100,7 +107,8 @@ pub enum Notify {
     /// A game payload was received from a client session.
     PacketReceived { session_id: u64, payload: Vec<u8> },
     /// A raw UDP packet to send on the socket.
-    SendRaw { to: Address, data: Vec<u8> },
+    /// Uses a pooled buffer to avoid per-packet heap allocation (task 7).
+    SendRaw { to: Address, data: PooledBuf },
     /// Session was registered successfully.
     SessionRegistered { session_id: u64 },
     /// Session was expired.
@@ -131,6 +139,14 @@ pub struct ServerInner {
 
     // Scratch buffer for SERVER_TO_CLIENT packets.
     send_buf: Box<[u8; MAX_PACKET_BYTES]>,
+
+    // Task 7: pool of pre-allocated packet buffers (capacity = MAX_PACKET_BYTES).
+    packet_pool: BytePool,
+
+    // Task 8: local staging buffer for notify items.
+    // Accumulated during pump_commands / process_incoming, flushed once at the
+    // end under a single lock acquisition instead of one lock per push_notify.
+    notify_batch: Vec<Notify>,
 }
 
 impl ServerInner {
@@ -139,6 +155,9 @@ impl ServerInner {
         let commands: CommandQueue = Arc::new(Mutex::new(VecDeque::new()));
         let notify: NotifyQueue = Arc::new(Mutex::new(VecDeque::new()));
 
+        let packet_pool = BytePool::new();
+        packet_pool.warm(8); // pre-allocate 8 buffers to absorb cold-start bursts
+
         let inner = ServerInner {
             commands: Arc::clone(&commands),
             notify: Arc::clone(&notify),
@@ -146,6 +165,8 @@ impl ServerInner {
             bind_address: Address::None,
             sessions: HashMap::new(),
             send_buf: Box::new([0u8; MAX_PACKET_BYTES]),
+            packet_pool,
+            notify_batch: Vec::new(),
         };
 
         let server = Server {
@@ -160,19 +181,30 @@ impl ServerInner {
         (inner, server)
     }
 
-    // ── Command pump ─────────────────────────────────────────────────────────
+    // ── Command pump (task 8) ─────────────────────────────────────────────────
 
     /// Drain all pending commands. Returns false if Destroy was received.
+    ///
+    /// Task 8: drains the entire command queue under a single lock acquisition,
+    /// then processes commands without holding the lock. Notifies accumulated
+    /// during processing are flushed to the shared queue under a single lock at
+    /// the end.
     pub fn pump_commands(&mut self) -> bool {
-        loop {
-            let cmd = { self.commands.lock().unwrap().pop_front() };
-            match cmd {
-                None => break,
-                Some(Command::Destroy) => return false,
-                Some(c) => self.handle_command(c),
+        // Single lock acquisition: take the whole queue.
+        let batch: VecDeque<Command> = std::mem::take(&mut *self.commands.lock().unwrap());
+
+        let mut alive = true;
+        for cmd in batch {
+            if matches!(cmd, Command::Destroy) {
+                alive = false;
+                break;
             }
+            self.handle_command(cmd);
         }
-        true
+
+        // Single lock acquisition: flush all accumulated notifies.
+        self.flush_notify();
+        alive
     }
 
     fn handle_command(&mut self, cmd: Command) {
@@ -228,7 +260,16 @@ impl ServerInner {
 
     /// Process a raw incoming UDP packet.
     /// Returns Some((session_id, payload)) if a verified game payload was extracted.
+    ///
+    /// Task 8: any notifies emitted during processing are flushed to the shared
+    /// queue under a single lock at the end.
     pub fn process_incoming(&mut self, data: &[u8]) -> Option<(u64, Vec<u8>)> {
+        let result = self.process_incoming_inner(data);
+        self.flush_notify();
+        result
+    }
+
+    fn process_incoming_inner(&mut self, data: &[u8]) -> Option<(u64, Vec<u8>)> {
         if data.is_empty() {
             return None;
         }
@@ -337,9 +378,31 @@ impl ServerInner {
         // stamp pittle + chonkle.
         crate::route::stamp_packet(&mut buf[..total], magic, &from_bytes, &to_address);
 
+        // Task 7: check out a pooled buffer instead of allocating a new Vec.
         let to = sess.relay_address;
-        let data = buf[..total].to_vec();
+        let mut data = self.packet_pool.get();
+        data.extend_from_slice(&buf[..total]);
         self.push_notify(Notify::SendRaw { to, data });
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /// Accumulate a notify item locally (task 8).
+    /// Call flush_notify() to push the batch to the shared queue under one lock.
+    fn push_notify(&mut self, n: Notify) {
+        self.notify_batch.push(n);
+    }
+
+    /// Flush all accumulated notify items to the shared queue under a single
+    /// lock acquisition (task 8). No-op if the batch is empty.
+    fn flush_notify(&mut self) {
+        if self.notify_batch.is_empty() {
+            return;
+        }
+        let mut q = self.notify.lock().unwrap();
+        for n in self.notify_batch.drain(..) {
+            q.push_back(n);
+        }
     }
 
     // ── Accessors ─────────────────────────────────────────────────────────────
@@ -350,10 +413,6 @@ impl ServerInner {
 
     pub fn session_count(&self) -> usize {
         self.sessions.len()
-    }
-
-    fn push_notify(&self, n: Notify) {
-        self.notify.lock().unwrap().push_back(n);
     }
 }
 
@@ -469,7 +528,8 @@ impl Server {
     }
 
     /// Pop next outbound raw UDP packet, if any.
-    pub fn pop_send_raw(&mut self) -> Option<(Address, Vec<u8>)> {
+    /// Returns a `PooledBuf` that is automatically returned to the pool on drop.
+    pub fn pop_send_raw(&mut self) -> Option<(Address, PooledBuf)> {
         loop {
             let n = { self.notify.lock().unwrap().pop_front() };
             match n {
@@ -700,5 +760,80 @@ mod tests {
         assert!(inner.process_incoming(&buf).is_some());
         // Second receive (replay) should be rejected.
         assert!(inner.process_incoming(&buf).is_none());
+    }
+
+    // ── Task 7 specific tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn send_packet_uses_pooled_buf() {
+        use crate::route::{address_ipv4_bytes, stamp_packet, write_header};
+        let (mut inner, mut server) = make_pair();
+        server.open(addr());
+        inner.pump_commands();
+        server.register_session(1, 1, priv_key(), relay_addr());
+        inner.pump_commands();
+        server.drain_notify(); // apply SessionRegistered
+
+        // Send a small payload.
+        server.send_packet(1, b"hi", [0u8; 8], addr());
+        inner.pump_commands();
+
+        // pop_send_raw must return a PooledBuf containing the packet.
+        let result = server.pop_send_raw();
+        assert!(result.is_some(), "expected SendRaw in notify queue");
+        let (to, data) = result.unwrap();
+        assert_eq!(to, relay_addr());
+        assert!(!data.is_empty(), "pooled buffer must contain packet bytes");
+        assert_eq!(data[0], PACKET_TYPE_SERVER_TO_CLIENT);
+        // PooledBuf is returned to pool on drop here.
+    }
+
+    #[test]
+    fn send_packet_oversized_emits_send_error() {
+        let (mut inner, mut server) = make_pair();
+        server.open(addr());
+        inner.pump_commands();
+        server.register_session(2, 1, priv_key(), relay_addr());
+        inner.pump_commands();
+        server.drain_notify();
+
+        // Payload that would exceed MAX_PACKET_BYTES.
+        let big_payload = vec![0u8; MAX_PACKET_BYTES];
+        server.send_packet(2, &big_payload, [0u8; 8], addr());
+        inner.pump_commands();
+        server.drain_notify();
+
+        assert!(
+            server.last_send_error.is_some(),
+            "oversized payload must set last_send_error"
+        );
+        let (sid, reason) = server.last_send_error.unwrap();
+        assert_eq!(sid, 2);
+        assert!(!reason.is_empty());
+    }
+
+    // ── Task 8 specific tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn pump_commands_batch_processes_multiple_commands_in_one_call() {
+        let (mut inner, mut server) = make_pair();
+        // Queue several commands before pumping.
+        server.open(addr());
+        server.register_session(10, 1, priv_key(), relay_addr());
+        server.register_session(11, 1, priv_key(), relay_addr());
+        // All three processed in a single pump_commands call.
+        inner.pump_commands();
+        assert_eq!(inner.state, SERVER_STATE_OPEN);
+        assert_eq!(inner.session_count(), 2);
+    }
+
+    #[test]
+    fn notify_batch_flushed_atomically() {
+        let (mut inner, mut server) = make_pair();
+        server.open(addr());
+        server.register_session(20, 1, priv_key(), relay_addr());
+        inner.pump_commands(); // flush: Open + RegisterSession notifies in one lock
+        server.drain_notify();
+        assert_eq!(server.num_sessions, 1);
     }
 }

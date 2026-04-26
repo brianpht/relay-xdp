@@ -1,0 +1,223 @@
+// pool.rs - Pre-allocated packet buffer pool.
+//
+// BytePool: thread-safe pool of Vec<u8> with capacity = MAX_PACKET_BYTES.
+// PooledBuf: RAII wrapper; buffer is cleared and returned to the pool on drop.
+//
+// Task 7 (memory-pooling): eliminates per-packet heap allocation on the outbound
+// packet hot path by recycling buffers between pump_commands() cycles.
+//
+// Usage pattern:
+//   let pool = BytePool::new();
+//   pool.warm(8);                          // pre-allocate 8 buffers
+//   let mut buf = pool.get();              // check out (no heap alloc if warm)
+//   buf.extend_from_slice(&send_buf[..len]); // fill
+//   push_notify(Notify::SendRaw { to, data: buf }); // move into queue
+//   // drop(buf) when main thread drops it -> returned to pool
+
+use std::mem::ManuallyDrop;
+use std::ops::Deref;
+use std::sync::{Arc, Mutex};
+
+use crate::constants::MAX_PACKET_BYTES;
+
+/// Maximum buffers retained in the pool to prevent unbounded growth.
+const POOL_MAX_SIZE: usize = 32;
+
+// ── BytePool ──────────────────────────────────────────────────────────────────
+
+/// Thread-safe pool of pre-allocated packet buffers (capacity = MAX_PACKET_BYTES).
+/// Clone is cheap - clones share the same backing pool.
+#[derive(Clone, Default)]
+pub struct BytePool(Arc<Mutex<Vec<Vec<u8>>>>);
+
+impl BytePool {
+    /// Create an empty pool.
+    pub fn new() -> Self {
+        BytePool(Arc::new(Mutex::new(Vec::new())))
+    }
+
+    /// Pre-allocate `n` buffers (call once after `new()` to avoid cold-start
+    /// allocations during the first burst of packets).
+    pub fn warm(&self, n: usize) {
+        let mut guard = self.0.lock().unwrap();
+        for _ in 0..n {
+            guard.push(Vec::with_capacity(MAX_PACKET_BYTES));
+        }
+    }
+
+    /// Check out a buffer from the pool. If the pool is empty a new buffer is
+    /// allocated with `capacity = MAX_PACKET_BYTES`. The buffer is always empty
+    /// (len == 0) when returned.
+    ///
+    /// The buffer is automatically returned to the pool when the `PooledBuf` is
+    /// dropped.
+    pub fn get(&self) -> PooledBuf {
+        let buf = {
+            let mut guard = self.0.lock().unwrap();
+            guard
+                .pop()
+                .unwrap_or_else(|| Vec::with_capacity(MAX_PACKET_BYTES))
+        };
+        PooledBuf {
+            data: ManuallyDrop::new(buf),
+            pool: Arc::clone(&self.0),
+        }
+    }
+
+    /// Number of buffers currently sitting in the pool (for tests / diagnostics).
+    #[cfg(test)]
+    pub fn pool_size(&self) -> usize {
+        self.0.lock().unwrap().len()
+    }
+}
+
+// ── PooledBuf ─────────────────────────────────────────────────────────────────
+
+/// A packet buffer checked out from a `BytePool`.
+///
+/// - `Deref<Target = [u8]>` and `AsRef<[u8]>` allow `&buf` to be used wherever
+///   `&[u8]` is expected (e.g. `UdpSocket::send_to(&buf, addr)`).
+/// - On `Drop`, the buffer is cleared and returned to the pool so the next
+///   `BytePool::get()` call reuses the allocation.
+pub struct PooledBuf {
+    // Safety invariant: `data` is valid for the lifetime of this struct.
+    // ManuallyDrop prevents the Vec from being dropped by Rust's normal drop
+    // glue; we handle the drop manually in our Drop impl.
+    data: ManuallyDrop<Vec<u8>>,
+    pool: Arc<Mutex<Vec<Vec<u8>>>>,
+}
+
+impl PooledBuf {
+    /// Number of bytes currently written into the buffer.
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Returns `true` if no bytes have been written.
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// Append bytes from `src`. Equivalent to `Vec::extend_from_slice`.
+    pub fn extend_from_slice(&mut self, src: &[u8]) {
+        // Safety: self.data is a valid Vec<u8> for the lifetime of self.
+        self.data.extend_from_slice(src);
+    }
+}
+
+impl Deref for PooledBuf {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        // Safety: self.data is a valid Vec<u8>.
+        &self.data
+    }
+}
+
+impl AsRef<[u8]> for PooledBuf {
+    fn as_ref(&self) -> &[u8] {
+        &self.data
+    }
+}
+
+impl std::fmt::Debug for PooledBuf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PooledBuf({}B)", self.data.len())
+    }
+}
+
+impl Drop for PooledBuf {
+    fn drop(&mut self) {
+        // Safety: self.data is valid; ManuallyDrop prevents double-drop.
+        // We take ownership here to clear + potentially return to pool.
+        let mut v = unsafe { ManuallyDrop::take(&mut self.data) };
+        v.clear();
+        // Return to pool if not full; otherwise the Vec is freed normally.
+        if let Ok(mut guard) = self.pool.lock() {
+            if guard.len() < POOL_MAX_SIZE {
+                guard.push(v);
+            }
+            // If pool is full: Vec is freed by going out of scope here.
+        }
+        // If lock is poisoned (prior panic): Vec is freed normally - no UB.
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pool_get_returns_empty_buffer() {
+        let pool = BytePool::new();
+        let buf = pool.get();
+        assert_eq!(buf.len(), 0);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn pool_buf_deref_reads_written_bytes() {
+        let pool = BytePool::new();
+        let mut buf = pool.get();
+        buf.extend_from_slice(b"hello relay");
+        assert_eq!(&buf[..], b"hello relay");
+        assert_eq!(buf.len(), 11);
+    }
+
+    #[test]
+    fn pool_buf_returned_on_drop() {
+        let pool = BytePool::new();
+        assert_eq!(pool.pool_size(), 0);
+        {
+            let mut buf = pool.get();
+            buf.extend_from_slice(b"data");
+            // buf dropped here
+        }
+        // Buffer should be back in the pool, cleared.
+        assert_eq!(pool.pool_size(), 1);
+        let recycled = pool.get();
+        assert!(recycled.is_empty(), "recycled buffer must be cleared");
+    }
+
+    #[test]
+    fn pool_warm_prepopulates() {
+        let pool = BytePool::new();
+        pool.warm(4);
+        assert_eq!(pool.pool_size(), 4);
+        // Each get() should not hit the else branch.
+        let b0 = pool.get();
+        assert_eq!(pool.pool_size(), 3);
+        drop(b0);
+        assert_eq!(pool.pool_size(), 4); // returned after drop
+    }
+
+    #[test]
+    fn pool_max_size_not_exceeded() {
+        let pool = BytePool::new();
+        pool.warm(POOL_MAX_SIZE);
+        assert_eq!(pool.pool_size(), POOL_MAX_SIZE);
+        // Returning one more buffer should NOT grow the pool beyond POOL_MAX_SIZE.
+        let buf = pool.get(); // takes one -> size = POOL_MAX_SIZE - 1
+        drop(buf); // returns -> size = POOL_MAX_SIZE (not POOL_MAX_SIZE + 1)
+        assert_eq!(pool.pool_size(), POOL_MAX_SIZE);
+    }
+
+    #[test]
+    fn pool_buf_as_ref_slice() {
+        let pool = BytePool::new();
+        let mut buf = pool.get();
+        buf.extend_from_slice(&[1, 2, 3]);
+        let s: &[u8] = buf.as_ref();
+        assert_eq!(s, &[1, 2, 3]);
+    }
+
+    #[test]
+    fn pool_buf_debug_contains_length() {
+        let pool = BytePool::new();
+        let mut buf = pool.get();
+        buf.extend_from_slice(b"abc");
+        let dbg = format!("{buf:?}");
+        assert!(dbg.contains('3'), "debug should contain byte length");
+    }
+}

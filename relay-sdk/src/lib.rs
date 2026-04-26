@@ -1,10 +1,11 @@
 //! relay-sdk - Pure Rust SDK for game client/server connecting to relay-xdp network.
 //!
 //! Crate layout:
+//!   mod pool      - BytePool / PooledBuf (pre-allocated packet buffer pool)
 //!   mod bitpacker  - BitWriter / BitReader (low-level bit I/O) [copied from rust-sdk]
 //!   mod stream     - WriteStream / ReadStream + serialize macros [copied from rust-sdk]
 //!   mod read_write - WriteBuf / ReadBuf (byte-level helpers) [copied from rust-sdk]
-//!   mod platform   - OS abstractions (time) [copied from rust-sdk]
+//!   mod platform   - OS abstractions (time, connection type, socket buffers)
 //!   mod address    - Address enum (None / V4 / V6) + LE byte encoding [rewritten]
 //!   mod crypto     - SHA-256 + XChaCha20-Poly1305 only [rewritten, subset of rust-sdk]
 //!   mod tokens     - RouteToken, ContinueToken encrypt/decrypt [rewritten]
@@ -13,11 +14,12 @@
 //!     mod route::trackers - ReplayProtection, PingHistory, BandwidthLimiter [copied]
 //!   mod client     - Client: game client relay session [new]
 //!   mod server     - Server: game server as final relay destination [new]
-//!   mod ffi        - #[no_mangle] C-ABI exports (stub)
+//!   mod ffi        - #[no_mangle] C-ABI exports
 
 #![allow(dead_code)]
 
 pub mod constants;
+pub mod pool;
 
 // Copied from rust-sdk unchanged
 pub mod bitpacker;

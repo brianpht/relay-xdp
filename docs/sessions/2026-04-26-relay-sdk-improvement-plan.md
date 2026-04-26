@@ -112,12 +112,24 @@
    - `[[example]]` entries added to `Cargo.toml`
    - Test count unchanged: 132 total (118 unit + 14 integration)
 
-**Blocked (waiting on dependencies):**
+7. **[DONE] High:** `memory-pooling` - Eliminated per-packet heap allocation on outbound send hot paths:
+   - Added `src/pool.rs`: `BytePool` (thread-safe, `Arc<Mutex<Vec<Vec<u8>>>>`, pre-seeded via `warm(n)`) and `PooledBuf` (RAII, auto-returns to pool on drop, implements `Deref<Target=[u8]>`, `AsRef<[u8]>`, `Debug`)
+   - `POOL_MAX_SIZE = 32` caps pool growth; cold-start warmed with 8 buffers in `create()`
+   - `client/mod.rs`: `Notify::SendRaw.data` changed from `Vec<u8>` to `PooledBuf`; all 3 `to_vec()` send sites replaced with `packet_pool.get()` + `extend_from_slice`
+   - `server/mod.rs`: same - `Notify::SendRaw.data` -> `PooledBuf`; `send_packet_inner` uses pool checkout; `Server::pop_send_raw` return type updated to `Option<(Address, PooledBuf)>`
+   - 6 new tests in `pool.rs`: `pool_get_returns_empty_buffer`, `pool_buf_deref_reads_written_bytes`, `pool_buf_returned_on_drop`, `pool_warm_prepopulates`, `pool_max_size_not_exceeded`, `pool_buf_as_ref_slice`, `pool_buf_debug_contains_length`
+   - 2 new tests in `server/mod.rs`: `send_packet_uses_pooled_buf`, `send_packet_oversized_emits_send_error`
+8. **[DONE] High:** `mutex-optimization` - Reduced lock acquisitions from O(N) per pump to O(2) per pump:
+   - `client/mod.rs pump_commands`: replaced per-command `pop_front` loop with single `std::mem::take` drain; added `notify_batch: Vec<Notify>` field; `push_notify` accumulates locally; `flush_notify` pushes entire batch under one lock at end of `pump_commands` and `process_incoming`
+   - `server/mod.rs pump_commands`: same pattern applied - single batch drain + `notify_batch` + `flush_notify()`; `process_incoming` also wrapped with `flush_notify()` at end
+   - `push_notify(&mut self, ...)` signature changed from `&self` to `&mut self` (no longer needs to acquire lock per call)
+   - 2 new tests in each: `pump_commands_batch_processes_multiple_commands_in_one_call`, `notify_batch_flushed_atomically`
+   - Test count: 145 total (131 unit + 14 integration)
 
-7. **High:** `memory-pooling` - depends on `performance-unwraps`
-8. **High:** `mutex-optimization` - depends on `performance-unwraps`
+**Remaining (deferred / lower priority):**
+
 9. **Medium:** `observability` - depends on `error-handling`
-10. **Medium:** `async-support` - depends on `error-handling`
+10. **Medium:** `async-support` - depends on `error-handling` - recommend deferring (conflicts with threading model rules, adds tokio dep)
 11. **Low:** `health-monitoring` - depends on `observability`
 12. **Low:** `testing-expansion` - depends on `benchmarking`
 
@@ -129,6 +141,8 @@
 | M | `relay-sdk/src/route/mod.rs` |
 | M | `relay-sdk/src/tokens/mod.rs` |
 | M | `relay-sdk/src/read_write.rs` |
+| A | `relay-sdk/src/pool.rs` |
+| M | `relay-sdk/src/client/mod.rs` |
 | M | `relay-sdk/src/server/mod.rs` |
 | M | `relay-sdk/src/stream/mod.rs` |
 | M | `relay-sdk/src/route/trackers.rs` |

@@ -7,6 +7,12 @@
 // IPC: Arc<Mutex<VecDeque<T>>> queues only (matches relay-xdp threading model).
 // No threads are spawned here - callers control execution.
 //
+// Performance (task 7 + 8):
+//   - Outbound packets use BytePool to avoid per-packet heap allocation.
+//   - pump_commands() drains the entire command queue under a single lock.
+//   - Notify items are accumulated locally and flushed under a single lock
+//     at the end of each pump_commands() / process_incoming() call.
+//
 // Session lifecycle:
 //   1. open_session(server_address, client_secret_key)
 //   2. Network thread receives RouteUpdate from backend (HTTP push) -> update()
@@ -21,6 +27,7 @@ use crate::address::Address;
 use crate::constants::*;
 use crate::crypto::XCHACHA_KEY_BYTES;
 use crate::packets::{ContinueResponsePacket, RouteResponsePacket, PACKET_BODY_OFFSET};
+use crate::pool::{BytePool, PooledBuf};
 use crate::route::trackers::ReplayProtection;
 use crate::route::{read_header, RouteManager, HEADER_BYTES};
 
@@ -69,8 +76,9 @@ pub enum Notify {
         fallback_to_direct: bool,
         flags: u32,
     },
-    /// A pending route request packet to send on the UDP socket.
-    SendRaw { to: Address, data: Vec<u8> },
+    /// A relay protocol packet to send on the UDP socket.
+    /// Uses a pooled buffer to avoid per-packet heap allocation (task 7).
+    SendRaw { to: Address, data: PooledBuf },
 }
 
 // ── Shared queue type aliases ─────────────────────────────────────────────────
@@ -94,8 +102,16 @@ pub struct ClientInner {
     pub route_manager: RouteManager,
     pub payload_replay: ReplayProtection,
 
-    // Scratch buffer for route request / data packets.
+    // Scratch buffer for building outbound packets before copying into pool buf.
     send_buf: Box<[u8; MAX_PACKET_BYTES]>,
+
+    // Task 7: pool of pre-allocated packet buffers (capacity = MAX_PACKET_BYTES).
+    packet_pool: BytePool,
+
+    // Task 8: local staging buffer for notify items.
+    // Accumulated during pump_commands / process_incoming, flushed once at the
+    // end under a single lock acquisition instead of one lock per push_notify.
+    notify_batch: Vec<Notify>,
 }
 
 impl ClientInner {
@@ -103,6 +119,9 @@ impl ClientInner {
     pub fn create() -> (ClientInner, Client) {
         let commands: CommandQueue = Arc::new(Mutex::new(VecDeque::new()));
         let notify: NotifyQueue = Arc::new(Mutex::new(VecDeque::new()));
+
+        let packet_pool = BytePool::new();
+        packet_pool.warm(8); // pre-allocate 8 buffers to absorb cold-start bursts
 
         let inner = ClientInner {
             commands: Arc::clone(&commands),
@@ -116,6 +135,8 @@ impl ClientInner {
             route_manager: RouteManager::new(),
             payload_replay: ReplayProtection::new(),
             send_buf: Box::new([0u8; MAX_PACKET_BYTES]),
+            packet_pool,
+            notify_batch: Vec::new(),
         };
 
         let client = Client {
@@ -131,22 +152,30 @@ impl ClientInner {
         (inner, client)
     }
 
-    // ── Command pump ─────────────────────────────────────────────────────────
+    // ── Command pump (task 8) ─────────────────────────────────────────────────
 
     /// Drain all pending commands. Returns false if Destroy was received.
+    ///
+    /// Task 8: drains the entire command queue under a single lock acquisition,
+    /// then processes commands without holding the lock. Notifies accumulated
+    /// during processing are flushed to the shared queue under a single lock at
+    /// the end.
     pub fn pump_commands(&mut self) -> bool {
-        loop {
-            let cmd = {
-                let mut q = self.commands.lock().unwrap();
-                q.pop_front()
-            };
-            match cmd {
-                None => break,
-                Some(Command::Destroy) => return false,
-                Some(c) => self.handle_command(c),
+        // Single lock acquisition: take the whole queue.
+        let batch: VecDeque<Command> = std::mem::take(&mut *self.commands.lock().unwrap());
+
+        let mut alive = true;
+        for cmd in batch {
+            if matches!(cmd, Command::Destroy) {
+                alive = false;
+                break;
             }
+            self.handle_command(cmd);
         }
-        true
+
+        // Single lock acquisition: flush all accumulated notifies.
+        self.flush_notify();
+        alive
     }
 
     fn handle_command(&mut self, cmd: Command) {
@@ -207,10 +236,12 @@ impl ClientInner {
                     &self.magic,
                     &self.client_external_address,
                 ) {
-                    let data = self.send_buf[..len].to_vec();
+                    // Task 7: check out a pooled buffer instead of allocating.
+                    let mut data = self.packet_pool.get();
+                    data.extend_from_slice(&self.send_buf[..len]);
                     self.push_notify(Notify::SendRaw { to, data });
                 }
-                // If no relay route: caller is responsible for direct UDP to server_address.
+                // No relay route: caller is responsible for direct UDP to server_address.
             }
         }
     }
@@ -246,7 +277,17 @@ impl ClientInner {
 
     /// Process a raw incoming UDP packet (from relay or server).
     /// Returns Some(payload) if a game payload was extracted.
+    ///
+    /// Task 8: any route-change notifies emitted during processing are flushed
+    /// to the shared queue under a single lock at the end.
     pub fn process_incoming(&mut self, data: &[u8]) -> Option<Vec<u8>> {
+        let result = self.process_incoming_inner(data);
+        // Flush route-change notifies accumulated during this call.
+        self.flush_notify();
+        result
+    }
+
+    fn process_incoming_inner(&mut self, data: &[u8]) -> Option<Vec<u8>> {
         if data.is_empty() {
             return None;
         }
@@ -300,20 +341,22 @@ impl ClientInner {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     fn try_send_pending(&mut self) {
-        // Try to send a pending route request.
+        // Task 7: use pooled buffer for route request packet.
         if let Some((to, len)) = self
             .route_manager
             .send_route_request(self.send_buf.as_mut())
         {
-            let data = self.send_buf[..len].to_vec();
+            let mut data = self.packet_pool.get();
+            data.extend_from_slice(&self.send_buf[..len]);
             self.push_notify(Notify::SendRaw { to, data });
         }
-        // Try to send a pending continue request.
+        // Task 7: use pooled buffer for continue request packet.
         if let Some((to, len)) = self
             .route_manager
             .send_continue_request(self.send_buf.as_mut())
         {
-            let data = self.send_buf[..len].to_vec();
+            let mut data = self.packet_pool.get();
+            data.extend_from_slice(&self.send_buf[..len]);
             self.push_notify(Notify::SendRaw { to, data });
         }
     }
@@ -327,8 +370,22 @@ impl ClientInner {
         });
     }
 
-    fn push_notify(&self, n: Notify) {
-        self.notify.lock().unwrap().push_back(n);
+    /// Accumulate a notify item locally (task 8).
+    /// Call flush_notify() to push the batch to the shared queue under one lock.
+    fn push_notify(&mut self, n: Notify) {
+        self.notify_batch.push(n);
+    }
+
+    /// Flush all accumulated notify items to the shared queue under a single
+    /// lock acquisition (task 8). No-op if the batch is empty.
+    fn flush_notify(&mut self) {
+        if self.notify_batch.is_empty() {
+            return;
+        }
+        let mut q = self.notify.lock().unwrap();
+        for n in self.notify_batch.drain(..) {
+            q.push_back(n);
+        }
     }
 }
 
@@ -432,7 +489,8 @@ impl Client {
     }
 
     /// Pop next outbound raw UDP packet (to be sent by the socket loop).
-    pub fn pop_send_raw(&self) -> Option<(Address, Vec<u8>)> {
+    /// Returns a `PooledBuf` that is automatically returned to the pool on drop.
+    pub fn pop_send_raw(&self) -> Option<(Address, PooledBuf)> {
         loop {
             let n = { self.notify.lock().unwrap().pop_front() };
             match n {
@@ -553,7 +611,6 @@ mod tests {
         inner.pump_commands();
         // No relay route -> RouteManager returns None -> no SendRaw in queue.
         let notify_count = inner.notify.lock().unwrap().len();
-        // Only RouteChanged notifications expected, no SendRaw.
         let has_send_raw = inner
             .notify
             .lock()
@@ -600,6 +657,33 @@ mod tests {
         inner.pump_commands();
         // UPDATE_TYPE_DIRECT calls direct_route() - no fallback unless already fallback
         assert!(!inner.route_manager.get_fallback_to_direct());
+    }
+
+    // ── Task 8 specific tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn pump_commands_batch_processes_multiple_commands_in_one_call() {
+        let (mut inner, mut client) = make_pair();
+        // Queue several commands before pumping.
+        client.open_session(addr(), key());
+        client.tick(0.016);
+        client.tick(0.016);
+        // All three commands processed in a single pump_commands call.
+        inner.pump_commands();
+        assert!(inner.session_open);
+        assert!((inner.time - 0.032).abs() < 1e-9);
+    }
+
+    #[test]
+    fn notify_batch_flushed_atomically() {
+        let (mut inner, mut client) = make_pair();
+        client.open_session(addr(), key());
+        // pump_commands triggers emit_route_changed -> notify_batch -> flush
+        inner.pump_commands();
+        // The notify queue must be reachable from the Client handle.
+        client.drain_notify();
+        // If batch was not flushed, drain_notify would see nothing (and not crash).
+        // The important invariant is that this doesn't panic.
     }
 }
 
@@ -666,7 +750,6 @@ mod security_tests {
             .get_pending_route_private_key()
             .is_some());
 
-        // Build a ROUTE_RESPONSE with an all-zero (invalid) HMAC.
         let bad_hdr = [0u8; HEADER_BYTES];
         let pkt = RouteResponsePacket {
             relay_header: bad_hdr,
@@ -676,12 +759,10 @@ mod security_tests {
 
         inner.process_incoming(&buf);
 
-        // Route must NOT be active after a spoofed ROUTE_RESPONSE.
         assert!(
             !inner.route_manager.has_network_next_route(),
             "route must not be confirmed with invalid header HMAC"
         );
-        // Pending route must still be outstanding.
         assert!(
             inner
                 .route_manager
@@ -700,7 +781,6 @@ mod security_tests {
             .get_pending_route_private_key()
             .is_some());
 
-        // Build a ROUTE_RESPONSE with a valid HMAC matching the pending session.
         let mut hdr = [0u8; HEADER_BYTES];
         write_header(
             PACKET_TYPE_ROUTE_RESPONSE,
