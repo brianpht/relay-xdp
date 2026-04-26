@@ -1605,6 +1605,7 @@ dependencies = [
  "chacha20poly1305",
  "criterion",
  "hex-literal",
+ "libc",
  "rand",
  "relay-xdp-common",
  "sha2 0.10.9",

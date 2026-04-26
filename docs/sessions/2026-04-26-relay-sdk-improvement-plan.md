@@ -92,7 +92,15 @@
    - Hardened test helper `cstr()` unwrap to `expect("...null bytes...")` with clear message
    - Added 9 new FFI tests: `client_flags_null`, `client_flags_no_route`, `server_send_packet_null_returns_error`, `server_send_packet_oversized_returns_error`, `server_last_send_error_null`, `server_last_send_error_no_error`, `server_clear_last_send_error_null`, `client_send_packet_oversized_is_noop`
    - Test count: 114 unit + 14 integration = 128 total (up from 120)
-5. **Medium:** `platform-todo` - Implement socket buffer size detection and connection type detection in `src/platform/linux.rs`
+5. **[DONE] Medium:** `platform-todo` - Implemented socket buffer size detection and connection type detection in `src/platform/linux.rs`:
+   - Added `ConnectionType` enum (Unknown/Wired/Wifi/Cellular) re-exported from `platform/mod.rs`
+   - `connection_type()` parses `/proc/net/route` for default-route interface, then checks `/sys/class/net/{iface}/wireless` (Wifi) and `/sys/class/net/{iface}/uevent` DEVTYPE=wwan (Cellular); falls back to Wired
+   - `set_socket_send_buffer_size(socket, size) -> bool` / `set_socket_recv_buffer_size` via `libc::setsockopt(SO_SNDBUF/SO_RCVBUF)`
+   - `get_socket_send_buffer_size(socket) -> usize` / `get_socket_recv_buffer_size` via `libc::getsockopt`
+   - Non-Linux stubs added to `platform/mod.rs` (uniform API across all targets)
+   - Added `libc = "0.2"` as `[target.'cfg(target_os = "linux")'.dependencies]`
+   - 4 new tests: `time_is_non_negative_and_monotonic`, `connection_type_returns_a_variant`, `socket_send_buffer_set_and_get`, `socket_recv_buffer_set_and_get`
+   - Test count: 132 total (118 unit + 14 integration)
 6. **Low:** `documentation` - Add `examples/` directory with client and server integration examples
 
 **Blocked (waiting on dependencies):**
@@ -115,4 +123,6 @@
 | M | `relay-sdk/src/server/mod.rs` |
 | M | `relay-sdk/src/stream/mod.rs` |
 | M | `relay-sdk/src/route/trackers.rs` |
-| M | `relay-sdk/src/ffi/mod.rs` |
+| M | `relay-sdk/src/platform/linux.rs` |
+| M | `relay-sdk/src/platform/mod.rs` |
+| M | `relay-sdk/Cargo.toml` |
