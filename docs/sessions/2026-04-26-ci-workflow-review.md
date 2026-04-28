@@ -54,7 +54,12 @@
    - `relay_client_get_stats` / `relay_server_get_stats` C FFI functions added (`#[repr(C)]` structs)
    - +20 tests; total now 165 (151 unit + 14 integration); zero clippy warnings
    - See `docs/sessions/2026-04-26-relay-sdk-improvement-plan.md` task 9 for full detail
-2. **Medium:** Consider adding a `relay-sdk` bench job to CI (`cargo bench --no-run`) to catch benchmark compilation regressions
+2. **[DONE] Medium:** Added `bench` job to `.github/workflows/rust.yml` (2026-04-28):
+   - New job `bench` (name: "Bench (compile check)") runs `cargo bench --no-run -p relay-sdk`
+   - Uses `Swatinem/rust-cache@v2` for dependency caching
+   - Runs in parallel with `fmt`, `clippy`, `test`, `audit` (no `needs` dependency)
+   - `--no-run` compiles all criterion bench targets without executing timing loops - catches regressions cheaply
+   - Verified locally: 2 bench executables compile cleanly (lib benches + `benches/relay_sdk.rs`)
 3. **Low:** `testing-expansion` - Expand integration tests for pool, mutex-optimization, and platform features (depends on `benchmarking` task, now complete)
 
 ## Files Changed
@@ -67,4 +72,5 @@
 | M | `relay-sdk/src/client/mod.rs` |
 | M | `relay-sdk/src/server/mod.rs` |
 | M | `relay-sdk/src/ffi/mod.rs` |
+| M | `.github/workflows/rust.yml` |
 

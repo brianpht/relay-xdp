@@ -76,6 +76,21 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+  bench:
+    name: Bench (compile check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Compile benchmarks (no-run)
+        # --no-run compiles all bench targets without executing them.
+        # This catches benchmark compilation regressions on every push/PR
+        # without paying the cost of running criterion timing loops in CI.
+        run: cargo bench --no-run -p relay-sdk
+
   compose-test:
     name: Compose Integration Test
     runs-on: ubuntu-latest
