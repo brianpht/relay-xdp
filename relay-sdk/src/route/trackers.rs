@@ -422,7 +422,10 @@ mod tests {
     fn replay_protection_advance_then_check_same_sequence() {
         let mut rp = ReplayProtection::new();
         rp.advance_sequence(10);
-        assert!(rp.already_received(10), "sequence 10 must be marked received after advance");
+        assert!(
+            rp.already_received(10),
+            "sequence 10 must be marked received after advance"
+        );
     }
 
     #[test]
@@ -431,7 +434,10 @@ mod tests {
         rp.advance_sequence(42);
         rp.reset();
         // After reset, sequence 42 must be treated as never-seen.
-        assert!(!rp.already_received(42), "reset must clear received history");
+        assert!(
+            !rp.already_received(42),
+            "reset must clear received history"
+        );
     }
 
     #[test]
@@ -441,17 +447,26 @@ mod tests {
         let high = REPLAY_PROTECTION_BUFFER_SIZE as u64 + 5;
         rp.advance_sequence(high);
         // sequence 0 is more than BUFFER_SIZE behind: too old -> already_received
-        assert!(rp.already_received(0), "sequence far behind window must be too old");
+        assert!(
+            rp.already_received(0),
+            "sequence far behind window must be too old"
+        );
         // sequence high - BUFFER_SIZE + 1 is inside the window
         let inside = high - REPLAY_PROTECTION_BUFFER_SIZE as u64 + 1;
-        assert!(!rp.already_received(inside), "sequence inside window must not be too old");
+        assert!(
+            !rp.already_received(inside),
+            "sequence inside window must not be too old"
+        );
     }
 
     #[test]
     fn replay_protection_sequential_advances_no_replay() {
         let mut rp = ReplayProtection::new();
         for seq in 0u64..20 {
-            assert!(!rp.already_received(seq), "fresh sequence {seq} should not be replayed");
+            assert!(
+                !rp.already_received(seq),
+                "fresh sequence {seq} should not be replayed"
+            );
             rp.advance_sequence(seq);
         }
     }
@@ -466,13 +481,21 @@ mod tests {
         }
         tracker.reset();
         // After reset, update() should return 0 (no history).
-        assert_eq!(tracker.update(), 0, "reset tracker must report 0 lost packets");
+        assert_eq!(
+            tracker.update(),
+            0,
+            "reset tracker must report 0 lost packets"
+        );
     }
 
     #[test]
     fn packet_loss_update_with_no_packets_returns_zero() {
         let mut tracker = PacketLossTracker::new();
-        assert_eq!(tracker.update(), 0, "fresh tracker with no packets must return 0");
+        assert_eq!(
+            tracker.update(),
+            0,
+            "fresh tracker with no packets must return 0"
+        );
     }
 
     #[test]
@@ -482,7 +505,11 @@ mod tests {
         for i in 0..n {
             tracker.packet_received(i);
         }
-        assert_eq!(tracker.update(), 0, "all in-order packets: no loss expected");
+        assert_eq!(
+            tracker.update(),
+            0,
+            "all in-order packets: no loss expected"
+        );
     }
 
     #[test]
@@ -552,16 +579,16 @@ mod tests {
         let s1 = h.ping_sent(1.2); // ping time 1.2
         h.pong_received(s0, 1.11); // rtt = 10 ms
         h.pong_received(s1, 1.25); // rtt = 50 ms  -> most_recent_pong = 1.25 -> end = 0.25
-        // end(0.25) < start(1.0) -> no entries fall in window -> default stats.
-        // Use a larger window that accommodates both pings.
+                                   // end(0.25) < start(1.0) -> no entries fall in window -> default stats.
+                                   // Use a larger window that accommodates both pings.
         let s2 = h.ping_sent(10.0);
         h.pong_received(s2, 10.01); // 10 ms
         let s3 = h.ping_sent(10.1);
         h.pong_received(s3, 10.15); // 50 ms; most_recent_pong=10.15, end=9.15
-        // Both s2(10.0) and s3(10.1) are in [safety=1.0 .. end=9.15]? No:
-        // end = most_recent_pong(10.15) - safety(1.0) = 9.15
-        // s2 is at 10.0 > 9.15 -> not in window
-        // -> only the long window would work; skip detailed assertion, just check rtt > 0
+                                    // Both s2(10.0) and s3(10.1) are in [safety=1.0 .. end=9.15]? No:
+                                    // end = most_recent_pong(10.15) - safety(1.0) = 9.15
+                                    // s2 is at 10.0 > 9.15 -> not in window
+                                    // -> only the long window would work; skip detailed assertion, just check rtt > 0
         let stats = h.route_stats(0.0, 100.0);
         // At minimum the pong at 10.01 makes most_recent_pong > 0, giving end = 9.15.
         // s2 at 10.0 > 9.15 so no entry lands in window; stats.rtt == 0 is acceptable.
@@ -597,7 +624,10 @@ mod tests {
         bl.reset();
         // After reset, first packet should not exceed quota.
         let exceeded = bl.add_packet(0.0, 1000, 800);
-        assert!(!exceeded, "after reset, first small packet must not exceed limit");
+        assert!(
+            !exceeded,
+            "after reset, first small packet must not exceed limit"
+        );
     }
 
     #[test]
@@ -610,7 +640,10 @@ mod tests {
         // Advance time by BANDWIDTH_LIMITER_INTERVAL to trigger a new period.
         let t1 = BANDWIDTH_LIMITER_INTERVAL + 0.1;
         let exceeded = bl.add_packet(t1, 1000, 800);
-        assert!(!exceeded, "first packet in a new interval must not exceed limit");
+        assert!(
+            !exceeded,
+            "first packet in a new interval must not exceed limit"
+        );
     }
 
     #[test]

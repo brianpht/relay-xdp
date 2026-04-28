@@ -226,7 +226,10 @@ mod tests {
     fn connection_type_implements_debug_and_eq() {
         let ct = connection_type();
         let dbg = format!("{ct:?}");
-        assert!(!dbg.is_empty(), "ConnectionType Debug must produce non-empty string");
+        assert!(
+            !dbg.is_empty(),
+            "ConnectionType Debug must produce non-empty string"
+        );
         // All expected variants are representable.
         let _ = ConnectionType::Unknown;
         let _ = ConnectionType::Wired;

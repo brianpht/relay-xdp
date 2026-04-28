@@ -24,8 +24,7 @@ use relay_sdk::server::ServerInner;
 
 fn http_raw(host: &str, port: u16, path: &str) -> Result<String, String> {
     let addr = format!("{}:{}", host, port);
-    let mut stream =
-        TcpStream::connect(&addr).map_err(|e| format!("connect {}: {}", addr, e))?;
+    let mut stream = TcpStream::connect(&addr).map_err(|e| format!("connect {}: {}", addr, e))?;
     let req = format!(
         "GET {} HTTP/1.0\r\nHost: {}\r\nConnection: close\r\n\r\n",
         path, host
@@ -212,4 +211,3 @@ fn main() {
         println!("All {} assertions passed", t.passed);
     }
 }
-

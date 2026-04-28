@@ -253,7 +253,11 @@ mod tests {
         let b0 = pool_a.get();
         assert_eq!(pool_b.pool_size(), 1, "clone must see the same pool");
         drop(b0);
-        assert_eq!(pool_b.pool_size(), 2, "drop must return buffer to shared pool");
+        assert_eq!(
+            pool_b.pool_size(),
+            2,
+            "drop must return buffer to shared pool"
+        );
     }
 
     #[test]
@@ -288,7 +292,11 @@ mod tests {
         let extra = pool.get(); // size = POOL_MAX_SIZE - 1
         pool.warm(1); // size = POOL_MAX_SIZE again
         drop(extra); // extra return: pool is full -> buffer freed, size stays at POOL_MAX_SIZE
-        assert_eq!(pool.pool_size(), POOL_MAX_SIZE, "pool must not exceed POOL_MAX_SIZE");
+        assert_eq!(
+            pool.pool_size(),
+            POOL_MAX_SIZE,
+            "pool must not exceed POOL_MAX_SIZE"
+        );
     }
 
     #[test]
