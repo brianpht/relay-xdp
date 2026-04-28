@@ -1,0 +1,37 @@
+# relay-sdk/Dockerfile.smoke - two-stage build for SDK smoke test binary.
+#
+# Stage 1 (builder): compiles relay_sdk_smoke using the full Rust toolchain.
+# Stage 2 (runtime): copies only the binary into a slim debian image.
+#
+# Build context: workspace root (./)
+# Target binary: relay-sdk/src/bin/relay_sdk_smoke.rs
+
+# ── Stage 1: builder ──────────────────────────────────────────────────────────
+FROM rust:1.80-slim AS builder
+
+WORKDIR /workspace
+
+# Copy workspace manifest + lockfile first.
+# These layers are cached as long as Cargo.lock is unchanged.
+COPY Cargo.toml Cargo.lock ./
+
+# Copy other workspace members' manifests so Cargo can resolve the workspace.
+# Source files for these crates are not needed (we only build -p relay-sdk).
+COPY relay-xdp/Cargo.toml relay-xdp/Cargo.toml
+COPY relay-backend/Cargo.toml relay-backend/Cargo.toml
+COPY xtask/Cargo.toml xtask/Cargo.toml
+
+# Copy the crates that are actually compiled.
+COPY relay-xdp-common/ relay-xdp-common/
+COPY relay-sdk/ relay-sdk/
+
+# Build only the smoke binary.
+RUN cargo build --release -p relay-sdk --bin relay_sdk_smoke
+
+# ── Stage 2: runtime ──────────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+COPY --from=builder /workspace/target/release/relay_sdk_smoke /usr/local/bin/relay_sdk_smoke
+
+ENTRYPOINT ["relay_sdk_smoke"]
+

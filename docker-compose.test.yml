@@ -115,6 +115,24 @@ services:
       RELAY_BACKEND_URL: "http://172.28.0.3:80"
       RUST_LOG: "info"
 
+  # One-shot SDK smoke test container (profile-gated; excluded from plain "up -d").
+  # Run with: docker compose --profile smoke run --rm --build sdk-smoke
+  sdk-smoke:
+    build:
+      context: .
+      dockerfile: relay-sdk/Dockerfile.smoke
+    profiles: ["smoke"]
+    networks:
+      relay-test-net:
+        ipv4_address: 172.28.0.20
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      BACKEND_HOST: "172.28.0.3"
+      BACKEND_PORT: "80"
+    restart: "no"
+
 networks:
   relay-test-net:
     driver: bridge

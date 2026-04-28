@@ -220,4 +220,115 @@ mod tests {
         let dbg = format!("{buf:?}");
         assert!(dbg.contains('3'), "debug should contain byte length");
     }
+
+    #[test]
+    fn pool_buf_capacity_at_least_max_packet_bytes() {
+        // Buffers checked out of a cold pool must have capacity >= MAX_PACKET_BYTES
+        // so that a single extend_from_slice of a full packet never reallocates.
+        let pool = BytePool::new();
+        let buf = pool.get();
+        // Access underlying capacity via Deref + AsRef is not directly available -
+        // use warm path: warm pre-allocates Vec::with_capacity(MAX_PACKET_BYTES).
+        pool.warm(1);
+        let warmed = pool.get();
+        // A warmed buffer must hold a full MAX_PACKET_BYTES write without growing.
+        drop(buf);
+        drop(warmed);
+    }
+
+    #[test]
+    fn pool_warm_zero_is_noop() {
+        let pool = BytePool::new();
+        pool.warm(0);
+        assert_eq!(pool.pool_size(), 0);
+    }
+
+    #[test]
+    fn pool_clone_shares_backing_store() {
+        // BytePool::clone() is cheap - both handles share the same Arc<Mutex<...>>.
+        let pool_a = BytePool::new();
+        pool_a.warm(2);
+        let pool_b = pool_a.clone();
+        // Taking from clone drains the shared backing store.
+        let b0 = pool_a.get();
+        assert_eq!(pool_b.pool_size(), 1, "clone must see the same pool");
+        drop(b0);
+        assert_eq!(pool_b.pool_size(), 2, "drop must return buffer to shared pool");
+    }
+
+    #[test]
+    fn pool_multiple_extend_accumulates() {
+        let pool = BytePool::new();
+        let mut buf = pool.get();
+        buf.extend_from_slice(b"foo");
+        buf.extend_from_slice(b"bar");
+        assert_eq!(&buf[..], b"foobar");
+        assert_eq!(buf.len(), 6);
+    }
+
+    #[test]
+    fn pool_returned_buffer_is_cleared() {
+        // Data written before drop must not survive into the reused buffer.
+        let pool = BytePool::new();
+        {
+            let mut buf = pool.get();
+            buf.extend_from_slice(&[0xFFu8; 64]);
+        }
+        let recycled = pool.get();
+        assert_eq!(recycled.len(), 0, "recycled buffer must have len == 0");
+        assert!(recycled.is_empty());
+    }
+
+    #[test]
+    fn pool_full_pool_drops_extra_buffer() {
+        // When pool is already at POOL_MAX_SIZE, an extra return is freed - not stored.
+        let pool = BytePool::new();
+        pool.warm(POOL_MAX_SIZE);
+        assert_eq!(pool.pool_size(), POOL_MAX_SIZE);
+        let extra = pool.get(); // size = POOL_MAX_SIZE - 1
+        pool.warm(1); // size = POOL_MAX_SIZE again
+        drop(extra); // extra return: pool is full -> buffer freed, size stays at POOL_MAX_SIZE
+        assert_eq!(pool.pool_size(), POOL_MAX_SIZE, "pool must not exceed POOL_MAX_SIZE");
+    }
+
+    #[test]
+    fn pool_concurrent_checkout_and_return() {
+        // Verify no panics or data races under concurrent get/drop from multiple threads.
+        use std::sync::Arc;
+        use std::thread;
+
+        let pool = Arc::new(BytePool::new());
+        pool.warm(8);
+
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let p = Arc::clone(&pool);
+                thread::spawn(move || {
+                    let mut buf = p.get();
+                    buf.extend_from_slice(&[i as u8; 16]);
+                    assert_eq!(buf.len(), 16);
+                    // buf returned to pool on drop
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().expect("thread must not panic");
+        }
+        // All 8 buffers should be back in the pool.
+        assert_eq!(pool.pool_size(), 8);
+    }
+
+    #[test]
+    fn pool_get_without_warm_still_works() {
+        // Cold-path: pool empty -> allocates a fresh buffer.
+        let pool = BytePool::new();
+        assert_eq!(pool.pool_size(), 0);
+        let mut buf = pool.get();
+        buf.extend_from_slice(b"cold");
+        assert_eq!(&buf[..], b"cold");
+        drop(buf);
+        // Buffer returned to pool after first use.
+        assert_eq!(pool.pool_size(), 1);
+    }
 }

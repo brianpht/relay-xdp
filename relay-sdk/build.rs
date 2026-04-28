@@ -9,8 +9,12 @@ fn main() {
         .generate()
     {
         Ok(bindings) => {
-            std::fs::create_dir_all("include").unwrap();
-            bindings.write_to_file("include/relay_generated.h");
+            // Use absolute path so this works regardless of working directory
+            // (e.g. in multi-stage Docker builds). Non-fatal on permission error.
+            let include_dir = std::path::Path::new(&crate_dir).join("include");
+            if std::fs::create_dir_all(&include_dir).is_ok() {
+                bindings.write_to_file(include_dir.join("relay_generated.h"));
+            }
         }
         Err(e) => {
             // Don't block the build - FFI layer is still a stub.

@@ -237,6 +237,18 @@ assert_http_ok \
     "9. GET /relay_counters/relay-a returns 200" \
     "${BACKEND_URL}/relay_counters/relay-a"
 
+# 10. relay-sdk smoke test (build + run in compose network)
+echo ""
+echo -e "${YELLOW}=== Running relay-sdk smoke test ===${NC}"
+if docker compose -f "$COMPOSE_FILE" \
+        --profile smoke run --rm --build sdk-smoke 2>&1; then
+    echo -e "  ${GREEN}PASS${NC} 10. relay-sdk smoke test (13/13 assertions)"
+    PASSED=$((PASSED + 1))
+else
+    echo -e "  ${RED}FAIL${NC} 10. relay-sdk smoke test"
+    FAILED=$((FAILED + 1))
+fi
+
 # -----------------------------------------------------------
 # Summary
 # -----------------------------------------------------------

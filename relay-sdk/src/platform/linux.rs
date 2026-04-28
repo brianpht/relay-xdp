@@ -200,4 +200,64 @@ mod tests {
         let actual = get_socket_recv_buffer_size(&sock);
         assert!(actual > 0, "getsockopt SO_RCVBUF returned 0");
     }
+
+    #[test]
+    fn time_advances_over_short_duration() {
+        let t0 = time();
+        // Busy-loop until clock reports at least 1 ms elapsed.
+        let started = std::time::Instant::now();
+        while started.elapsed().as_millis() < 5 {}
+        let t1 = time();
+        assert!(t1 > t0, "time() must advance: t0={}, t1={}", t0, t1);
+    }
+
+    #[test]
+    fn time_repeated_calls_are_monotonic() {
+        // 10 rapid consecutive calls must never go backwards.
+        let mut prev = time();
+        for _ in 0..10 {
+            let t = time();
+            assert!(t >= prev, "time() went backwards: {} -> {}", prev, t);
+            prev = t;
+        }
+    }
+
+    #[test]
+    fn connection_type_implements_debug_and_eq() {
+        let ct = connection_type();
+        let dbg = format!("{ct:?}");
+        assert!(!dbg.is_empty(), "ConnectionType Debug must produce non-empty string");
+        // All expected variants are representable.
+        let _ = ConnectionType::Unknown;
+        let _ = ConnectionType::Wired;
+        let _ = ConnectionType::Wifi;
+        let _ = ConnectionType::Cellular;
+        // Equality check (PartialEq derived).
+        assert_eq!(ConnectionType::Unknown, ConnectionType::Unknown);
+        assert_ne!(ConnectionType::Wired, ConnectionType::Wifi);
+    }
+
+    #[test]
+    fn socket_send_buffer_get_on_fresh_socket_nonzero() {
+        // The kernel always assigns a non-zero SO_SNDBUF default on creation.
+        let sock = UdpSocket::bind("127.0.0.1:0").expect("bind");
+        let size = get_socket_send_buffer_size(&sock);
+        assert!(size > 0, "default SO_SNDBUF must be > 0, got {}", size);
+    }
+
+    #[test]
+    fn socket_recv_buffer_get_on_fresh_socket_nonzero() {
+        let sock = UdpSocket::bind("127.0.0.1:0").expect("bind");
+        let size = get_socket_recv_buffer_size(&sock);
+        assert!(size > 0, "default SO_RCVBUF must be > 0, got {}", size);
+    }
+
+    #[test]
+    fn socket_set_small_buffer_does_not_panic() {
+        // Setting very small values (1 byte) should not panic; kernel clamps to minimum.
+        let sock = UdpSocket::bind("127.0.0.1:0").expect("bind");
+        set_socket_send_buffer_size(&sock, 1);
+        set_socket_recv_buffer_size(&sock, 1);
+        // Any result is acceptable - just must not panic.
+    }
 }
