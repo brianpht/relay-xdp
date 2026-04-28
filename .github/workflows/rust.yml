@@ -49,6 +49,25 @@ jobs:
       - name: Run tests
         run: cargo test --verbose
 
+  func-parity:
+    name: Functional Parity
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run functional parity tests (RELAY_NO_BPF mode)
+        # Runs relay-xdp/tests/func_parity.rs - all tests are #[ignore] so they
+        # are skipped by plain "cargo test". This job runs them explicitly via
+        # "cargo xtask func-test" which passes --ignored --test-threads=1.
+        # --test-threads=1 is required because env var mutations are not thread-safe.
+        env:
+          RELAY_NO_BPF: "1"
+        run: cargo run -p xtask -- func-test
+
   build-ebpf:
     name: Build eBPF
     runs-on: ubuntu-latest
