@@ -19,7 +19,7 @@
 - Confirmed eBPF build uses nightly toolchain with `rust-src` component and `bpf-linker`
 - Confirmed security audit uses `rustsec/audit-check@v2` with `GITHUB_TOKEN`
 - Confirmed compose-test uses `--no-build` flag to avoid redundant image rebuild
-- Noted: `relay-sdk` crate is covered under `cargo clippy --workspace` and `cargo test --verbose`; all 145 tests from this session's relay-sdk improvements are exercised in CI
+- Noted: `relay-sdk` crate is covered under `cargo clippy --workspace` and `cargo test --verbose`; all 165 tests (as of 2026-04-28 observability task) are exercised in CI
 
 ### Observations
 
@@ -47,13 +47,24 @@
 
 ## Next Steps
 
-1. **Medium:** `observability` - Add metrics/tracing hooks to relay-sdk (depends on completed `error-handling` task from 2026-04-26 session)
+1. **[DONE] Medium:** `observability` - Added `ClientStats` / `ServerStats` counter structs to relay-sdk (2026-04-28):
+   - `src/stats.rs`: `ClientStats` (`packets_sent`, `packets_received`, `route_changes`) and `ServerStats` (`packets_received`, `packets_sent`, `send_errors`, `sessions_registered`, `sessions_expired`)
+   - `pub stats` field added to both `Client` and `Server` handles; reset with `Default::default()`
+   - `Client::pop_send_raw` / `recv_packet` changed from `&self` to `&mut self` to count at extract site
+   - `relay_client_get_stats` / `relay_server_get_stats` C FFI functions added (`#[repr(C)]` structs)
+   - +20 tests; total now 165 (151 unit + 14 integration); zero clippy warnings
+   - See `docs/sessions/2026-04-26-relay-sdk-improvement-plan.md` task 9 for full detail
 2. **Medium:** Consider adding a `relay-sdk` bench job to CI (`cargo bench --no-run`) to catch benchmark compilation regressions
-3. **Low:** `testing-expansion` - Expand integration tests for pool, mutex-optimization, and platform platform features (depends on `benchmarking` task, now complete)
+3. **Low:** `testing-expansion` - Expand integration tests for pool, mutex-optimization, and platform features (depends on `benchmarking` task, now complete)
 
 ## Files Changed
 
 | Status | File |
 |--------|------|
 | A | `docs/sessions/2026-04-26-ci-workflow-review.md` |
+| A | `relay-sdk/src/stats.rs` |
+| M | `relay-sdk/src/lib.rs` |
+| M | `relay-sdk/src/client/mod.rs` |
+| M | `relay-sdk/src/server/mod.rs` |
+| M | `relay-sdk/src/ffi/mod.rs` |
 

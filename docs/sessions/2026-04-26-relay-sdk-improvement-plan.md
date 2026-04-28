@@ -128,7 +128,18 @@
 
 **Remaining (deferred / lower priority):**
 
-9. **Medium:** `observability` - depends on `error-handling`
+9. **[DONE] Medium:** `observability` - Added `ClientStats` and `ServerStats` counter structs (task 9):
+   - Added `src/stats.rs`: `ClientStats` (`packets_sent`, `packets_received`, `route_changes`) and `ServerStats` (`packets_received`, `packets_sent`, `send_errors`, `sessions_registered`, `sessions_expired`) - both `#[derive(Default, Clone, Copy, PartialEq, Eq)]`
+   - Added `pub stats: ClientStats` to `Client`, `pub stats: ServerStats` to `Server` - reset with `Default::default()`
+   - `Client::apply_notify`: increments `route_changes` on `RouteChanged` (state transitions counted via drain)
+   - `Client::pop_send_raw` changed from `&self` to `&mut self`: increments `packets_sent` when extracting `SendRaw`; also applies intervening notifies via `apply_notify` (replaces the no-op `apply_notify_ref`)
+   - `Client::recv_packet` changed from `&self` to `&mut self`: increments `packets_received` when extracting `PacketReceived`; applies intervening notifies
+   - `Server::apply_notify`: increments `sessions_registered`, `sessions_expired`, `send_errors` on matching events
+   - `Server::pop_send_raw` / `Server::recv_packet`: same pattern - manual increments at extract site
+   - `RelayClientStats` / `RelayServerStats` `#[repr(C)]` structs added to `ffi/mod.rs`
+   - `relay_client_get_stats(handle, out) -> c_int` / `relay_server_get_stats(handle, out) -> c_int` FFI functions added (0=ok, -1=null)
+   - 6 tests in `stats.rs`, 3 tests in `client/mod.rs`, 5 tests in `server/mod.rs`, 7 tests in `ffi/mod.rs`
+   - Test count: 165 total (151 unit + 14 integration)
 10. **Medium:** `async-support` - depends on `error-handling` - recommend deferring (conflicts with threading model rules, adds tokio dep)
 11. **Low:** `health-monitoring` - depends on `observability`
 12. **Low:** `testing-expansion` - depends on `benchmarking`
@@ -142,8 +153,11 @@
 | M | `relay-sdk/src/tokens/mod.rs` |
 | M | `relay-sdk/src/read_write.rs` |
 | A | `relay-sdk/src/pool.rs` |
+| A | `relay-sdk/src/stats.rs` |
 | M | `relay-sdk/src/client/mod.rs` |
 | M | `relay-sdk/src/server/mod.rs` |
+| M | `relay-sdk/src/ffi/mod.rs` |
+| M | `relay-sdk/src/lib.rs` |
 | M | `relay-sdk/src/stream/mod.rs` |
 | M | `relay-sdk/src/route/trackers.rs` |
 | M | `relay-sdk/src/platform/linux.rs` |

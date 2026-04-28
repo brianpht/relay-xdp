@@ -2,6 +2,7 @@
 //!
 //! Crate layout:
 //!   mod pool      - BytePool / PooledBuf (pre-allocated packet buffer pool)
+//!   mod stats     - ClientStats / ServerStats (event counters, observability)
 //!   mod bitpacker  - BitWriter / BitReader (low-level bit I/O) [copied from rust-sdk]
 //!   mod stream     - WriteStream / ReadStream + serialize macros [copied from rust-sdk]
 //!   mod read_write - WriteBuf / ReadBuf (byte-level helpers) [copied from rust-sdk]
@@ -20,6 +21,7 @@
 
 pub mod constants;
 pub mod pool;
+pub mod stats;
 
 // Copied from rust-sdk unchanged
 pub mod bitpacker;

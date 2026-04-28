@@ -392,6 +392,92 @@ pub extern "C" fn relay_server_clear_last_send_error(handle: *mut RelayServer) {
     });
 }
 
+// ── Stats ─────────────────────────────────────────────────────────────────────
+
+/// C-visible snapshot of relay client event counters.
+/// Populated by `relay_client_get_stats`.
+#[repr(C)]
+pub struct RelayClientStats {
+    /// SendRaw packets enqueued for the UDP socket (relay packets sent outbound).
+    pub packets_sent: u64,
+    /// PacketReceived payloads delivered to the application.
+    pub packets_received: u64,
+    /// RouteChanged events observed (any route state transition).
+    pub route_changes: u64,
+}
+
+/// C-visible snapshot of relay server event counters.
+/// Populated by `relay_server_get_stats`.
+#[repr(C)]
+pub struct RelayServerStats {
+    /// PacketReceived events (CLIENT_TO_SERVER payloads extracted from the wire).
+    pub packets_received: u64,
+    /// SendRaw packets enqueued (SERVER_TO_CLIENT packets sent outbound).
+    pub packets_sent: u64,
+    /// SendError events (e.g. payload exceeded MAX_PACKET_BYTES).
+    pub send_errors: u64,
+    /// Sessions registered via RegisterSession commands.
+    pub sessions_registered: u64,
+    /// Sessions expired via ExpireSession commands.
+    pub sessions_expired: u64,
+}
+
+/// Copy a snapshot of the current client event counters into `out`.
+/// Also drains pending notifications so the counters are up-to-date.
+/// Returns 0 on success, -1 if `handle` or `out` is null.
+#[no_mangle]
+pub extern "C" fn relay_client_get_stats(
+    handle: *mut RelayClient,
+    out: *mut RelayClientStats,
+) -> c_int {
+    catch_unwind(|| {
+        if handle.is_null() || out.is_null() {
+            return -1i32;
+        }
+        let h = unsafe { &mut *handle };
+        h.inner.pump_commands();
+        h.client.drain_notify();
+        unsafe {
+            *out = RelayClientStats {
+                packets_sent: h.client.stats.packets_sent,
+                packets_received: h.client.stats.packets_received,
+                route_changes: h.client.stats.route_changes,
+            };
+        }
+        0i32
+    })
+    .unwrap_or(-1)
+}
+
+/// Copy a snapshot of the current server event counters into `out`.
+/// Also drains pending notifications so the counters are up-to-date.
+/// Returns 0 on success, -1 if `handle` or `out` is null.
+#[no_mangle]
+pub extern "C" fn relay_server_get_stats(
+    handle: *mut RelayServer,
+    out: *mut RelayServerStats,
+) -> c_int {
+    catch_unwind(|| {
+        if handle.is_null() || out.is_null() {
+            return -1i32;
+        }
+        let h = unsafe { &mut *handle };
+        h.inner.pump_commands();
+        h.server.drain_notify();
+        unsafe {
+            *out = RelayServerStats {
+                packets_received: h.server.stats.packets_received,
+                packets_sent: h.server.stats.packets_sent,
+                send_errors: h.server.stats.send_errors,
+                sessions_registered: h.server.stats.sessions_registered,
+                sessions_expired: h.server.stats.sessions_expired,
+            };
+        }
+        0i32
+    })
+    .unwrap_or(-1)
+}
+
 /// Pop the next received game payload into `out` (caller-provided buffer of `max_bytes`).
 /// On success, writes the originating session_id into `*out_session_id`.
 /// Returns the number of bytes written, or 0 if no packet is available.
@@ -666,5 +752,122 @@ mod tests {
         let n = relay_client_recv_packet(h, out.as_mut_ptr(), out.len() as c_int);
         assert_eq!(n, 0);
         relay_client_destroy(h);
+    }
+
+    // ── Observability (task 9) tests ──────────────────────────────────────────
+
+    #[test]
+    fn ffi_client_get_stats_null_handle_returns_error() {
+        let null: *mut RelayClient = std::ptr::null_mut();
+        let mut stats = RelayClientStats {
+            packets_sent: 0,
+            packets_received: 0,
+            route_changes: 0,
+        };
+        let rc = relay_client_get_stats(null, &mut stats);
+        assert_eq!(rc, -1);
+    }
+
+    #[test]
+    fn ffi_client_get_stats_null_out_returns_error() {
+        let bind = cstr("0.0.0.0:0");
+        let h = relay_client_create(bind.as_ptr());
+        assert!(!h.is_null());
+        let rc = relay_client_get_stats(h, std::ptr::null_mut());
+        assert_eq!(rc, -1);
+        relay_client_destroy(h);
+    }
+
+    #[test]
+    fn ffi_client_get_stats_initial_counters_are_zero() {
+        let bind = cstr("0.0.0.0:0");
+        let h = relay_client_create(bind.as_ptr());
+        assert!(!h.is_null());
+        let mut stats = RelayClientStats {
+            packets_sent: 99,
+            packets_received: 99,
+            route_changes: 99,
+        };
+        let rc = relay_client_get_stats(h, &mut stats);
+        assert_eq!(rc, 0);
+        assert_eq!(stats.packets_sent, 0);
+        assert_eq!(stats.packets_received, 0);
+        assert_eq!(stats.route_changes, 0);
+        relay_client_destroy(h);
+    }
+
+    #[test]
+    fn ffi_server_get_stats_null_handle_returns_error() {
+        let null: *mut RelayServer = std::ptr::null_mut();
+        let mut stats = RelayServerStats {
+            packets_received: 0,
+            packets_sent: 0,
+            send_errors: 0,
+            sessions_registered: 0,
+            sessions_expired: 0,
+        };
+        let rc = relay_server_get_stats(null, &mut stats);
+        assert_eq!(rc, -1);
+    }
+
+    #[test]
+    fn ffi_server_get_stats_null_out_returns_error() {
+        let addr = cstr("0.0.0.0:9000");
+        let h = relay_server_create(addr.as_ptr());
+        assert!(!h.is_null());
+        let rc = relay_server_get_stats(h, std::ptr::null_mut());
+        assert_eq!(rc, -1);
+        relay_server_destroy(h);
+    }
+
+    #[test]
+    fn ffi_server_get_stats_initial_counters_are_zero() {
+        let addr = cstr("0.0.0.0:9000");
+        let h = relay_server_create(addr.as_ptr());
+        assert!(!h.is_null());
+        let mut stats = RelayServerStats {
+            packets_received: 99,
+            packets_sent: 99,
+            send_errors: 99,
+            sessions_registered: 99,
+            sessions_expired: 99,
+        };
+        let rc = relay_server_get_stats(h, &mut stats);
+        assert_eq!(rc, 0);
+        assert_eq!(stats.packets_received, 0);
+        assert_eq!(stats.packets_sent, 0);
+        assert_eq!(stats.send_errors, 0);
+        assert_eq!(stats.sessions_registered, 0);
+        assert_eq!(stats.sessions_expired, 0);
+        relay_server_destroy(h);
+    }
+
+    #[test]
+    fn ffi_server_get_stats_session_events_counted() {
+        let addr = cstr("0.0.0.0:9000");
+        let h = relay_server_create(addr.as_ptr());
+        assert!(!h.is_null());
+        let relay = cstr("10.0.0.1:4000");
+        let key = [0x42u8; SESSION_PRIVATE_KEY_BYTES];
+        relay_server_register_session(h, 1, 1, key.as_ptr(), relay.as_ptr());
+        relay_server_expire_session(h, 1);
+        let mut stats = RelayServerStats {
+            packets_received: 0,
+            packets_sent: 0,
+            send_errors: 0,
+            sessions_registered: 0,
+            sessions_expired: 0,
+        };
+        let rc = relay_server_get_stats(h, &mut stats);
+        assert_eq!(rc, 0);
+        assert_eq!(
+            stats.sessions_registered, 1,
+            "register_session must increment sessions_registered"
+        );
+        assert_eq!(
+            stats.sessions_expired, 1,
+            "expire_session must increment sessions_expired"
+        );
+        relay_server_destroy(h);
     }
 }

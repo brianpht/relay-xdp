@@ -34,6 +34,7 @@ use crate::constants::*;
 use crate::pool::{BytePool, PooledBuf};
 use crate::route::trackers::ReplayProtection;
 use crate::route::{address_ipv4_bytes, write_header, HEADER_BYTES as ROUTE_HEADER_BYTES};
+use crate::stats::ServerStats;
 
 // ── Server state constants ────────────────────────────────────────────────────
 
@@ -176,6 +177,7 @@ impl ServerInner {
             num_sessions: 0,
             bind_address: Address::None,
             last_send_error: None,
+            stats: ServerStats::default(),
         };
 
         (inner, server)
@@ -429,6 +431,9 @@ pub struct Server {
     /// Set when send_packet_inner fails (e.g. oversized payload).
     /// Cleared by `clear_last_send_error()`.
     pub last_send_error: Option<(u64, &'static str)>,
+    /// Accumulated event counters, updated as Notify events are drained.
+    /// Reset with `server.stats = ServerStats::default()` to start a new window.
+    pub stats: ServerStats,
 }
 
 impl Server {
@@ -498,21 +503,29 @@ impl Server {
         match n {
             Notify::SessionRegistered { .. } => {
                 self.num_sessions += 1;
+                self.stats.sessions_registered += 1;
             }
             Notify::SessionExpired { .. } => {
                 if self.num_sessions > 0 {
                     self.num_sessions -= 1;
                 }
+                self.stats.sessions_expired += 1;
             }
             Notify::SendError { session_id, reason } => {
                 self.last_send_error = Some((session_id, reason));
+                self.stats.send_errors += 1;
             }
+            // PacketReceived and SendRaw are counted in recv_packet / pop_send_raw
+            // respectively. apply_notify is only reached for events that did not go
+            // through the dedicated pop function. Do NOT increment here to avoid
+            // double-counting when both pop and drain are called.
             Notify::PacketReceived { .. } => {}
             Notify::SendRaw { .. } => {}
         }
     }
 
     /// Pop next received game payload (session_id, payload), if any.
+    /// Also increments `stats.packets_received` and applies any intervening notifies.
     pub fn recv_packet(&mut self) -> Option<(u64, Vec<u8>)> {
         loop {
             let n = { self.notify.lock().unwrap().pop_front() };
@@ -521,7 +534,10 @@ impl Server {
                 Some(Notify::PacketReceived {
                     session_id,
                     payload,
-                }) => return Some((session_id, payload)),
+                }) => {
+                    self.stats.packets_received += 1;
+                    return Some((session_id, payload));
+                }
                 Some(n) => self.apply_notify(n),
             }
         }
@@ -529,12 +545,16 @@ impl Server {
 
     /// Pop next outbound raw UDP packet, if any.
     /// Returns a `PooledBuf` that is automatically returned to the pool on drop.
+    /// Also increments `stats.packets_sent` and applies any intervening notifies.
     pub fn pop_send_raw(&mut self) -> Option<(Address, PooledBuf)> {
         loop {
             let n = { self.notify.lock().unwrap().pop_front() };
             match n {
                 None => return None,
-                Some(Notify::SendRaw { to, data }) => return Some((to, data)),
+                Some(Notify::SendRaw { to, data }) => {
+                    self.stats.packets_sent += 1;
+                    return Some((to, data));
+                }
                 Some(n) => self.apply_notify(n),
             }
         }
@@ -834,5 +854,90 @@ mod tests {
         inner.pump_commands(); // flush: Open + RegisterSession notifies in one lock
         server.drain_notify();
         assert_eq!(server.num_sessions, 1);
+    }
+
+    // ── Observability (task 9) tests ──────────────────────────────────────────
+
+    #[test]
+    fn server_stats_initial_counters_are_zero() {
+        let (_inner, server) = make_pair();
+        assert_eq!(server.stats.packets_received, 0);
+        assert_eq!(server.stats.packets_sent, 0);
+        assert_eq!(server.stats.send_errors, 0);
+        assert_eq!(server.stats.sessions_registered, 0);
+        assert_eq!(server.stats.sessions_expired, 0);
+    }
+
+    #[test]
+    fn server_stats_sessions_counted() {
+        let (mut inner, mut server) = make_pair();
+        server.open(addr());
+        inner.pump_commands();
+        server.register_session(1, 1, priv_key(), relay_addr());
+        inner.pump_commands();
+        server.drain_notify();
+        assert_eq!(
+            server.stats.sessions_registered, 1,
+            "register_session must increment sessions_registered"
+        );
+        server.expire_session(1);
+        inner.pump_commands();
+        server.drain_notify();
+        assert_eq!(
+            server.stats.sessions_expired, 1,
+            "expire_session must increment sessions_expired"
+        );
+    }
+
+    #[test]
+    fn server_stats_send_error_counted() {
+        let (mut inner, mut server) = make_pair();
+        server.open(addr());
+        inner.pump_commands();
+        server.register_session(2, 1, priv_key(), relay_addr());
+        inner.pump_commands();
+        server.drain_notify();
+        // Payload that exceeds MAX_PACKET_BYTES triggers a SendError notify.
+        let big_payload = vec![0u8; MAX_PACKET_BYTES];
+        server.send_packet(2, &big_payload, [0u8; 8], addr());
+        inner.pump_commands();
+        server.drain_notify();
+        assert_eq!(
+            server.stats.send_errors, 1,
+            "oversized payload must increment send_errors"
+        );
+    }
+
+    #[test]
+    fn server_stats_packets_sent_counted() {
+        let (mut inner, mut server) = make_pair();
+        server.open(addr());
+        inner.pump_commands();
+        server.register_session(3, 1, priv_key(), relay_addr());
+        inner.pump_commands();
+        server.drain_notify();
+        // Send a small payload - should emit a SendRaw notify.
+        server.send_packet(3, b"hello", [0u8; 8], addr());
+        inner.pump_commands();
+        // pop_send_raw applies the SendRaw and bumps stats.
+        let result = server.pop_send_raw();
+        assert!(result.is_some());
+        assert_eq!(
+            server.stats.packets_sent, 1,
+            "pop_send_raw must increment packets_sent"
+        );
+    }
+
+    #[test]
+    fn server_stats_reset_to_default() {
+        let (mut inner, mut server) = make_pair();
+        server.open(addr());
+        inner.pump_commands();
+        server.register_session(4, 1, priv_key(), relay_addr());
+        inner.pump_commands();
+        server.drain_notify();
+        assert_eq!(server.stats.sessions_registered, 1);
+        server.stats = crate::stats::ServerStats::default();
+        assert_eq!(server.stats.sessions_registered, 0);
     }
 }

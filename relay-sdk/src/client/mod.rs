@@ -30,6 +30,7 @@ use crate::packets::{ContinueResponsePacket, RouteResponsePacket, PACKET_BODY_OF
 use crate::pool::{BytePool, PooledBuf};
 use crate::route::trackers::ReplayProtection;
 use crate::route::{read_header, RouteManager, HEADER_BYTES};
+use crate::stats::ClientStats;
 
 // ── Client state constants ────────────────────────────────────────────────────
 
@@ -147,6 +148,7 @@ impl ClientInner {
             fallback_to_direct: false,
             flags: 0,
             server_address: Address::None,
+            stats: ClientStats::default(),
         };
 
         (inner, client)
@@ -400,6 +402,9 @@ pub struct Client {
     pub fallback_to_direct: bool,
     pub flags: u32,
     pub server_address: Address,
+    /// Accumulated event counters, updated as Notify events are drained.
+    /// Reset with `client.stats = ClientStats::default()` to start a new window.
+    pub stats: ClientStats,
 }
 
 impl Client {
@@ -483,38 +488,46 @@ impl Client {
                 self.has_relay_route = has_relay_route;
                 self.fallback_to_direct = fallback_to_direct;
                 self.flags = flags;
+                self.stats.route_changes += 1;
             }
-            Notify::PacketReceived { .. } | Notify::SendRaw { .. } => {}
+            // PacketReceived and SendRaw are counted in recv_packet / pop_send_raw
+            // respectively. apply_notify is only reached for events that did not go
+            // through the dedicated pop function (e.g. interleaved events scanned
+            // past during pop_send_raw). Do NOT increment here to avoid double-counting.
+            Notify::PacketReceived { .. } => {}
+            Notify::SendRaw { .. } => {}
         }
     }
 
     /// Pop next outbound raw UDP packet (to be sent by the socket loop).
     /// Returns a `PooledBuf` that is automatically returned to the pool on drop.
-    pub fn pop_send_raw(&self) -> Option<(Address, PooledBuf)> {
+    /// Also increments `stats.packets_sent` and applies any intervening notifies.
+    pub fn pop_send_raw(&mut self) -> Option<(Address, PooledBuf)> {
         loop {
             let n = { self.notify.lock().unwrap().pop_front() };
             match n {
                 None => return None,
-                Some(Notify::SendRaw { to, data }) => return Some((to, data)),
-                Some(n) => self.apply_notify_ref(n),
+                Some(Notify::SendRaw { to, data }) => {
+                    self.stats.packets_sent += 1;
+                    return Some((to, data));
+                }
+                Some(n) => self.apply_notify(n),
             }
         }
     }
 
-    fn apply_notify_ref(&self, n: Notify) {
-        // Read-only version used inside pop_send_raw.
-        // State updates are handled by apply_notify in tick/drain_notify.
-        let _ = n;
-    }
-
     /// Pop next received game payload, if any.
-    pub fn recv_packet(&self) -> Option<Vec<u8>> {
+    /// Also increments `stats.packets_received` and applies any intervening notifies.
+    pub fn recv_packet(&mut self) -> Option<Vec<u8>> {
         loop {
             let n = { self.notify.lock().unwrap().pop_front() };
             match n {
                 None => return None,
-                Some(Notify::PacketReceived { payload, .. }) => return Some(payload),
-                Some(_) => continue,
+                Some(Notify::PacketReceived { payload, .. }) => {
+                    self.stats.packets_received += 1;
+                    return Some(payload);
+                }
+                Some(n) => self.apply_notify(n),
             }
         }
     }
@@ -684,6 +697,46 @@ mod tests {
         client.drain_notify();
         // If batch was not flushed, drain_notify would see nothing (and not crash).
         // The important invariant is that this doesn't panic.
+    }
+
+    // ── Observability (task 9) tests ──────────────────────────────────────────
+
+    #[test]
+    fn client_stats_route_changes_incremented_on_tick() {
+        let (mut inner, mut client) = make_pair();
+        client.open_session(addr(), key());
+        inner.pump_commands();
+        // Tick triggers emit_route_changed which pushes a RouteChanged notify.
+        client.tick(0.016);
+        inner.pump_commands();
+        client.drain_notify();
+        assert!(
+            client.stats.route_changes > 0,
+            "route_changes must be incremented after tick with open session"
+        );
+    }
+
+    #[test]
+    fn client_stats_reset_to_default() {
+        let (mut inner, mut client) = make_pair();
+        client.open_session(addr(), key());
+        inner.pump_commands();
+        client.tick(0.016);
+        inner.pump_commands();
+        client.drain_notify();
+        assert!(client.stats.route_changes > 0);
+        client.stats = crate::stats::ClientStats::default();
+        assert_eq!(client.stats.route_changes, 0);
+        assert_eq!(client.stats.packets_sent, 0);
+        assert_eq!(client.stats.packets_received, 0);
+    }
+
+    #[test]
+    fn client_stats_initial_counters_are_zero() {
+        let (_inner, client) = make_pair();
+        assert_eq!(client.stats.packets_sent, 0);
+        assert_eq!(client.stats.packets_received, 0);
+        assert_eq!(client.stats.route_changes, 0);
     }
 }
 

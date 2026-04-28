@@ -194,6 +194,52 @@ typedef struct relay_RelayClient relay_RelayClient;
  */
 typedef struct relay_RelayServer relay_RelayServer;
 
+/**
+ * C-visible snapshot of relay client event counters.
+ * Populated by `relay_client_get_stats`.
+ */
+typedef struct relay_RelayClientStats {
+    /**
+     * SendRaw packets enqueued for the UDP socket (relay packets sent outbound).
+     */
+    uint64_t packets_sent;
+    /**
+     * PacketReceived payloads delivered to the application.
+     */
+    uint64_t packets_received;
+    /**
+     * RouteChanged events observed (any route state transition).
+     */
+    uint64_t route_changes;
+} relay_RelayClientStats;
+
+/**
+ * C-visible snapshot of relay server event counters.
+ * Populated by `relay_server_get_stats`.
+ */
+typedef struct relay_RelayServerStats {
+    /**
+     * PacketReceived events (CLIENT_TO_SERVER payloads extracted from the wire).
+     */
+    uint64_t packets_received;
+    /**
+     * SendRaw packets enqueued (SERVER_TO_CLIENT packets sent outbound).
+     */
+    uint64_t packets_sent;
+    /**
+     * SendError events (e.g. payload exceeded MAX_PACKET_BYTES).
+     */
+    uint64_t send_errors;
+    /**
+     * Sessions registered via RegisterSession commands.
+     */
+    uint64_t sessions_registered;
+    /**
+     * Sessions expired via ExpireSession commands.
+     */
+    uint64_t sessions_expired;
+} relay_RelayServerStats;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -304,6 +350,20 @@ uint64_t relay_server_last_send_error(struct relay_RelayServer *handle);
  * Clear the last send error recorded on the server handle.
  */
 void relay_server_clear_last_send_error(struct relay_RelayServer *handle);
+
+/**
+ * Copy a snapshot of the current client event counters into `out`.
+ * Also drains pending notifications so the counters are up-to-date.
+ * Returns 0 on success, -1 if `handle` or `out` is null.
+ */
+int relay_client_get_stats(struct relay_RelayClient *handle, struct relay_RelayClientStats *out);
+
+/**
+ * Copy a snapshot of the current server event counters into `out`.
+ * Also drains pending notifications so the counters are up-to-date.
+ * Returns 0 on success, -1 if `handle` or `out` is null.
+ */
+int relay_server_get_stats(struct relay_RelayServer *handle, struct relay_RelayServerStats *out);
 
 /**
  * Pop the next received game payload into `out` (caller-provided buffer of `max_bytes`).
