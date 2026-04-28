@@ -69,39 +69,48 @@ mod tests {
 
     #[test]
     fn client_stats_replace_resets_counters() {
-        let mut s = ClientStats {
+        let s = ClientStats {
             packets_sent: 100,
             packets_received: 50,
             route_changes: 3,
         };
-        s = ClientStats::default();
+        // Verify non-zero before reset.
+        assert_eq!(s.packets_sent, 100);
+        let s = ClientStats::default();
         assert_eq!(s.packets_sent, 0);
         assert_eq!(s.route_changes, 0);
     }
 
     #[test]
     fn server_stats_replace_resets_counters() {
-        let mut s = ServerStats {
+        let s = ServerStats {
             packets_received: 10,
             packets_sent: 20,
             send_errors: 2,
             sessions_registered: 5,
             sessions_expired: 3,
         };
-        s = ServerStats::default();
+        // Verify non-zero before reset.
+        assert_eq!(s.sessions_registered, 5);
+        let s = ServerStats::default();
         assert_eq!(s.sessions_registered, 0);
         assert_eq!(s.send_errors, 0);
     }
 
     #[test]
     fn client_stats_copy_is_independent() {
-        let mut a = ClientStats {
+        let a = ClientStats {
             packets_sent: 1,
             packets_received: 2,
             route_changes: 3,
         };
         let b = a;
-        a.packets_sent = 99;
+        // Construct a modified copy without mutating a (avoid unused_assignments).
+        let a2 = ClientStats {
+            packets_sent: 99,
+            ..a
+        };
         assert_eq!(b.packets_sent, 1, "copy must be independent");
+        assert_eq!(a2.packets_sent, 99);
     }
 }
