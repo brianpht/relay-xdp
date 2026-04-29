@@ -59,9 +59,11 @@ flowchart TB
     end
 
     SB["server_backend\n(external)"]
+    SDK["relay-sdk\n(game client / server)"]
     NIC["NIC\nUDP packets"]
     MT <-->|" HTTP POST /relay_update\n1 Hz "| BH
     SB -->|" GET /route_matrix "| BH
+    SDK -->|" UDP game traffic "| NIC
     PT <-->|" UDP socket\nping/pong "| NIC
     BC ==>|" 6 BPF maps\n(shared kernel memory) "| EBPF
     NIC ==>|" XDP hook\n(driver level) "| EBPF
@@ -107,6 +109,21 @@ Key components:
 For detailed architecture, wire format specs, and the full relay-xdp interaction protocol,
 see [relay-backend/ARCHITECTURE.md](relay-backend/ARCHITECTURE.md).
 
+### relay-sdk
+
+`relay-sdk` is the pure Rust client/server SDK for game applications connecting to the relay network. It compiles to `rlib`, `cdylib` (`.so`/`.dll`), and `staticlib` for integration from Rust, C, or any FFI-capable language.
+
+Key features:
+
+1. **Wire-compatible**: packet bytes match byte-for-byte with relay-xdp eBPF + userspace
+2. **14 packet types**: encode/decode for all types (IDs 1-14), matching `relay-xdp-common`
+3. **DDoS filter parity**: pittle/chonkle implementation matches the eBPF and userspace filters
+4. **Pure Rust crypto**: SHA-256 (`sha2`) + XChaCha20-Poly1305 (`chacha20poly1305`) - no libsodium
+5. **C ABI**: `relay_client_t` / `relay_server_t` handles exported via cbindgen-generated header
+
+For detailed architecture, module map, FFI contract, and wire compat test vectors,
+see [relay-sdk/ARCHITECTURE.md](relay-sdk/ARCHITECTURE.md).
+
 ## Workspace Layout
 
 ```
@@ -115,6 +132,7 @@ relay-xdp/
 ├── relay-xdp/            Userspace control plane (pure Rust)
 ├── relay-xdp-ebpf/       eBPF data plane (bpfel-unknown-none, NOT in workspace)
 ├── relay-backend/        Route optimization backend (tokio + axum)
+├── relay-sdk/            Game client/server SDK (rlib + cdylib + staticlib)
 ├── module/               Linux kernel module (C, GPL)
 └── xtask/                Build helper
 ```
@@ -287,6 +305,7 @@ This ensures the Rust eBPF program is drop-in compatible with existing relay inf
 - [Performance Design](docs/performance_design.md): core design principles, performance budgets, optimization guidelines
 - [Relay Backend Architecture](relay-backend/ARCHITECTURE.md): route optimization, wire format, encoding, relay-xdp
   interaction protocol
+- [relay-sdk Architecture](relay-sdk/ARCHITECTURE.md): SDK module map, FFI contract, wire compat test vectors, benchmarks
 
 ## Credits
 

@@ -61,16 +61,17 @@ relay-sdk/
 | `bitpacker` | Copied from `rust-sdk` | Unchanged - 7 tests passing |
 | `stream` | Copied from `rust-sdk` | Unchanged - 7 tests passing |
 | `read_write` | Copied from `rust-sdk` | Unchanged - 5 tests passing |
-| `platform` | Extended from `rust-sdk` | Added ConnectionType, connection_type(), socket buffer helpers - 4 tests |
-| `route/trackers` | Copied from `rust-sdk` | Unchanged - 8 tests passing |
+| `platform` | Extended from `rust-sdk` | Added ConnectionType, connection_type(), socket buffer helpers - 10 tests |
+| `route/trackers` | Copied from `rust-sdk` | Unchanged - 29 tests passing |
 | `address` | Rewritten | rust-sdk uses bitstream; relay-sdk uses byte LE + RELAY_ADDRESS_* |
 | `crypto` | Rewritten (subset) | Only SHA-256 + XChaCha20-Poly1305; removed NaCl/BLAKE2/Ed25519/KX |
 | `tokens` | Rewritten | Uses relay-xdp-common::RouteToken/ContinueToken; random nonce via rand |
 | `packets` | Rewritten | 14 types (ID 1-14); encode/decode LE byte-level, no bitstream |
 | `route/mod` | Rewritten (pittle/chonkle copied) | HeaderData layout matches relay-xdp-common; state machine logic preserved |
-| `client` | New | RouteToken -> ROUTE_REQUEST -> forward payload hop-chain; HMAC verification on ROUTE_RESPONSE/CONTINUE_RESPONSE |
+| `client` | New | ClientInner + Client handle (route request -> forward chain); HMAC verification on ROUTE_RESPONSE/CONTINUE_RESPONSE |
 | `server` | New | Final destination - receives from last relay hop; Notify::SendError + last_send_error |
 | `ffi` | New | 15 extern "C" functions; catch_unwind on all entry points; null-safe |
+| `pool` | New | BytePool - shared byte buffer pool (Arc<Mutex<Vec<Box<[u8]>>>>); ByteGuard RAII release |
 
 ---
 
@@ -559,8 +560,8 @@ Run benchmarks: `cargo bench -p relay-sdk`
 | `bitpacker` | Copied | Done | 7 |
 | `stream` | Copied | Done | 7 |
 | `read_write` | Copied | Done | 5 |
-| `platform` | Extended | Done | 4 |
-| `route/trackers` | Copied | Done | 8 |
+| `platform` | Extended | Done | 10 |
+| `route/trackers` | Copied | Done | 29 |
 | `address` | Rewritten | Done | 7 |
 | `crypto` | Rewritten | Done | 6 |
 | `tokens` | Rewritten | Done | 6 |
@@ -569,6 +570,7 @@ Run benchmarks: `cargo bench -p relay-sdk`
 | `client` | New | Done | 10 |
 | `server` | New | Done | 10 |
 | `ffi` | New | Done | 21 |
+| `pool` | New | Done | 8 |
 | `wire_compat` (integration) | New | Done | 14 |
 
-**Total: 118 unit + 14 integration = 132 tests. 0 failing. `cargo clippy -D warnings` clean. `cargo fmt` clean.**
+**Total: 153 unit + 14 integration = 167 tests. 0 failing. `cargo clippy -D warnings` clean. `cargo fmt` clean.**
