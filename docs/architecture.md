@@ -27,6 +27,7 @@
     - [Flow 2 - Relay-to-Relay Ping](#flow-2---relay-to-relay-ping)
     - [Flow 3 - Game Traffic Routing](#flow-3---game-traffic-routing)
     - [Flow 4 - Session Lifecycle](#flow-4---session-lifecycle)
+    - [Flow 5 - Game Client and Server via relay-sdk](#flow-5---game-client-and-server-via-relay-sdk)
 - [Packet Processing Pipeline](#packet-processing-pipeline)
     - [XDP Entry Point](#xdp-entry-point)
     - [DDoS Filter](#ddos-filter)
@@ -626,6 +627,75 @@ stateDiagram-v2
         Expire: userspace scans 1/s
     end note
 ```
+
+### Flow 5 - Game Client and Server via relay-sdk
+
+Shows how `relay-sdk` sits on top of the XDP relay network. The eBPF layer (Flow 3)
+is transparent - relay-sdk only sees UDP datagrams in and out.
+
+#### Phase A - Session provisioning (before any game traffic)
+
+```mermaid
+sequenceDiagram
+    participant RB as relay-backend
+    participant RX as relay-xdp
+    participant GS_BE as Game Server Backend
+    participant SDK_S as relay-sdk (Server)
+
+    RB ->> RX: HTTP 200 /relay_update response<br/>(session_private_key inside RouteToken)
+    Note over RX: Stores key in BPF session_map<br/>for SHA-256 header verification
+    Note over RB,GS_BE: Out-of-band channel - outside relay-sdk scope.<br/>Game developer implements this path.
+    RB ->> GS_BE: Notify new session<br/>(session_id, session_version,<br/>session_private_key, relay_address)
+    GS_BE ->> SDK_S: register_session(session_id, version,<br/>session_private_key, relay_addr)
+    Note over SDK_S: Stores SessionInfo, ready to<br/>receive CLIENT_TO_SERVER packets
+```
+
+#### Phase B - Route establishment (game client side)
+
+```mermaid
+sequenceDiagram
+    participant GC as Game Client
+    participant SDK_C as relay-sdk (Client)
+    participant RX as relay-xdp (XDP)
+
+    GC ->> SDK_C: open_session(server_address, secret_key)
+    SDK_C ->> RX: ROUTE_REQUEST (type 1)<br/>pittle + chonkle stamped<br/>N x encrypted RouteToken
+    Note over RX: XChaCha20-Poly1305 decrypt token<br/>session_map.insert() + whitelist_map.insert()<br/>XDP_TX -> next relay hop
+    RX ->> SDK_C: ROUTE_RESPONSE (type 2)<br/>relay header + SHA-256 HMAC
+    Note over SDK_C: read_header() verifies HMAC<br/>using pending session_private_key<br/>confirm_pending_route() on success
+    SDK_C ->> GC: RouteChanged { has_relay_route = true }
+```
+
+#### Phase C - Bidirectional game traffic
+
+```mermaid
+sequenceDiagram
+    participant GC as Game Client
+    participant SDK_C as relay-sdk (Client)
+    participant RX1 as Relay[0] (XDP)
+    participant RXn as Relay[n] (XDP)
+    participant SDK_S as relay-sdk (Server)
+    participant GS as Game Server
+
+    GC ->> SDK_C: send_packet(payload)
+    Note over SDK_C: write_header() - sequence + SHA-256 HMAC<br/>stamp_packet() - pittle + chonkle<br/>CLIENT_TO_SERVER (type 3)
+    SDK_C ->> RX1: UDP datagram
+    Note over RX1,RXn: Per-hop: DDoS filter -> session_map lookup -><br/>SHA-256 verify -> rewrite headers -> XDP_TX
+    RXn ->> SDK_S: CLIENT_TO_SERVER (last hop, UDP)
+    Note over SDK_S: read_header() SHA-256 verify<br/>ReplayProtection check<br/>strip relay header -> payload
+    SDK_S ->> GS: PacketReceived { session_id, payload }
+
+    GS ->> SDK_S: send_packet(session_id, response)
+    Note over SDK_S: write_header() SERVER_TO_CLIENT (type 4)<br/>stamp_packet() pittle + chonkle<br/>send to relay_address (last hop)
+    SDK_S ->> RXn: SERVER_TO_CLIENT (UDP)
+    Note over RXn,RX1: Reverse hop chain - same XDP pipeline
+    RX1 ->> SDK_C: SERVER_TO_CLIENT
+    Note over SDK_C: read_header() verify HMAC<br/>ReplayProtection check
+    SDK_C ->> GC: PacketReceived { payload }
+```
+
+Key invariant: **relay-sdk never contacts relay-backend directly**. The only
+network interaction relay-sdk has is UDP datagrams to/from relay-xdp XDP nodes.
 
 ---
 
