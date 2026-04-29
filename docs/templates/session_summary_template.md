@@ -1,8 +1,8 @@
 # Session Summary: {Title}
 
-**Date:** YYYY-MM-DD  
-**Duration:** ~X hours (or ~N interactions)  
-**Focus Area:** {component/feature}
+**Date:** YYYY-MM-DD<br>
+**Duration:** ~X hours (or ~N interactions)<br>
+**Focus Area:** {component/feature}<br>
 
 ## Objectives
 
@@ -11,9 +11,11 @@
 
 ## Work Completed
 
-### {Component}
+### {Component or Sub-topic}
 
-- Description of work; files modified: `path/to/file`
+- Description of work
+- Files modified: `path/to/file`
+- Sub-sections, tables, code blocks as needed
 
 ## Decisions Made
 
@@ -38,6 +40,8 @@
 1. **High:** …
 2. **Medium:** …
 3. **Low:** …
+
+<!-- Mark completed steps with strikethrough: ~~**High:** description~~ Done -->
 
 ## Files Changed
 

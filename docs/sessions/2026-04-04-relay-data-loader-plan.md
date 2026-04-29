@@ -1,8 +1,8 @@
 # Session Summary: RelayData Loader Plan
 
-**Date:** 2026-04-04  
-**Duration:** ~30 min (~4 interactions)  
-**Focus Area:** relay-backend RelayData loader design
+**Date:** 2026-04-04<br>
+**Duration:** ~30 min (~4 interactions)<br>
+**Focus Area:** relay-backend RelayData loader design<br>
 
 ## Objectives
 

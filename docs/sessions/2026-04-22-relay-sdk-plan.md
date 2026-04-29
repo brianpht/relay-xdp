@@ -1,8 +1,8 @@
 # Session Summary: relay-sdk Planning
 
-**Date:** 2026-04-22
-**Duration:** ~1 session (~15 interactions)
-**Focus Area:** relay-sdk - architecture analysis and implementation
+**Date:** 2026-04-22<br>
+**Duration:** ~1 session (~15 interactions)<br>
+**Focus Area:** relay-sdk - architecture analysis and implementation<br>
 
 ## Objectives
 

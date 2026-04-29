@@ -1,8 +1,8 @@
 # Session Summary: Integration Test Plan for relay-xdp <-> relay-backend
 
-**Date:** 2026-04-04  
-**Duration:** ~1 hour (~6 interactions)  
-**Focus Area:** Cross-crate integration testing between relay-xdp and relay-backend
+**Date:** 2026-04-04<br>
+**Duration:** ~1 hour (~6 interactions)<br>
+**Focus Area:** Cross-crate integration testing between relay-xdp and relay-backend<br>
 
 ## Objectives
 

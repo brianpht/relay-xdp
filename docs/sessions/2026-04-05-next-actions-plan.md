@@ -1,8 +1,8 @@
 # Session Summary: Next Actions Plan - Prioritized Roadmap
 
-**Date:** 2026-04-05  
-**Duration:** ~1 hour  
-**Focus Area:** Project-wide roadmap and prioritization
+**Date:** 2026-04-05<br>
+**Duration:** ~1 hour<br>
+**Focus Area:** Project-wide roadmap and prioritization<br>
 
 ## Objectives
 

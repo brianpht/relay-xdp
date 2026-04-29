@@ -1,8 +1,8 @@
 # Session Summary: Integrate relay-sdk Smoke Test into Docker Compose
 
-**Date:** 2026-04-28
-**Duration:** ~1 session (~4 interactions)
-**Focus Area:** `relay-sdk` + `docker-compose.test.yml` + `tests/compose-test.sh` - compose integration smoke test
+**Date:** 2026-04-28<br>
+**Duration:** ~1 session (~4 interactions)<br>
+**Focus Area:** `relay-sdk` + `docker-compose.test.yml` + `tests/compose-test.sh` - compose integration smoke test<br>
 
 ## Objectives
 

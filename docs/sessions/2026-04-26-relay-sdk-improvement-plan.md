@@ -1,8 +1,8 @@
 # Session Summary: relay-sdk Codebase Analysis and Improvement Planning
 
-**Date:** 2026-04-26
-**Duration:** ~1 session (~10 interactions)
-**Focus Area:** `relay-sdk` - full codebase analysis and improvement backlog
+**Date:** 2026-04-26<br>
+**Duration:** ~1 session (~10 interactions)<br>
+**Focus Area:** `relay-sdk` - full codebase analysis and improvement backlog<br>
 
 ## Objectives
 

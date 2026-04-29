@@ -1,8 +1,8 @@
 # Session Summary: Ansible Deployment Plan
 
-**Date:** 2026-04-18  
-**Duration:** ~4 interactions  
-**Focus Area:** deployment/infrastructure
+**Date:** 2026-04-18<br>
+**Duration:** ~4 interactions<br>
+**Focus Area:** deployment/infrastructure<br>
 
 ## Objectives
 

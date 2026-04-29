@@ -1,8 +1,8 @@
 # Session Summary: relay-sdk Code Review and Consistency Audit
 
-**Date:** 2026-04-22
-**Duration:** ~1 session (~20 interactions)
-**Focus Area:** `relay-sdk` - code review, wire compatibility, consistency with `relay-xdp-common` and the relay-xdp system
+**Date:** 2026-04-22<br>
+**Duration:** ~1 session (~20 interactions)<br>
+**Focus Area:** `relay-sdk` - code review, wire compatibility, consistency with `relay-xdp-common` and the relay-xdp system<br>
 
 ## Objectives
 

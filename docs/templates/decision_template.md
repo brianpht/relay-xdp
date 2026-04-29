@@ -1,63 +1,40 @@
 # ADR-{NNN}: {Action-oriented title}
 
-**Date:** YYYY-MM-DD  
-**Status:** Proposed | Accepted | Deprecated | Superseded by [ADR-XXX](…)  
-**Deciders:** {developer | team}  
-**Related Tasks:** [TASK-XXX](…)  
-**Related Sessions:** [Session YYYY-MM-DD](…)
+**Date:** YYYY-MM-DD<br>
+**Status:** Proposed | Accepted | Deprecated | Superseded by [ADR-XXX](…)<br>
+**Deciders:** {developer | team}<br>
+**Related Tasks:** [TASK-XXX](…)<br>
+**Related ADRs:** [ADR-XXX](…)<br>
+**Related Sessions:** [Session YYYY-MM-DD](…)<br>
 
 ## Context
-
 Problem, current state, constraints, consequences of inaction.
 
 ## Options Considered
-
 ### Option A: {Name}
-
 - **Description:** …
-- **Pros:** … |  **Cons:** … |  **Effort:** Low/Medium/High
+- **Pros:** … | **Cons:** … | **Effort:** Impl: X / Migration: Y / Maintenance: Z
 
-### Option B: {Name}
-
-- **Description:** …
-- **Pros:** … |  **Cons:** … |  **Effort:** Low/Medium/High
-
-> Always ≥ 2 options. If only one is viable, list "Do Nothing / Status Quo" and explain why it's unacceptable.
+> Always ≥ 2 options. "Do Nothing" nếu chỉ có 1 viable option.
 
 ## Decision
-
-**Chosen: Option {X} - {Name}**
-Summary in 1-2 sentences.
+**Chosen: Option {X} — {Name}**
 
 ## Rationale
-
-Why chosen, trade-offs accepted, deciding factors, supporting evidence.
+Why chosen, trade-offs accepted, deciding factors.
 
 ## Consequences
-
 - **Positive:** …
 - **Negative:** …
 - **Neutral:** …
 
 ## Affected Components
-
 | Component | Impact | Description |
 |-----------|--------|-------------|
-| `package` | High/Med/Low | Brief description |
 
-## Migration Plan *(if applicable, otherwise remove)*
+## Revisit When
+- Condition X
+- Condition Y
 
+## Migration Plan
 1. Step …
-
-## Compliance Checklist
-
-- [ ] Code reflects decision
-- [ ] Tests updated
-- [ ] Documentation updated
-- [ ] Superseded ADRs updated
-
-## Revision History
-
-| Date | Change | Author |
-|------|--------|--------|
-| YYYY-MM-DD | Initial draft | developer |

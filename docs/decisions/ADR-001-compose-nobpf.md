@@ -1,10 +1,11 @@
 # ADR-001: Use RELAY_NO_BPF=1 for Docker Compose Integration Tests
 
-**Date:** 2026-04-05  
-**Status:** Accepted  
-**Deciders:** developer  
-**Related Tasks:** Docker Compose integration test suite  
-**Related Sessions:** [Session 2026-04-05](../sessions/2026-04-05-compose-integration-test-plan.md)
+**Date:** 2026-04-05<br>
+**Status:** Accepted<br>
+**Deciders:** developer<br>
+**Related Tasks:** Docker Compose integration test suite<br>
+**Related ADRs:** N/A<br>
+**Related Sessions:** [Session 2026-04-05](../sessions/2026-04-05-compose-integration-test-plan.md)<br>
 
 ## Context
 
@@ -22,17 +23,17 @@ These constraints prevent running multiple relay-xdp containers in isolated Dock
 ### Option A: Full XDP mode in Docker
 
 - **Description:** Run relay-xdp containers with `--privileged --net=host` and require kernel module on CI host.
-- **Pros:** Tests the full eBPF path | **Cons:** All containers share host network namespace (port conflicts), requires custom CI runner with kernel 6.5+ and module loaded, cannot run 3 relays on same host | **Effort:** High
+- **Pros:** Tests the full eBPF path | **Cons:** All containers share host network namespace (port conflicts), requires custom CI runner with kernel 6.5+ and module loaded, cannot run 3 relays on same host | **Effort:** Impl: High / Migration: High / Maintenance: High
 
 ### Option B: RELAY_NO_BPF=1 userspace-only mode in Docker Compose
 
 - **Description:** Run relay-xdp in userspace-only mode (`RELAY_NO_BPF=1`) on a standard Docker bridge network. Each container gets its own network namespace with a unique static IP. eBPF/XDP is skipped entirely.
-- **Pros:** Standard Docker networking, no privileged mode, runs on any CI runner, tests real HTTP + UDP + Redis across processes | **Cons:** Does not test eBPF packet processing path | **Effort:** Medium
+- **Pros:** Standard Docker networking, no privileged mode, runs on any CI runner, tests real HTTP + UDP + Redis across processes | **Cons:** Does not test eBPF packet processing path | **Effort:** Impl: Medium / Migration: Low / Maintenance: Low
 
-### Option C: Do nothing (status quo)
+### Option C: Do nothing
 
 - **Description:** Rely on existing in-process tests only.
-- **Pros:** No additional infrastructure | **Cons:** Cannot catch cross-process bugs (serialization over TCP, UDP ping across namespaces, Redis race conditions, env var misconfiguration) | **Effort:** None
+- **Pros:** No additional infrastructure | **Cons:** Cannot catch cross-process bugs (serialization over TCP, UDP ping across namespaces, Redis race conditions, env var misconfiguration) | **Effort:** Impl: None / Migration: None / Maintenance: None
 
 ## Decision
 
@@ -61,16 +62,15 @@ Use Docker Compose with `RELAY_NO_BPF=1` to test multi-process communication. eB
 | `.github/workflows` | Low | New `compose-test` CI job |
 | `tests/` | Medium | New `docker-compose.test.yml`, `compose-test.sh`, fixture JSON |
 
-## Compliance Checklist
+## Revisit When
 
-- [ ] Code reflects decision
-- [ ] Tests updated
-- [ ] Documentation updated
-- [x] Superseded ADRs updated (N/A - first ADR)
+- A self-hosted CI runner with kernel 6.5+ and `relay_module.ko` becomes available, enabling Option A
+- A kernel BPF testing framework (e.g. bpf-conformance, virtme-ng) matures enough to run XDP programs in a VM on standard runners
 
-## Revision History
+## Migration Plan
 
-| Date | Change | Author |
-|------|--------|--------|
-| 2026-04-05 | Initial draft | developer |
-
+1. Build `relay-xdp/Dockerfile.nobpf` (skip eBPF nightly stage)
+2. Create `docker-compose.test.yml` with static-IP bridge topology (redis + backend + relay-a/b/c)
+3. Create `tests/compose-test.sh` with curl-based assertion suite
+4. Add `compose-test` job to `.github/workflows/rust.yml` (runs after `test` job)
+5. Generate deterministic test keypairs via `tests/gen-test-keys.sh`
