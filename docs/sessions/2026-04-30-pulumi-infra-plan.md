@@ -188,14 +188,14 @@ None - planning session only.
 
 | Issue | Resolution | Blocking |
 |---|---|---|
-| `c5n` not available in all AZs | Hardcode known-good AZs per region in `C5N_AZ_MAP` constant in `config.py` | No |
-| EIP charge when instance stopped | Document warning in `infra/README.md`, note `pulumi destroy` for staging when idle | No |
+| AWS SG name cannot start with `sg-` | Add explicit `name=` arg to `aws.ec2.SecurityGroup` in `network.py` using `relay-node-{name}` / `backend-node-{name}` | No |
+| SSH key path `~/.ssh/id_ed25519.pub` not found | Updated `Pulumi.staging.yaml` + `Pulumi.production.yaml` to use `~/.ssh/personal-key.pub` | No |
 
 ## Next Steps
 
 1. ~~**High:** Implement `infra/` files per the plan - `Pulumi.yaml`, `requirements.txt`, `config.py`, `network.py`, `relay_node.py`, `backend_node.py`, `__main__.py`, `inventory_gen.py`, `README.md`~~ Done
 2. ~~**High:** Add `Makefile` targets `deploy-production` and `deploy-staging` at repo root~~ Done
-3. **Medium:** Run `pulumi preview --stack staging` to validate resource graph before first `pulumi up`
+3. ~~**Medium:** Run `pulumi preview --stack staging` to validate resource graph before first `pulumi up`~~ Done - 25 resources, 0 errors
 4. **Medium:** Test `inventory_gen.py` output against Ansible inventory schema with `ansible --list-hosts`
 5. **Low:** Consider adding an ADR for the Pulumi-over-manual-inventory decision
 

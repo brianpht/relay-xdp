@@ -124,6 +124,7 @@ def create_regional_network(
     # ------------------------------------------------------------------
     sg_relay = aws.ec2.SecurityGroup(
         f"sg-relay-{name}",
+        name=f"relay-node-{name}",
         vpc_id=vpc.id,
         description="relay-xdp relay node security group",
         ingress=[
@@ -174,6 +175,7 @@ def create_regional_network(
     # ------------------------------------------------------------------
     sg_backend = aws.ec2.SecurityGroup(
         f"sg-backend-{name}",
+        name=f"backend-node-{name}",
         vpc_id=vpc.id,
         description="relay-xdp backend node security group",
         ingress=[
