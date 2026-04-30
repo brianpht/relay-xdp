@@ -1,0 +1,41 @@
+# ansible/group_vars/production/vault.yml
+#
+# This file MUST be encrypted with ansible-vault before committing.
+# Plaintext vault files must NEVER be committed to the repository.
+#
+# First-time setup:
+#   1. Generate keypairs:
+#        cd ansible
+#        ./scripts/gen-vault-keys.sh production > /tmp/vault_production_plain.yml
+#   2. Copy into place:
+#        cp /tmp/vault_production_plain.yml group_vars/production/vault.yml
+#   3. Encrypt:
+#        ansible-vault encrypt group_vars/production/vault.yml
+#   4. Shred plaintext:
+#        shred -u /tmp/vault_production_plain.yml
+#   5. Commit: git add group_vars/production/vault.yml
+#
+# To edit existing vault:
+#   ansible-vault edit group_vars/production/vault.yml
+#
+# To view:
+#   ansible-vault view group_vars/production/vault.yml
+#
+# Expected plaintext structure (gen-vault-keys.sh produces this):
+#
+#   vault_relay_backend_public_key:  "<base64-32-bytes>"
+#   vault_relay_backend_private_key: "<base64-32-bytes>"
+#   vault_relay_keys:
+#     relay-prod-1:
+#       public_key:  "<base64-32-bytes>"
+#       private_key: "<base64-32-bytes>"
+#     relay-prod-2:
+#       public_key:  "<base64-32-bytes>"
+#       private_key: "<base64-32-bytes>"
+#     relay-prod-3:
+#       public_key:  "<base64-32-bytes>"
+#       private_key: "<base64-32-bytes>"
+#
+# PLACEHOLDER - replace this entire file with ansible-vault encrypted content.
+ANSIBLE_VAULT_PLACEHOLDER: this file must be encrypted with ansible-vault before use
+
