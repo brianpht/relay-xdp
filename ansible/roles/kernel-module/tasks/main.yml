@@ -8,6 +8,35 @@
     ko_filename: "relay_module-{{ ansible_kernel }}.ko"
     ko_dest: "/opt/relay/relay_module-{{ ansible_kernel }}.ko"
 
+# Pre-flight: query the GitHub Releases API to verify the .ko artifact exists
+# for the running kernel before attempting download. Runs in both normal and
+# check mode so `--check` surfaces missing artifacts before a real deploy.
+- name: Pre-flight - fetch release metadata from GitHub API
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ github_repo }}/releases/tags/{{ relay_version }}"
+    method: GET
+    return_content: true
+    status_code: 200
+    headers:
+      Accept: "application/vnd.github+json"
+  register: gh_release
+  # check_mode: false forces this read-only GET to always run, even during --check.
+  # Without this, uri skips in check mode and gh_release.json is undefined.
+  check_mode: false
+
+- name: Pre-flight - assert kernel module artifact exists in release
+  ansible.builtin.assert:
+    that:
+      - gh_release.json.assets | selectattr('name', 'equalto', ko_filename) | list | length > 0
+    fail_msg: >-
+      No .ko artifact for kernel {{ ansible_kernel }} in release {{ relay_version }}.
+      Expected: {{ ko_filename }}.
+      Available kernel modules: {{ gh_release.json.assets
+        | selectattr('name', 'search', 'relay_module-')
+        | map(attribute='name') | list }}.
+      Fix: add "{{ ansible_kernel }}" to the kernel_version matrix in
+      .github/workflows/build-release.yml, push a new tag, then redeploy.
+
 - name: Download kernel module for running kernel
   ansible.builtin.get_url:
     url: "{{ artifact_base_url }}/{{ ko_filename }}"
@@ -16,48 +45,58 @@
     owner: root
     group: root
   notify: reload kernel module
+  # In check mode the release artifact may not exist yet (404) - ignore and continue.
+  ignore_errors: "{{ ansible_check_mode }}"
 
 - name: Ensure chacha20 kernel module is loaded
   community.general.modprobe:
     name: chacha20
     state: present
+  when: not ansible_check_mode
 
 - name: Ensure poly1305 kernel module is loaded
   community.general.modprobe:
     name: poly1305
     state: present
+  when: not ansible_check_mode
 
 - name: Unload existing relay_module if loaded
   community.general.modprobe:
     name: relay_module
     state: absent
   ignore_errors: true  # not fatal if not loaded yet
+  when: not ansible_check_mode
 
 - name: Load relay_module.ko
   ansible.builtin.command:
     cmd: "insmod {{ ko_dest }}"
   changed_when: true
   register: insmod_result
+  when: not ansible_check_mode
 
 - name: Verify relay_module loaded via lsmod
   ansible.builtin.command:
     cmd: lsmod
   register: lsmod_output
   changed_when: false
+  when: not ansible_check_mode
 
 - name: Assert relay_module is present in lsmod
   ansible.builtin.assert:
     that:
       - "'relay_module' in lsmod_output.stdout"
     fail_msg: "relay_module not found in lsmod after insmod. Check dmesg."
+  when: not ansible_check_mode
 
 - name: Show dmesg entries for relay_module
   ansible.builtin.command:
     cmd: dmesg --notime
   register: dmesg_output
   changed_when: false
+  when: not ansible_check_mode
 
 - name: Print relay_module dmesg entries
   ansible.builtin.debug:
     msg: "{{ dmesg_output.stdout_lines | select('search', 'relay') | list }}"
+  when: not ansible_check_mode
 

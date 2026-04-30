@@ -1,6 +1,0 @@
-# Production environment overrides
-rust_log:           warn
-relay_dedicated:    true
-redis_maxmemory:    1gb
-relay_update_interval_ms: 1000
-

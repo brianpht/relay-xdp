@@ -16,14 +16,12 @@
 #   1. Generate keys:
 #        ./scripts/gen-vault-keys.sh staging    > /tmp/vault_staging_plain.yml
 #        ./scripts/gen-vault-keys.sh production > /tmp/vault_production_plain.yml
-#   2. Copy into group_vars:
-#        cp /tmp/vault_staging_plain.yml    group_vars/vault_staging.yml
-#        cp /tmp/vault_production_plain.yml group_vars/vault_production.yml
-#   3. Encrypt:
-#        ./scripts/encrypt-vault.sh all
-#   4. Shred plaintext:
+#   2. Encrypt into playbooks/group_vars/<env>/vault.yml:
+#        ansible-vault encrypt --output playbooks/group_vars/staging/vault.yml    /tmp/vault_staging_plain.yml
+#        ansible-vault encrypt --output playbooks/group_vars/production/vault.yml /tmp/vault_production_plain.yml
+#   3. Shred plaintext:
 #        shred -u /tmp/vault_staging_plain.yml /tmp/vault_production_plain.yml
-#   5. Commit encrypted vault files.
+#   4. Commit encrypted vault files.
 
 set -euo pipefail
 
@@ -34,10 +32,11 @@ ENVIRONMENT="${1:-all}"
 
 encrypt_file() {
   local env="$1"
-  local vault_file="$ANSIBLE_DIR/group_vars/vault_${env}.yml"
+  local vault_file="$ANSIBLE_DIR/playbooks/group_vars/${env}/vault.yml"
 
   if [[ ! -f "$vault_file" ]]; then
-    echo "Error: $vault_file not found. Run gen-vault-keys.sh first." >&2
+    echo "Error: $vault_file not found. Run gen-vault-keys.sh first and encrypt the output:" >&2
+    echo "  ansible-vault encrypt --output playbooks/group_vars/${env}/vault.yml /tmp/vault_${env}_plain.yml" >&2
     return 1
   fi
 

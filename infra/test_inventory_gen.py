@@ -130,9 +130,24 @@ def check_required_fields(inventory: dict, stack: str) -> list[str]:
     Returns list of error strings (empty = OK).
     """
     errors: list[str] = []
-    children = inventory["all"]["children"]
+    top_children = inventory["all"]["children"]
 
-    for host_name, host_vars in children["relay_servers"]["hosts"].items():
+    # Verify environment group exists as the top-level child group.
+    if stack not in top_children:
+        errors.append(f"[{stack}] missing environment group '{stack}' under all.children")
+        return errors
+
+    env_children = top_children[stack]["children"]
+
+    if "relay_servers" not in env_children:
+        errors.append(f"[{stack}] missing 'relay_servers' under {stack}.children")
+        return errors
+
+    if "backend_servers" not in env_children:
+        errors.append(f"[{stack}] missing 'backend_servers' under {stack}.children")
+        return errors
+
+    for host_name, host_vars in env_children["relay_servers"]["hosts"].items():
         for field in ("ansible_host", "relay_name", "ansible_user"):
             if field not in host_vars:
                 errors.append(f"[{stack}] relay_servers/{host_name} missing field: {field}")
@@ -147,7 +162,7 @@ def check_required_fields(inventory: dict, stack: str) -> list[str]:
                 f"{host_vars.get('relay_name')!r}"
             )
 
-    for host_name, host_vars in children["backend_servers"]["hosts"].items():
+    for host_name, host_vars in env_children["backend_servers"]["hosts"].items():
         for field in ("ansible_host", "ansible_user"):
             if field not in host_vars:
                 errors.append(f"[{stack}] backend_servers/{host_name} missing field: {field}")

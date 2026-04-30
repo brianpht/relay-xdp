@@ -26,6 +26,7 @@ class NetworkResult:
 def create_regional_network(
     stack_name: str,
     region: str,
+    az: str,
     vpc_cidr: str,
     admin_cidr: str,
     provider: aws.Provider,
@@ -35,7 +36,7 @@ def create_regional_network(
 
     Resources created:
       - VPC with DNS support enabled
-      - Public subnet (pinned to AZ from caller)
+      - Public subnet (pinned to az)
       - Internet Gateway + Route Table + Association
       - sg_relay:   UDP 40000 open, TCP 8080 open, TCP 22 from admin_cidr
       - sg_backend: TCP 8090 open, TCP 6379 from VPC only, TCP 22 from admin_cidr
@@ -44,6 +45,9 @@ def create_regional_network(
     ----------
     stack_name:  Pulumi stack name (e.g. "production"), used in resource names.
     region:      AWS region string (e.g. "us-east-1").
+    az:          Availability zone to pin the subnet to (e.g. "us-east-1a").
+                 Must support the intended instance type. c5n requires specific
+                 AZs - see config.py:C5N_AZ_MAP.
     vpc_cidr:    VPC IPv4 CIDR block (e.g. "10.1.0.0/16").
     admin_cidr:  CIDR allowed to reach SSH port 22 (e.g. "203.0.113.5/32").
     provider:    Regional aws.Provider instance.
@@ -87,6 +91,7 @@ def create_regional_network(
         f"subnet-{name}",
         vpc_id=vpc.id,
         cidr_block=subnet_cidr,
+        availability_zone=az,
         map_public_ip_on_launch=True,
         tags={"Name": f"relay-subnet-{name}", "Stack": stack_name},
         opts=opts,

@@ -9,8 +9,8 @@
 #   ./scripts/gen-vault-keys.sh production > /tmp/vault_production_plain.yml
 #
 # Then encrypt immediately:
-#   ansible-vault encrypt --output group_vars/vault_staging.yml    /tmp/vault_staging_plain.yml
-#   ansible-vault encrypt --output group_vars/vault_production.yml /tmp/vault_production_plain.yml
+#   ansible-vault encrypt --output playbooks/group_vars/staging/vault.yml    /tmp/vault_staging_plain.yml
+#   ansible-vault encrypt --output playbooks/group_vars/production/vault.yml /tmp/vault_production_plain.yml
 #   shred -u /tmp/vault_staging_plain.yml /tmp/vault_production_plain.yml
 #
 # Requirements:
@@ -109,8 +109,8 @@ read_key backend_priv backend_pub
 
 cat <<EOF
 ---
-# vault_${ENVIRONMENT}.yml - ENCRYPT WITH ansible-vault BEFORE COMMITTING
-# ansible-vault encrypt group_vars/vault_${ENVIRONMENT}.yml
+# group_vars/${ENVIRONMENT}/vault.yml - ENCRYPT WITH ansible-vault BEFORE COMMITTING
+# ansible-vault encrypt group_vars/${ENVIRONMENT}/vault.yml
 
 # relay-backend X25519 keypair
 # The backend private key is used by relay-backend to decrypt relay handshakes.

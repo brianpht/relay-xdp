@@ -37,6 +37,9 @@
     enabled: true
     state: started
     daemon_reload: true
+  # In check mode the unit file is not written to disk, so systemd cannot find
+  # the service. Ignore the error so the rest of the dry-run completes cleanly.
+  ignore_errors: "{{ ansible_check_mode }}"
 
 - name: Wait for relay-backend healthcheck
   ansible.builtin.uri:
@@ -48,4 +51,6 @@
   retries: "{{ relay_verify_retries }}"
   delay: "{{ relay_verify_delay_s }}"
   until: health_check.status == 200
+  # No live service in check mode - skip.
+  when: not ansible_check_mode
 

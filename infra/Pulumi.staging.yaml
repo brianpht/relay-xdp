@@ -6,6 +6,6 @@ config:
   relay-xdp-infra:backend_region: us-east-1
   relay-xdp-infra:backend_instance_type: t3.medium
   relay-xdp-infra:key_pub_path: ~/.ssh/personal-key.pub
-  relay-xdp-infra:admin_cidr: 0.0.0.0/0
+  relay-xdp-infra:admin_cidr: 183.81.18.167/32
   aws:profile: relay-xdp-infra
 encryptionsalt: v1:02WuvBBhXpM=:v1:gB0yo+1+F+YeUFAZ:cP3y1+0TNqdtOpE8YPkykN8NevYyfA==

@@ -11,20 +11,23 @@ RELAY_VERSION ?= v0.1.0
 deploy-production:
 	pulumi up --stack production --cwd infra/ --yes
 	python infra/inventory_gen.py --stack production
-	ansible-playbook -i ansible/inventory/production.yml \
-		ansible/playbooks/site.yml \
+	cd ansible && ansible-playbook \
+		-i inventory/production.yml \
+		playbooks/site.yml \
 		-e relay_version=$(RELAY_VERSION) \
 		--ask-vault-pass
 
 # ---------------------------------------------------------------------------
-# Staging deploy - same pipeline, no vault password required
+# Staging deploy - same pipeline, vault password prompted interactively
 # ---------------------------------------------------------------------------
 deploy-staging:
 	pulumi up --stack staging --cwd infra/ --yes
 	python infra/inventory_gen.py --stack staging
-	ansible-playbook -i ansible/inventory/staging.yml \
-		ansible/playbooks/site.yml \
-		-e relay_version=$(RELAY_VERSION)
+	cd ansible && ansible-playbook \
+		-i inventory/staging.yml \
+		playbooks/site.yml \
+		-e relay_version=$(RELAY_VERSION) \
+		--ask-vault-pass
 
 # ---------------------------------------------------------------------------
 # Dry-run previews (no changes applied)

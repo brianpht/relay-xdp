@@ -40,6 +40,7 @@ HEADER = """\
 # To regenerate: python infra/inventory_gen.py --stack {stack}
 #
 # Groups:
+#   {stack}         - all {stack} hosts (triggers playbooks/group_vars/{stack}/ auto-load)
 #   relay_servers   - hosts running relay-xdp + kernel module
 #   backend_servers - hosts running relay-backend + Redis
 """
@@ -68,23 +69,25 @@ def build_inventory(outputs: dict, stack: str) -> dict:
     """
     Build the Ansible inventory dict from Pulumi stack outputs.
 
-    Output schema (mirrors existing ansible/inventory/production.yml):
+    Output schema:
 
       all:
         vars:
           ansible_python_interpreter: /usr/bin/python3
         children:
-          relay_servers:
-            hosts:
-              relay-production-1:
-                ansible_host: <public_ip>
-                relay_name: relay-production-1
-                ansible_user: ubuntu
-          backend_servers:
-            hosts:
-              backend-production-1:
-                ansible_host: <public_ip>
-                ansible_user: ubuntu
+          staging:                        # or production - triggers group_vars auto-load
+            children:
+              relay_servers:
+                hosts:
+                  relay-staging-1:
+                    ansible_host: <public_ip>
+                    relay_name: relay-staging-1
+                    ansible_user: ubuntu
+              backend_servers:
+                hosts:
+                  backend-staging-1:
+                    ansible_host: <public_ip>
+                    ansible_user: ubuntu
     """
     relay_nodes: dict = outputs.get("relay_nodes", {})
     backend: dict = outputs.get("backend", {})
@@ -123,11 +126,17 @@ def build_inventory(outputs: dict, stack: str) -> dict:
                 "ansible_python_interpreter": "/usr/bin/python3",
             },
             "children": {
-                "relay_servers": {
-                    "hosts": relay_hosts,
-                },
-                "backend_servers": {
-                    "hosts": backend_hosts,
+                # Environment group - causes Ansible to auto-load
+                # playbooks/group_vars/<stack>/vars.yml and vault.yml
+                stack: {
+                    "children": {
+                        "relay_servers": {
+                            "hosts": relay_hosts,
+                        },
+                        "backend_servers": {
+                            "hosts": backend_hosts,
+                        },
+                    },
                 },
             },
         }
@@ -180,8 +189,8 @@ def main() -> None:
     print(f"Written: {out_path}")
     print()
     print("Next step:")
-    print(f"  ansible-playbook -i ansible/inventory/{stack}.yml "
-          f"ansible/playbooks/site.yml -e relay_version=<ver>")
+    print(f"  cd ansible && ansible-playbook -i inventory/{stack}.yml "
+          f"playbooks/site.yml --ask-vault-pass -e relay_version=<ver>")
 
 
 if __name__ == "__main__":

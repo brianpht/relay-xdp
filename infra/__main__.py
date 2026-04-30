@@ -53,6 +53,7 @@ for i, region in enumerate(cfg.relay_regions):
     net = create_regional_network(
         stack_name=stack_name,
         region=region,
+        az=az,
         vpc_cidr=vpc_cidr,
         admin_cidr=cfg.admin_cidr,
         provider=provider,
@@ -81,10 +82,12 @@ backend_provider = aws.Provider(
 )
 
 backend_vpc_cidr = cfg_module.BACKEND_CIDR
+backend_az = cfg.relay_azs.get(backend_region, backend_region + "a")
 
 backend_net = create_regional_network(
     stack_name=f"{stack_name}-backend",
     region=backend_region,
+    az=backend_az,
     vpc_cidr=backend_vpc_cidr,
     admin_cidr=cfg.admin_cidr,
     provider=backend_provider,

@@ -8,6 +8,9 @@ supervised systemd
 loglevel notice
 logfile /var/log/redis/redis-server.log
 
+# Working directory - AOF and RDB files are stored here
+dir /var/lib/redis
+
 # Persistence - AOF only, RDB disabled for relay workload
 save ""
 appendonly yes

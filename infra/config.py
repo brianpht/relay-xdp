@@ -121,10 +121,14 @@ class InfraConfig:
 
     @property
     def vpc_cidr_for_region(self) -> dict[str, str]:
-        """Return CIDR map covering relay regions + backend region."""
-        cidrs = dict(REGION_CIDR_MAP)
-        cidrs[self.backend_region] = BACKEND_CIDR
-        return cidrs
+        """Return CIDR map for relay regions only.
+
+        Backend CIDR is always BACKEND_CIDR and is read directly from the
+        module constant in __main__.py - not through this map. This avoids
+        overwriting the relay CIDR for us-east-1 when backend_region overlaps
+        with a relay region (e.g. staging: both relay and backend in us-east-1).
+        """
+        return dict(REGION_CIDR_MAP)
 
 
 def load() -> InfraConfig:

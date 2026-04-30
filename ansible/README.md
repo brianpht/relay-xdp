@@ -16,25 +16,30 @@ ansible-galaxy collection install community.general ansible.posix
 ansible/
   ansible.cfg               - Ansible defaults (inventory path, SSH config)
   inventory/
-    staging.yml             - Staging hosts
-    production.yml          - Production hosts
-  group_vars/
-    all.yml                 - Shared defaults
-    staging.yml             - Staging overrides
-    production.yml          - Production overrides
-    vault_staging.yml       - Ansible Vault encrypted secrets (staging)
-    vault_production.yml    - Ansible Vault encrypted secrets (production)
+    staging.yml             - Staging hosts (includes 'staging' group for group_vars auto-load)
+    production.yml          - Production hosts (includes 'production' group for group_vars auto-load)
+  playbooks/
+    site.yml                - Full deploy (ordered)
+    relay-only.yml          - Redeploy relays only (rolling)
+    module-only.yml         - Update kernel module only
+    rollback.yml            - Manual rollback to previous version
+    group_vars/             - Adjacent to playbooks for auto-discovery
+      all.yml               - Shared defaults
+      staging/
+        vars.yml            - Staging overrides
+        vault.yml           - Ansible Vault encrypted secrets (staging)
+      production/
+        vars.yml            - Production overrides
+        vault.yml           - Ansible Vault encrypted secrets (production)
   roles/
     common/                 - Base OS: kernel check, user, packages, sysctl
     kernel-module/          - Download + load relay_module-<kver>.ko
     relay-backend/          - Binary + systemd + env
     relay-xdp/              - Binary + eBPF obj + systemd + env (with backup)
     redis/                  - Install + configure Redis 7
-  playbooks/
-    site.yml                - Full deploy (ordered)
-    relay-only.yml          - Redeploy relays only (rolling)
-    module-only.yml         - Update kernel module only
-    rollback.yml            - Manual rollback to previous version
+  scripts/
+    gen-vault-keys.sh       - Generate X25519 keypairs, output plaintext YAML for vault
+    encrypt-vault.sh        - Encrypt vault files with ansible-vault
 ```
 
 ## Quick Start
@@ -42,23 +47,23 @@ ansible/
 ### 1. Set up vault secrets
 
 ```bash
-# Staging
-ansible-vault create group_vars/vault_staging.yml
-# Add:
-# vault_relay_backend_public_key: "..."
-# vault_relay_backend_private_key: "..."
-# vault_relay_keys:
-#   relay-staging-1:
-#     public_key: "..."
-#     private_key: "..."
+cd ansible
 
-# Production (same structure)
-ansible-vault create group_vars/vault_production.yml
+# Generate keypairs and encrypt immediately
+./scripts/gen-vault-keys.sh staging > /tmp/vault_staging_plain.yml
+ansible-vault encrypt --output playbooks/group_vars/staging/vault.yml /tmp/vault_staging_plain.yml
+shred -u /tmp/vault_staging_plain.yml
+
+# Production (same flow)
+./scripts/gen-vault-keys.sh production > /tmp/vault_production_plain.yml
+ansible-vault encrypt --output playbooks/group_vars/production/vault.yml /tmp/vault_production_plain.yml
+shred -u /tmp/vault_production_plain.yml
 ```
 
 ### 2. Full deploy to staging
 
 ```bash
+cd ansible
 ansible-playbook -i inventory/staging.yml playbooks/site.yml \
   -e relay_version=v1.2.3 \
   --ask-vault-pass
@@ -67,6 +72,7 @@ ansible-playbook -i inventory/staging.yml playbooks/site.yml \
 ### 3. Rolling deploy to production
 
 ```bash
+cd ansible
 ansible-playbook -i inventory/production.yml playbooks/site.yml \
   -e relay_version=v1.2.3 \
   --ask-vault-pass
@@ -78,10 +84,23 @@ proceeding. Stops on first failure - run `rollback.yml` to restore.
 ### 4. Rollback a failed node
 
 ```bash
+cd ansible
 ansible-playbook -i inventory/production.yml playbooks/rollback.yml \
   --limit relay-prod-2 \
   --ask-vault-pass
 ```
+
+## group_vars Auto-Discovery
+
+`playbooks/group_vars/` is adjacent to `playbooks/site.yml`, so Ansible
+auto-discovers all vars and vault files without any `-e @group_vars/...` flags.
+
+- `playbooks/group_vars/all.yml` - loaded for every host
+- `playbooks/group_vars/staging/vars.yml` + `vault.yml` - loaded for the `staging` group
+- `playbooks/group_vars/production/vars.yml` + `vault.yml` - loaded for the `production` group
+
+The inventories define a `staging` / `production` parent group that contains
+`relay_servers` and `backend_servers`, triggering the correct group_vars load.
 
 ## Environment Differences
 
@@ -95,8 +114,8 @@ ansible-playbook -i inventory/production.yml playbooks/rollback.yml \
 ## Secrets
 
 Secrets are stored in Ansible Vault encrypted files:
-- `group_vars/vault_staging.yml`
-- `group_vars/vault_production.yml`
+- `playbooks/group_vars/staging/vault.yml`
+- `playbooks/group_vars/production/vault.yml`
 
 The vault password is stored in GitHub Secrets as `ANSIBLE_VAULT_PASSWORD`
 and passed to Ansible via `--vault-password-file` in CI.

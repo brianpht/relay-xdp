@@ -4,9 +4,10 @@
 - name: reload systemd
   ansible.builtin.systemd:
     daemon_reload: true
+  ignore_errors: "{{ ansible_check_mode }}"
 
 - name: restart relay-backend
   ansible.builtin.systemd:
     name: relay-backend
     state: restarted
-
+  ignore_errors: "{{ ansible_check_mode }}"

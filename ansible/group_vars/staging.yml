@@ -1,6 +1,0 @@
-# Staging environment overrides
-rust_log:           info
-relay_dedicated:    false
-redis_maxmemory:    256mb
-relay_update_interval_ms: 1000
-
