@@ -178,7 +178,7 @@ To be captured in a top-level `Makefile` target `deploy-production`.
 | No EIP on backend node | Backend receives inbound HTTP POST from relay nodes - auto-assigned public IP with DNS is sufficient. EIP cost avoided. | N/A |
 | Local key import per-region | Avoids managing multiple private keys. `aws.ec2.KeyPair` imports same public key into each region's AWS account. Private key stays local only. | N/A |
 | S3 state backend | Avoids Pulumi Cloud vendor lock-in. Self-hosted, consistent with project's self-hosted deployment model. | N/A |
-| `inventory_gen.py` bridge vs. replacing Ansible | Ansible roles are complete and tested. Pulumi only provisions VMs - Ansible handles all software deployment. Minimal disruption to existing pipeline. | N/A |
+| `inventory_gen.py` bridge vs. replacing Ansible | Ansible roles are complete and tested. Pulumi only provisions VMs - Ansible handles all software deployment. Minimal disruption to existing pipeline. | [ADR-002](../decisions/ADR-002-pulumi-infra-over-manual-inventory.md) |
 
 ## Tests Added/Modified
 
@@ -190,14 +190,15 @@ None - planning session only.
 |---|---|---|
 | AWS SG name cannot start with `sg-` | Add explicit `name=` arg to `aws.ec2.SecurityGroup` in `network.py` using `relay-node-{name}` / `backend-node-{name}` | No |
 | SSH key path `~/.ssh/id_ed25519.pub` not found | Updated `Pulumi.staging.yaml` + `Pulumi.production.yaml` to use `~/.ssh/personal-key.pub` | No |
+| `externally-managed-environment` on pip install | System Python (Debian PEP 668) - PyYAML already installed system-wide, run `python3` directly without pip | No |
 
 ## Next Steps
 
 1. ~~**High:** Implement `infra/` files per the plan - `Pulumi.yaml`, `requirements.txt`, `config.py`, `network.py`, `relay_node.py`, `backend_node.py`, `__main__.py`, `inventory_gen.py`, `README.md`~~ Done
 2. ~~**High:** Add `Makefile` targets `deploy-production` and `deploy-staging` at repo root~~ Done
 3. ~~**Medium:** Run `pulumi preview --stack staging` to validate resource graph before first `pulumi up`~~ Done - 25 resources, 0 errors
-4. **Medium:** Test `inventory_gen.py` output against Ansible inventory schema with `ansible --list-hosts`
-5. **Low:** Consider adding an ADR for the Pulumi-over-manual-inventory decision
+4. ~~**Medium:** Test `inventory_gen.py` output against Ansible inventory schema with `ansible --list-hosts`~~ Done - `infra/test_inventory_gen.py` PASSED (staging: 2 hosts, production: 4 hosts, all groups OK)
+5. ~~**Low:** Consider adding an ADR for the Pulumi-over-manual-inventory decision~~ Done - [ADR-002](../decisions/ADR-002-pulumi-infra-over-manual-inventory.md)
 
 ## Files Changed
 
@@ -216,4 +217,6 @@ None - planning session only.
 | A | `infra/backend_node.py` |
 | A | `infra/inventory_gen.py` |
 | A | `Makefile` (targets: `deploy-production`, `deploy-staging`, `infra-preview-*`, `infra-destroy-staging`) |
+| A | `infra/test_inventory_gen.py` (mock-based schema validator, passes with `python3`) |
+| A | `docs/decisions/ADR-002-pulumi-infra-over-manual-inventory.md` |
 
