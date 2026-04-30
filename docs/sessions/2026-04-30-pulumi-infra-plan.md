@@ -11,7 +11,7 @@
 - [x] Produce complete file-by-file implementation plan for `infra/` Pulumi project
 - [x] Define Ansible inventory generation bridge (`inventory_gen.py`)
 - [x] Document full deploy workflow (Pulumi -> inventory gen -> Ansible)
-- [ ] Implement `infra/` files (next session)
+- [x] Implement `infra/` files (next session)
 
 ## Work Completed
 
@@ -193,8 +193,8 @@ None - planning session only.
 
 ## Next Steps
 
-1. **High:** Implement `infra/` files per the plan - `Pulumi.yaml`, `requirements.txt`, `config.py`, `network.py`, `relay_node.py`, `backend_node.py`, `__main__.py`, `inventory_gen.py`, `README.md`
-2. **High:** Add `Makefile` targets `deploy-production` and `deploy-staging` at repo root
+1. ~~**High:** Implement `infra/` files per the plan - `Pulumi.yaml`, `requirements.txt`, `config.py`, `network.py`, `relay_node.py`, `backend_node.py`, `__main__.py`, `inventory_gen.py`, `README.md`~~ Done
+2. ~~**High:** Add `Makefile` targets `deploy-production` and `deploy-staging` at repo root~~ Done
 3. **Medium:** Run `pulumi preview --stack staging` to validate resource graph before first `pulumi up`
 4. **Medium:** Test `inventory_gen.py` output against Ansible inventory schema with `ansible --list-hosts`
 5. **Low:** Consider adding an ADR for the Pulumi-over-manual-inventory decision
@@ -203,16 +203,17 @@ None - planning session only.
 
 | Status | File |
 |---|---|
-| A (planned) | `infra/Pulumi.yaml` |
-| A (planned) | `infra/Pulumi.staging.yaml` |
-| A (planned) | `infra/Pulumi.production.yaml` |
-| A (planned) | `infra/requirements.txt` |
-| A (planned) | `infra/README.md` |
-| A (planned) | `infra/__main__.py` |
-| A (planned) | `infra/config.py` |
-| A (planned) | `infra/network.py` |
-| A (planned) | `infra/relay_node.py` |
-| A (planned) | `infra/backend_node.py` |
-| A (planned) | `infra/inventory_gen.py` |
-| M (planned) | `Makefile` (new targets: `deploy-production`, `deploy-staging`) |
+| A | `infra/Pulumi.yaml` |
+| A | `infra/Pulumi.staging.yaml` |
+| A | `infra/Pulumi.production.yaml` |
+| A | `infra/requirements.txt` |
+| A | `infra/README.md` |
+| A | `infra/.gitignore` |
+| A | `infra/__main__.py` |
+| A | `infra/config.py` |
+| A | `infra/network.py` |
+| A | `infra/relay_node.py` |
+| A | `infra/backend_node.py` |
+| A | `infra/inventory_gen.py` |
+| A | `Makefile` (targets: `deploy-production`, `deploy-staging`, `infra-preview-*`, `infra-destroy-staging`) |
 

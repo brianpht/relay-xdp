@@ -1,0 +1,4 @@
+name: relay-xdp-infra
+runtime: python
+description: AWS infrastructure for relay-xdp multi-region node deployment
+
