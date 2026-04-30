@@ -284,7 +284,7 @@ packets never leave the NIC.
 - **DDoS filter as first gate**: Byte-range checks reject garbage before any map lookup or crypto.
 
 For detailed performance design principles and optimization guidelines,
-see [docs/performance_design.md](docs/performance_design.md).
+see [docs/performance_design.md](docs/PERFORMANCE_DESIGN.md).
 
 ## Testing
 
@@ -301,8 +301,8 @@ This ensures the Rust eBPF program is drop-in compatible with existing relay inf
 
 ## Documentation
 
-- [Architecture](docs/architecture.md): system diagram, crate structure, data flows, BPF map schema, packet handlers
-- [Performance Design](docs/performance_design.md): core design principles, performance budgets, optimization guidelines
+- [Architecture](docs/ARCHITECTURE.md): system diagram, crate structure, data flows, BPF map schema, packet handlers
+- [Performance Design](docs/PERFORMANCE_DESIGN.md): core design principles, performance budgets, optimization guidelines
 - [Relay Backend Architecture](relay-backend/ARCHITECTURE.md): route optimization, wire format, encoding, relay-xdp
   interaction protocol
 - [relay-sdk Architecture](relay-sdk/ARCHITECTURE.md): SDK module map, FFI contract, wire compat test vectors, benchmarks

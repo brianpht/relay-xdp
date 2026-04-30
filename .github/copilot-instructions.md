@@ -34,7 +34,7 @@ UDP game relay, XDP packet processing at NIC driver level. Rust + eBPF + C kerne
 | `whitelist_map` | LruHash\[200K\] | WhitelistKey → WhitelistValue | eBPF + Userspace |
 
 Struct definitions: `relay-xdp-common/src/lib.rs`.
-Field layouts + byte offsets: [`docs/architecture.md` § BPF Map Schema](../docs/architecture.md#bpf-map-schema).
+Field layouts + byte offsets: [`docs/architecture.md` § BPF Map Schema](../docs/ARCHITECTURE.md#bpf-map-schema).
 
 ## Rules: `relay-xdp-common`
 
@@ -67,7 +67,7 @@ Field layouts + byte offsets: [`docs/architecture.md` § BPF Map Schema](../docs
 ## Rules: Cross-Cutting
 
 - DDoS filter (pittle/chonkle): implemented in BOTH eBPF AND userspace (`packet_filter.rs`). MUST produce identical output. Change one → change both.
-- 14 packet types (1-14) in relay-xdp-common. Full table: [`docs/architecture.md` § Packet Handlers](../docs/architecture.md#packet-handlers)
+- 14 packet types (1-14) in relay-xdp-common. Full table: [`docs/architecture.md` § Packet Handlers](../docs/ARCHITECTURE.md#packet-handlers)
 - Processing order (NEVER reorder): parse → size check → DDoS filter → whitelist → session lookup → crypto → forward
 - NEVER add map lookups or crypto before DDoS filter
 - NEVER use em-dashes (—) or emojis in code comments, docs, or markdown. Use ` - ` instead and ASCII symbols only.
@@ -120,6 +120,6 @@ Change shared types or kfunc signatures → trace + rebuild across all layers.
 
 ## Reference Docs
 
-- Struct layouts, data flows, crypto stack: [`docs/architecture.md`](../docs/architecture.md)
-- Performance principles, targets, budgets: [`docs/performance_design.md`](../docs/performance_design.md)
+- Struct layouts, data flows, crypto stack: [`docs/architecture.md`](../docs/ARCHITECTURE.md)
+- Performance principles, targets, budgets: [`docs/performance_design.md`](../docs/PERFORMANCE_DESIGN.md)
 - Relay backend architecture, wire format, encoding: [`relay-backend/ARCHITECTURE.md`](../relay-backend/ARCHITECTURE.md)
