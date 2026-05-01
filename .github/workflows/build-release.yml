@@ -157,15 +157,17 @@ jobs:
       fail-fast: false
       matrix:
         kernel_version:
-          # Ubuntu 22.04 HWE series - versions confirmed available in apt mirror.
-          # 6.5 series (GA kernel for Ubuntu 22.04 HWE):
+          # Ubuntu 22.04 LTS HWE series - versions confirmed on staging/production.
+          # 6.5 series (original HWE):
           - "6.5.0-45-generic"
-          # 6.8 series (Ubuntu 24.04 backport, available on 22.04 HWE):
+          # 6.8 series (intermediate HWE):
           - "6.8.0-57-generic"
+          # 6.17 series (current HWE, latest as of May 2026):
+          - "6.17.0-1012-aws"
           # To find available versions on a live Ubuntu 22.04 host:
           #   apt-cache search linux-headers | grep -E "^linux-headers-[0-9]" | grep generic | sort -V
-          # Update this list when new kernel versions are deployed to staging/production.
-          # Current staging/production kernels: TBD - see Next Steps in deployment plan.
+          # To verify running kernel: uname -r
+          # Update this list when new HWE kernel versions are deployed.
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

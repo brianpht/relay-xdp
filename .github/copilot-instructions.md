@@ -8,12 +8,24 @@ UDP game relay, XDP packet processing at NIC driver level. Rust + eBPF + C kerne
 
 ## Workspace
 
-- `relay-xdp/` - Rust, x86_64, userspace control plane
+### Core Data Plane
+
+- `relay-xdp/` - Rust, x86_64, userspace control plane (main binary)
 - `relay-xdp-common/` - Rust, `#![no_std]`, shared types (both targets)
-- `relay-xdp-ebpf/` - Rust, `bpfel-unknown-none`, eBPF data plane (**NOT a workspace member**)
-- `relay-backend/` - Rust, x86_64, route optimization backend (tokio + axum)
+- `relay-xdp-ebpf/` - Rust, `bpfel-unknown-none`, eBPF data plane (**NOT a workspace member** - separate Cargo target)
 - `module/` - C, Linux kernel module (SHA-256 + XChaCha20-Poly1305 kfuncs)
-- `xtask/` - Rust, x86_64, build helper
+
+### Control & Optimization
+
+- `relay-backend/` - Rust, x86_64, route optimization backend (tokio + axum, HTTP endpoint for relay updates)
+- `relay-sdk/` - Rust + C FFI bindings, game server SDK (cbindgen exports `relay_sdk.h` for C/C++)
+
+### Build & Deployment
+
+- `xtask/` - Rust, x86_64, build helper (targets: `build-ebpf-rust`, `func-test`)
+- `infra/` - Pulumi Python, AWS infrastructure provisioning (EC2, VPC, security groups)
+- `ansible/` - Bare-metal deployment (systemd units, binaries, kernel module, secrets management)
+- `tests/` - Integration tests (docker-compose, functional parity with/without eBPF)
 
 ## Threading Model
 

@@ -20,9 +20,15 @@ import pulumi
 # Canonical (Ubuntu) AWS owner ID - stable, does not change.
 CANONICAL_OWNER_ID = "099720109477"
 
-# Ubuntu 24.04 LTS (Noble) x86_64 GP3 SSD - kernel 6.8 meets the >=6.5
-# requirement for BTF and kfunc support.
-AMI_NAME_FILTER = "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"
+# Ubuntu 22.04 LTS (Jammy) x86_64 HWE kernel on GP3 SSD.
+# HWE (Hardware Enablement) kernel auto-updates to latest stable (currently 6.17).
+# Kernel 6.17 meets the >=6.5 requirement for BTF and kfunc support.
+#
+# CI matrix (build-release.yml) must include all HWE kernel versions deployed
+# on staging/production hosts, since new AMI images may boot different kernels.
+# When deploying to a new host, verify `uname -r` and ensure the kernel is
+# in the CI matrix before running ansible-playbook.
+AMI_NAME_FILTER = "ubuntu/images/hvm-ssd-gp3/ubuntu-jammy-22.04-amd64-server-*"
 
 # ---------------------------------------------------------------------------
 # Network constants
