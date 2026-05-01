@@ -139,101 +139,20 @@ jobs:
           retention-days: 1
 
   # ------------------------------------------------------------------
-  # Job 3: Build kernel module (relay_module.ko) per kernel version.
-  #
-  # Matrix: add kernel versions matching production/staging hosts.
-  # The module source is in module/relay_module.c.
-  # Requires kernel headers + btf vmlinux for the target kernel.
-  #
-  # NOTE: GitHub-hosted Ubuntu 22.04 runners ship with kernel 6.5 or
-  # later; installing linux-headers-<ver>-generic is sufficient for
-  # in-tree module builds. If the runner kernel itself matches the
-  # target version, we can use the running kernel directly.
-  # ------------------------------------------------------------------
-  build-kernel-module:
-    name: Build kernel module (${{ matrix.kernel_version }})
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        kernel_version:
-          # Ubuntu 22.04 LTS HWE series - generic kernels only (not AWS-specific).
-          # These versions are available in the standard Ubuntu apt mirror.
-          # 6.5 series (original HWE):
-          - "6.5.0-45-generic"
-          # 6.8 series (intermediate HWE):
-          - "6.8.0-57-generic"
-          # AWS kernel variants - available as linux-headers-<kver> in Ubuntu apt mirror.
-          # These are used by EC2 instances launched with Amazon Linux-compatible Ubuntu AMIs.
-          - "6.8.0-1052-aws"
-          # To find available versions in apt mirror (GitHub runner):
-          #   apt-cache search linux-headers | grep -E "^linux-headers-[0-9]" | grep generic | sort -V
-          #   apt-cache search linux-headers | grep -E "^linux-headers-[0-9]" | grep aws | sort -V
-          # To verify running kernel on deployed host: uname -r
-          # If deployed kernel doesn't match matrix, run pre-flight check to see available
-          # modules, then update matrix and re-release v<X>-aws (e.g. v0.1.0-alpha.3-aws)
-          # or pin Pulumi to use generic kernel AMI.
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Show available kernel header versions (for matrix maintenance)
-        run: |
-          echo "--- Available linux-headers-*-generic packages ---"
-          apt-cache search linux-headers 2>/dev/null \
-            | grep -E "^linux-headers-[0-9]" \
-            | grep generic \
-            | awk '{print $1}' \
-            | sort -V \
-            || true
-
-      - name: Install kernel headers for ${{ matrix.kernel_version }}
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            linux-headers-${{ matrix.kernel_version }} \
-            build-essential \
-            kmod \
-            dwarves
-          # Verify pahole is available - required for BTF module generation.
-          pahole --version || { echo "ERROR: pahole not found after installing dwarves"; exit 1; }
-
-      - name: Copy vmlinux BTF for target kernel
-        run: |
-          # BTF vmlinux may not exist for cross-version builds; skip if absent.
-          BTF_SRC="/sys/kernel/btf/vmlinux"
-          BTF_DST="/usr/lib/modules/${{ matrix.kernel_version }}/build/vmlinux"
-          if [ -f "$BTF_SRC" ]; then
-            sudo cp "$BTF_SRC" "$BTF_DST"
-          else
-            echo "Warning: BTF vmlinux not available for ${{ matrix.kernel_version }}, skipping copy"
-          fi
-
-      - name: Build relay_module.ko
-        working-directory: module
-        run: |
-          # Pass PAHOLE explicitly - the kernel build system may not find it
-          # via PATH when cross-building for a non-running kernel version.
-          PAHOLE_BIN="$(which pahole)"
-          make -C /lib/modules/${{ matrix.kernel_version }}/build \
-            M="$(pwd)" \
-            PAHOLE="$PAHOLE_BIN" \
-            modules
-
-      - name: Rename artifact to include kernel version
-        working-directory: module
-        run: cp relay_module.ko relay_module-${{ matrix.kernel_version }}.ko
-
-      - name: Upload kernel module artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: relay_module-${{ matrix.kernel_version }}
-          path: module/relay_module-${{ matrix.kernel_version }}.ko
-          retention-days: 1
-
-  # ------------------------------------------------------------------
-  # Job 4: Collect all artifacts and create GitHub Release.
+  # Job 3: Collect all artifacts and create GitHub Release.
   # Runs after all build jobs succeed.
+  #
+  # NOTE: The kernel module (relay_module.c) is NOT pre-built in CI.
+  # Pre-building .ko artifacts fails for AWS kernel variants because
+  # the GitHub runner compiles with a different GCC version and CONFIG
+  # flags than Amazon uses, producing a vermagic mismatch that causes
+  # insmod to fail with EINVAL on the target EC2 host.
+  #
+  # Instead, relay_module.c source is uploaded to the Release and the
+  # Ansible kernel-module role builds it on the target host at deploy
+  # time using the running kernel's own headers. This guarantees the
+  # vermagic always matches regardless of kernel variant (generic, aws,
+  # or any future variant).
   # ------------------------------------------------------------------
   create-release:
     name: Create GitHub Release
@@ -241,11 +160,13 @@ jobs:
     needs:
       - build-userspace
       - build-ebpf
-      - build-kernel-module
     permissions:
       contents: write  # required to create releases and upload assets
       checks: write    # required for release action to annotate the workflow run
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Resolve release version
         id: version
         run: |
@@ -273,12 +194,12 @@ jobs:
           name: relay_xdp_rust.o
           path: dist/
 
-      - name: Download kernel modules
-        uses: actions/download-artifact@v4
-        with:
-          pattern: relay_module-*
-          path: dist/
-          merge-multiple: true
+      - name: Copy kernel module source
+        # relay_module.c is built on the target EC2 host at Ansible deploy time.
+        # This avoids vermagic mismatch between CI-compiled .ko and the running
+        # AWS kernel. The Ansible kernel-module role downloads this file, installs
+        # linux-headers-$(uname -r), and runs make on the host.
+        run: cp module/relay_module.c dist/relay_module.c
 
       - name: Rename eBPF object to canonical name
         run: |

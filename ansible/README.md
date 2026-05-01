@@ -120,18 +120,33 @@ Secrets are stored in Ansible Vault encrypted files:
 The vault password is stored in GitHub Secrets as `ANSIBLE_VAULT_PASSWORD`
 and passed to Ansible via `--vault-password-file` in CI.
 
-## Kernel Module Matrix
+## Kernel Module Build Strategy
 
-The kernel module must match the exact running kernel version.
-Pre-built `.ko` files are published to GitHub Releases by the CI pipeline.
+The kernel module (`relay_module.ko`) is **NOT pre-built in CI**. Instead it is
+compiled on the target host at Ansible deploy time using the running kernel's
+own headers. This guarantees the module vermagic always matches, regardless of
+kernel variant (`generic`, `aws`, or any future variant).
 
-If you add a new kernel version to staging/production, update the matrix in
-`.github/workflows/build-release.yml` and release a new version.
+Pre-building `.ko` artifacts in CI fails for AWS kernels because Amazon compiles
+the `-aws` kernel with different GCC version and `CONFIG_*` flags than the Ubuntu
+apt-packaged headers on GitHub runners. `insmod` rejects the resulting `.ko` with
+`EINVAL` (vermagic mismatch).
+
+**What CI does:** upload `relay_module.c` source as a Release asset.
+
+**What Ansible does (kernel-module role):**
+1. `apt install linux-headers-$(uname -r) build-essential dwarves`
+2. Download `relay_module.c` from the GitHub Release
+3. `make -C /lib/modules/$(uname -r)/build M=/opt/relay/module modules`
+4. `insmod /opt/relay/module/relay_module.ko`
+
+If a new kernel version is deployed, no changes to CI or any matrix are needed -
+the role automatically builds for whatever kernel is running.
 
 ## Verification Steps (per relay node)
 
 1. `systemctl is-active relay-xdp` - service running
 2. `bpftool prog list | grep xdp` - BPF program loaded
-3. `lsmod | grep relay_module` - kernel module present
+3. `lsmod | grep relay_module` - kernel module present (built on host from source)
 4. Journal check for startup log entry
 

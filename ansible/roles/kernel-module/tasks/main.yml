@@ -1,16 +1,30 @@
 ---
 # roles/kernel-module/tasks/main.yml
-# Download and load the pre-built relay_module.ko for the running kernel.
-# The .ko artifact is named relay_module-<kernel-version>.ko on GitHub Releases.
+#
+# Build relay_module.ko on the target host from source, then load it.
+#
+# Why build on host instead of downloading a pre-built .ko:
+#   The kernel module vermagic embeds the GCC version + CONFIG flags used
+#   at build time. Amazon builds the AWS kernel (e.g. 6.8.0-1052-aws) with
+#   different flags than the Ubuntu apt-packaged headers on GitHub runners,
+#   so a pre-built .ko fails insmod with EINVAL (vermagic mismatch).
+#   Building on the host with linux-headers-$(uname -r) always produces
+#   a matching vermagic, regardless of kernel variant (generic, aws, etc).
+#
+# Flow:
+#   pre-flight  - assert relay_module.c exists in the GitHub Release
+#   deps        - install kernel headers + build toolchain
+#   source      - download relay_module.c from Release to /opt/relay/module/
+#   build       - make on host
+#   load        - insmod + verify
 
-- name: Set kernel module filename
+- name: Set kernel module build directory
   ansible.builtin.set_fact:
-    ko_filename: "relay_module-{{ ansible_kernel }}.ko"
-    ko_dest: "/opt/relay/relay_module-{{ ansible_kernel }}.ko"
+    ko_build_dir: "/opt/relay/module"
+    ko_dest: "/opt/relay/module/relay_module.ko"
 
-# Pre-flight: query the GitHub Releases API to verify the .ko artifact exists
-# for the running kernel before attempting download. Runs in both normal and
-# check mode so `--check` surfaces missing artifacts before a real deploy.
+# Pre-flight: verify relay_module.c exists in the Release before touching the host.
+# Runs in both normal and check mode.
 - name: Pre-flight - fetch release metadata from GitHub API
   ansible.builtin.uri:
     url: "https://api.github.com/repos/{{ github_repo }}/releases/tags/{{ relay_version }}"
@@ -21,32 +35,79 @@
       Accept: "application/vnd.github+json"
   register: gh_release
   # check_mode: false forces this read-only GET to always run, even during --check.
-  # Without this, uri skips in check mode and gh_release.json is undefined.
   check_mode: false
 
-- name: Pre-flight - assert kernel module artifact exists in release
+- name: Pre-flight - assert relay_module.c source exists in release
   ansible.builtin.assert:
     that:
-      - gh_release.json.assets | selectattr('name', 'equalto', ko_filename) | list | length > 0
+      - gh_release.json.assets | selectattr('name', 'equalto', 'relay_module.c') | list | length > 0
     fail_msg: >-
-      No .ko artifact for kernel {{ ansible_kernel }} in release {{ relay_version }}.
-      Expected: {{ ko_filename }}.
-      Available kernel modules: {{ gh_release.json.assets
-        | selectattr('name', 'search', 'relay_module-')
-        | map(attribute='name') | list }}.
-      Fix: add "{{ ansible_kernel }}" to the kernel_version matrix in
-      .github/workflows/build-release.yml, push a new tag, then redeploy.
+      No relay_module.c source artifact found in release {{ relay_version }}.
+      Available assets: {{ gh_release.json.assets | map(attribute='name') | list }}.
+      Fix: ensure the build-release CI workflow ran successfully for {{ relay_version }}.
 
-- name: Download kernel module for running kernel
+- name: Create kernel module build directory
+  ansible.builtin.file:
+    path: "{{ ko_build_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install kernel headers and build toolchain
+  ansible.builtin.apt:
+    name:
+      - "linux-headers-{{ ansible_kernel }}"
+      - build-essential
+      - kmod
+      - dwarves
+    state: present
+    update_cache: true
+  when: not ansible_check_mode
+
+- name: Download relay_module.c source from Release
   ansible.builtin.get_url:
-    url: "{{ artifact_base_url }}/{{ ko_filename }}"
-    dest: "{{ ko_dest }}"
+    url: "{{ artifact_base_url }}/relay_module.c"
+    dest: "{{ ko_build_dir }}/relay_module.c"
     mode: "0644"
     owner: root
     group: root
-  notify: reload kernel module
-  # In check mode the release artifact may not exist yet (404) - ignore and continue.
+    force: true
   ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Copy vmlinux BTF for running kernel (required for kfunc BTF section)
+  ansible.builtin.copy:
+    src: /sys/kernel/btf/vmlinux
+    dest: "/usr/lib/modules/{{ ansible_kernel }}/build/vmlinux"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  when: not ansible_check_mode
+  failed_when: false  # skip silently if BTF file absent on this kernel
+
+- name: Build relay_module.ko on host
+  # make is invoked against the running kernel's build tree so the compiled
+  # .ko carries the correct vermagic. PAHOLE is passed explicitly because
+  # the kernel build system may not find it via PATH from make's environment.
+  ansible.builtin.command:
+    cmd: >-
+      make -C /lib/modules/{{ ansible_kernel }}/build
+      M={{ ko_build_dir }}
+      PAHOLE=/usr/bin/pahole
+      modules
+  args:
+    chdir: "{{ ko_build_dir }}"
+  changed_when: true
+  register: module_build_result
+  when: not ansible_check_mode
+
+- name: Fail with build output if make failed
+  ansible.builtin.fail:
+    msg: "Kernel module build failed:\n{{ module_build_result.stderr }}"
+  when:
+    - not ansible_check_mode
+    - module_build_result.rc is defined and module_build_result.rc != 0
 
 - name: Ensure chacha20 kernel module is loaded
   community.general.modprobe:
@@ -64,14 +125,13 @@
   community.general.modprobe:
     name: relay_module
     state: absent
-  ignore_errors: true  # not fatal if not loaded yet
+  ignore_errors: "true"  # not fatal if not loaded yet
   when: not ansible_check_mode
 
 - name: Load relay_module.ko
   ansible.builtin.command:
     cmd: "insmod {{ ko_dest }}"
   changed_when: true
-  register: insmod_result
   when: not ansible_check_mode
 
 - name: Verify relay_module loaded via lsmod
@@ -85,7 +145,7 @@
   ansible.builtin.assert:
     that:
       - "'relay_module' in lsmod_output.stdout"
-    fail_msg: "relay_module not found in lsmod after insmod. Check dmesg."
+    fail_msg: "relay_module not found in lsmod after insmod. Check dmesg for errors."
   when: not ansible_check_mode
 
 - name: Show dmesg entries for relay_module
