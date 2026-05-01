@@ -355,7 +355,7 @@ pub fn get_xdp_instructions(elf_patched: &[u8]) -> Result<Vec<aya_obj::generated
 /// - relocate_calls() only expands src_reg=1 BPF-to-BPF call sites
 /// - src_reg=2 instructions pass through unmodified in relative order
 pub fn patch_kfunc_instructions(
-    insns: &mut Vec<aya_obj::generated::bpf_insn>,
+    insns: &mut [aya_obj::generated::bpf_insn],
     kfunc_offsets: &HashMap<u64, String>,
     btf_ids: &HashMap<String, u32>,
     fd_array_idx: u16,
