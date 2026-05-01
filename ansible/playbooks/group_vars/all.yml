@@ -2,7 +2,7 @@
 # Override in group_vars/staging.yml or group_vars/production.yml.
 
 # ---- Artifact / version ------------------------------------------------
-relay_version: "v0.1.0-alpha.3"
+relay_version: "v0.1.0-alpha.4"
 github_repo: "brianpht/relay-xdp"
 artifact_base_url: "https://github.com/{{ github_repo }}/releases/download/{{ relay_version }}"
 
