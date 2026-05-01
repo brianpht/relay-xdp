@@ -7,6 +7,7 @@ pub const RELAY_VERSION: &str = "relay-rust";
 pub mod bpf;
 pub mod config;
 pub mod encoding;
+pub mod kfunc;
 pub mod main_thread;
 pub mod manager;
 pub mod packet_filter;

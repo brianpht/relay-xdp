@@ -1,24 +1,60 @@
 //! BPF loader - load/attach XDP program, manage BPF maps.
 //! Port of `relay_bpf.c`.
+//!
+//! Loading flow:
+//!   1. Read ELF bytes from disk.
+//!   2. Patch kfunc call sites: src_reg 1->2 so aya-obj skips them.
+//!   3. Ebpf::load(patched) to create all 6 maps (aya manages map FDs).
+//!   4. Extract raw map FDs via typed-map API.
+//!   5. Patch map FD values directly into ELF bytes (bypass relocate_maps).
+//!   6. aya_obj second parse + relocate_calls => flat instruction Vec.
+//!   7. Find relay_module.ko BTF, parse kfunc BTF type IDs.
+//!   8. Patch kfunc instructions with BTF IDs and fd_array index.
+//!   9. raw BPF_PROG_LOAD with fd_array -> prog_fd.
+//!  10. raw BPF_LINK_CREATE -> link_fd (holds XDP attachment for NIC lifetime).
 
-use anyhow::{bail, Context, Result};
-use aya::maps::{Array, HashMap as AyaHashMap, MapData, PerCpuArray};
-use aya::programs::{Xdp, XdpFlags};
+use anyhow::{Context, Result};
+use aya::maps::{Array, HashMap as AyaHashMap, IterableMap, MapData, PerCpuArray};
 use aya::Ebpf;
 use log::info;
+use std::collections::HashMap;
+use std::os::fd::{AsFd, AsRawFd};
 use std::path::Path;
 
 use relay_xdp_common::*;
 
+use crate::kfunc::{
+    collect_kfunc_offsets, find_module_btf, get_xdp_instructions, parse_btf_func_ids,
+    patch_elf_map_fds, patch_elf_skip_kfuncs, patch_kfunc_instructions, raw_create_xdp_link,
+    raw_load_xdp, RELAY_MODULE_KFUNCS,
+};
+
 /// Holds the loaded BPF program and map handles.
+///
+/// `bpf` owns all 6 map FDs (via aya).
+/// `prog_fd` and `link_fd` are raw kernel FDs from the manual load path.
+/// Dropping `BpfContext` closes `link_fd` first (detaches XDP from NIC),
+/// then `prog_fd`. `bpf` is dropped last, closing map FDs.
 pub struct BpfContext {
     pub bpf: Ebpf,
-    /// Stored for future Prometheus /metrics exposure (step 8).
+    prog_fd: i32,
+    link_fd: i32,
+    /// Stored for future Prometheus /metrics exposure.
     #[allow(dead_code)]
     pub interface_index: u32,
-    /// Stored for future Prometheus /metrics exposure (step 8).
-    #[allow(dead_code)]
-    pub attached_mode: Option<XdpFlags>,
+}
+
+impl Drop for BpfContext {
+    fn drop(&mut self) {
+        // Close link_fd first: this detaches the XDP program from the NIC.
+        // Then close prog_fd. Map FDs are closed when `bpf` is dropped.
+        if self.link_fd >= 0 {
+            unsafe { libc::close(self.link_fd) };
+        }
+        if self.prog_fd >= 0 {
+            unsafe { libc::close(self.prog_fd) };
+        }
+    }
 }
 
 impl BpfContext {
@@ -27,9 +63,6 @@ impl BpfContext {
         relay_public_address: u32,
         relay_internal_address: u32,
     ) -> Result<(String, u32)> {
-        // Use nix to enumerate interfaces, or fall back to parsing /proc
-        // For simplicity, iterate over interfaces using libc getifaddrs
-
         let addrs = nix_ifaddrs()?;
         for (name, addr) in &addrs {
             if *addr == relay_public_address || *addr == relay_internal_address {
@@ -37,71 +70,105 @@ impl BpfContext {
                 return Ok((name.clone(), idx));
             }
         }
-
-        bail!(
+        anyhow::bail!(
             "could not find network interface matching relay address {}",
             crate::platform::format_address(relay_public_address, 0)
         );
     }
 
     /// Load the XDP program from an ELF object file and attach to the NIC.
+    ///
+    /// Implements the full kfunc loader flow described in the module doc.
+    /// Requires root and relay_module.ko to be loaded.
     pub fn init(
         xdp_obj_path: &Path,
         relay_public_address: u32,
         relay_internal_address: u32,
     ) -> Result<Self> {
-        // Must be root
         if unsafe { libc::geteuid() } != 0 {
-            bail!("this program must be run as root");
+            anyhow::bail!("this program must be run as root");
         }
 
         let (iface_name, iface_index) =
             Self::find_interface(relay_public_address, relay_internal_address)?;
         info!("Found network interface: '{iface_name}' (index {iface_index})");
 
-        // Clean up any existing XDP programs
         cleanup_existing_xdp(&iface_name);
         cleanup_bpf_pins();
 
-        // Load BPF program
+        // --- Step 1: Read ELF ---
         info!("Loading relay_xdp from {}", xdp_obj_path.display());
-        let mut bpf = Ebpf::load_file(xdp_obj_path).with_context(|| {
-            format!("failed to load BPF program from {}", xdp_obj_path.display())
+        let elf_bytes = std::fs::read(xdp_obj_path)
+            .with_context(|| format!("failed to read BPF ELF from {}", xdp_obj_path.display()))?;
+
+        // --- Step 2: Collect kfunc offsets and patch ELF (src_reg 1->2) ---
+        let kfunc_offsets = collect_kfunc_offsets(&elf_bytes, RELAY_MODULE_KFUNCS)
+            .context("failed to collect kfunc offsets from ELF")?;
+        info!(
+            "Found {} kfunc call sites in ELF for {:?}",
+            kfunc_offsets.len(),
+            RELAY_MODULE_KFUNCS
+        );
+
+        let patched_v1 = patch_elf_skip_kfuncs(&elf_bytes, &kfunc_offsets)
+            .context("failed to patch kfunc src_reg in ELF")?;
+
+        // --- Step 3: Ebpf::load creates all 6 maps ---
+        let mut bpf = Ebpf::load(&patched_v1).with_context(|| {
+            "Ebpf::load failed - kfunc helpers should be skipped now".to_string()
         })?;
 
-        // Attach XDP program
-        let program: &mut Xdp = bpf
-            .program_mut("relay_xdp")
-            .context("relay_xdp program not found in BPF object")?
-            .try_into()
-            .context("program is not XDP")?;
+        // --- Step 4: Extract raw map FDs via typed-map API ---
+        let map_fds = collect_map_fds(&mut bpf)?;
+        info!("Collected {} map FDs from aya", map_fds.len());
 
-        program.load().context("failed to load XDP program")?;
+        // --- Step 5: Patch map FD values into ELF bytes ---
+        let patched_v2 =
+            patch_elf_map_fds(&patched_v1, &map_fds).context("failed to patch map FDs into ELF")?;
 
-        // Try native mode first, fall back to SKB
-        let attached_mode = match program.attach(&iface_name, XdpFlags::default()) {
-            Ok(_link_id) => {
-                info!("Attached XDP program in native mode");
-                Some(XdpFlags::default())
-            }
-            Err(e) => {
-                info!("Native mode failed ({e}), falling back to SKB mode...");
-                match program.attach(&iface_name, XdpFlags::SKB_MODE) {
-                    Ok(_link_id) => {
-                        info!("Attached XDP program in SKB mode");
-                        Some(XdpFlags::SKB_MODE)
-                    }
-                    Err(e2) => {
-                        bail!("failed to attach XDP program: native={e}, skb={e2}");
-                    }
-                }
-            }
-        };
+        // --- Step 6: Second parse + relocate_calls -> flat instruction Vec ---
+        let mut insns =
+            get_xdp_instructions(&patched_v2).context("failed to get XDP instructions")?;
+        info!("XDP program: {} instructions after relocation", insns.len());
+
+        // --- Step 7: Find relay_module.ko BTF and parse kfunc type IDs ---
+        let (btf_fd, btf_bytes) =
+            find_module_btf("relay_module").context("relay_module BTF not found")?;
+        info!("Found relay_module BTF (fd={})", btf_fd);
+
+        let btf_ids = parse_btf_func_ids(&btf_bytes, RELAY_MODULE_KFUNCS)
+            .context("failed to parse BTF func IDs")?;
+        info!("BTF type IDs: {:?}", btf_ids);
+
+        // --- Step 8: Patch kfunc instructions with BTF IDs ---
+        patch_kfunc_instructions(
+            &mut insns,
+            &kfunc_offsets,
+            &btf_ids,
+            1, // fd_array index 1: kernel uses fd_array[off-1] = fd_array[0] = btf_fd
+        )
+        .context("failed to patch kfunc instructions")?;
+
+        // --- Step 9: BPF_PROG_LOAD with fd_array ---
+        let prog_fd = raw_load_xdp(&insns, btf_fd).context("BPF_PROG_LOAD failed")?;
+        info!("Loaded XDP program (prog_fd={})", prog_fd);
+
+        // btf_fd no longer needed after prog is loaded
+        unsafe { libc::close(btf_fd) };
+
+        // --- Step 10: BPF_LINK_CREATE to attach XDP to NIC ---
+        let link_fd =
+            raw_create_xdp_link(prog_fd, iface_index).context("BPF_LINK_CREATE (XDP) failed")?;
+        info!(
+            "Attached XDP program to '{}' (link_fd={})",
+            iface_name, link_fd
+        );
 
         Ok(Self {
             bpf,
+            prog_fd,
+            link_fd,
             interface_index: iface_index,
-            attached_mode,
         })
     }
 
@@ -163,6 +230,76 @@ impl BpfContext {
 }
 
 // ---------------------------------------------------------------------------
+// Map FD extraction helper
+// ---------------------------------------------------------------------------
+
+/// Extracts raw file descriptor integers for all 6 BPF maps from aya.
+///
+/// Uses the typed-map API (Array/PerCpuArray/HashMap) to convert each `&mut Map`
+/// to a typed wrapper, then accesses `.map().fd()` to get the raw fd integer.
+/// Each typed-map borrow is immediately dropped, so the borrows do not overlap.
+fn collect_map_fds(bpf: &mut Ebpf) -> Result<HashMap<String, i32>> {
+    let mut fds = HashMap::new();
+
+    // config_map - Array<_, RelayConfig>
+    {
+        let arr: Array<&mut MapData, RelayConfig> =
+            Array::try_from(bpf.map_mut("config_map").context("config_map not found")?)
+                .context("config_map type error")?;
+        fds.insert("config_map".to_string(), arr.map().fd().as_fd().as_raw_fd());
+    }
+
+    // state_map - Array<_, RelayState>
+    {
+        let arr: Array<&mut MapData, RelayState> =
+            Array::try_from(bpf.map_mut("state_map").context("state_map not found")?)
+                .context("state_map type error")?;
+        fds.insert("state_map".to_string(), arr.map().fd().as_fd().as_raw_fd());
+    }
+
+    // stats_map - PerCpuArray<_, RelayStats>
+    {
+        let arr: PerCpuArray<&mut MapData, RelayStats> =
+            PerCpuArray::try_from(bpf.map_mut("stats_map").context("stats_map not found")?)
+                .context("stats_map type error")?;
+        fds.insert("stats_map".to_string(), arr.map().fd().as_fd().as_raw_fd());
+    }
+
+    // relay_map - HashMap<_, u64, u64>
+    {
+        let hm: AyaHashMap<&mut MapData, u64, u64> =
+            AyaHashMap::try_from(bpf.map_mut("relay_map").context("relay_map not found")?)
+                .context("relay_map type error")?;
+        fds.insert("relay_map".to_string(), hm.map().fd().as_fd().as_raw_fd());
+    }
+
+    // session_map - HashMap<_, SessionKey, SessionData>
+    {
+        let hm: AyaHashMap<&mut MapData, SessionKey, SessionData> = AyaHashMap::try_from(
+            bpf.map_mut("session_map")
+                .context("session_map not found")?,
+        )
+        .context("session_map type error")?;
+        fds.insert("session_map".to_string(), hm.map().fd().as_fd().as_raw_fd());
+    }
+
+    // whitelist_map - HashMap<_, WhitelistKey, WhitelistValue>
+    {
+        let hm: AyaHashMap<&mut MapData, WhitelistKey, WhitelistValue> = AyaHashMap::try_from(
+            bpf.map_mut("whitelist_map")
+                .context("whitelist_map not found")?,
+        )
+        .context("whitelist_map type error")?;
+        fds.insert(
+            "whitelist_map".to_string(),
+            hm.map().fd().as_fd().as_raw_fd(),
+        );
+    }
+
+    Ok(fds)
+}
+
+// ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
 
@@ -173,7 +310,7 @@ fn nix_ifaddrs() -> Result<Vec<(String, u32)>> {
     unsafe {
         let mut addrs: *mut libc::ifaddrs = std::ptr::null_mut();
         if libc::getifaddrs(&mut addrs) != 0 {
-            bail!("getifaddrs failed");
+            anyhow::bail!("getifaddrs failed");
         }
 
         let mut current = addrs;
@@ -200,7 +337,7 @@ fn interface_name_to_index(name: &str) -> Result<u32> {
     let c_name = std::ffi::CString::new(name).context("invalid interface name")?;
     let idx = unsafe { libc::if_nametoindex(c_name.as_ptr()) };
     if idx == 0 {
-        bail!("if_nametoindex failed for '{name}'");
+        anyhow::bail!("if_nametoindex failed for '{name}'");
     }
     Ok(idx)
 }

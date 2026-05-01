@@ -6,6 +6,7 @@
 mod bpf;
 mod config;
 mod encoding;
+mod kfunc;
 mod main_thread;
 mod manager;
 mod packet_filter;
