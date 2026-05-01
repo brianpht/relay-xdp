@@ -20,15 +20,26 @@ import pulumi
 # Canonical (Ubuntu) AWS owner ID - stable, does not change.
 CANONICAL_OWNER_ID = "099720109477"
 
-# Ubuntu 22.04 LTS (Jammy) x86_64 HWE kernel on GP3 SSD.
-# HWE (Hardware Enablement) kernel auto-updates to latest stable (currently 6.17).
-# Kernel 6.17 meets the >=6.5 requirement for BTF and kfunc support.
+# Ubuntu 22.04 LTS (Jammy) x86_64 HWE kernel on EBS SSD.
 #
-# CI matrix (build-release.yml) must include all HWE kernel versions deployed
-# on staging/production hosts, since new AMI images may boot different kernels.
-# When deploying to a new host, verify `uname -r` and ensure the kernel is
-# in the CI matrix before running ansible-playbook.
-AMI_NAME_FILTER = "ubuntu/images/hvm-ssd-gp3/ubuntu-jammy-22.04-amd64-server-*"
+# Ubuntu 22.04 LTS support: Until April 2032 (5-year baseline + 5-year extended).
+# HWE (Hardware Enablement) kernel: auto-updates to latest stable (currently 6.17.0-*).
+# Kernel requirement: >=6.5 for BTF and kfunc support (XDP kernel module).
+#
+# Key guarantee: Every new AMI image boots the latest HWE kernel for that week.
+# This means host kernel can CHANGE between deploys, even if no Pulumi stack changes.
+#
+# Kernel version mismatch procedure:
+# 1. `ssh ubuntu@<host> uname -r` to get the actual running kernel
+# 2. Check if that version is in .github/workflows/build-release.yml matrix
+# 3. If missing, add the kernel version + push tag (triggers CI build of .ko)
+# 4. Ansible pre-flight check (kernel-module/tasks/main.yml) will catch the mismatch
+#    and provide guidance for next steps
+#
+# To pin a specific kernel version: modify the AMI filter to include a date
+# constraint (e.g. "ubuntu-jammy-22.04-amd64-server-20240101-*"), but this requires
+# monthly maintenance as Canonical publishes new snapshots.
+AMI_NAME_FILTER = "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-*"
 
 # ---------------------------------------------------------------------------
 # Network constants
@@ -158,4 +169,3 @@ def load() -> InfraConfig:
         key_pub_path=key_pub_path,
         admin_cidr=admin_cidr,
     )
-

@@ -163,8 +163,12 @@ jobs:
           - "6.5.0-45-generic"
           # 6.8 series (intermediate HWE):
           - "6.8.0-57-generic"
+          # AWS kernel variants - available as linux-headers-<kver> in Ubuntu apt mirror.
+          # These are used by EC2 instances launched with Amazon Linux-compatible Ubuntu AMIs.
+          - "6.8.0-1052-aws"
           # To find available versions in apt mirror (GitHub runner):
           #   apt-cache search linux-headers | grep -E "^linux-headers-[0-9]" | grep generic | sort -V
+          #   apt-cache search linux-headers | grep -E "^linux-headers-[0-9]" | grep aws | sort -V
           # To verify running kernel on deployed host: uname -r
           # If deployed kernel doesn't match matrix, run pre-flight check to see available
           # modules, then update matrix and re-release v<X>-aws (e.g. v0.1.0-alpha.3-aws)

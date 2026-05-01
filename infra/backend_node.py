@@ -4,9 +4,9 @@ backend_node.py - BackendNode ComponentResource.
 Provisions one relay-backend EC2 instance:
   - relay-backend (tokio + axum) on TCP 8090
   - Redis on TCP 6379, accessible from VPC only (Redis never exposed publicly)
-  - No Elastic IP: relay nodes POST to the backend via its auto-assigned
-    public IP or DNS name. The backend URL is stable in practice and is
-    stored as RELAY_BACKEND_URL in the relay node env file.
+  - Elastic IP: stable public address used as RELAY_BACKEND_URL on relay nodes.
+    Without an EIP the auto-assigned public IP changes on every stop/start, which
+    would invalidate the Ansible inventory and break relay -> backend HTTP POSTs.
 
 Instance type:
   Production: c5.large
@@ -47,7 +47,7 @@ class BackendNode(pulumi.ComponentResource):
     One relay-backend EC2 instance.
 
     Outputs:
-      public_ip   - Auto-assigned public IP (use as RELAY_BACKEND_URL host)
+      public_ip   - Elastic IP address (stable across instance stops/starts)
       private_ip  - Instance private IP within the VPC
       instance_id - EC2 instance ID
       region      - AWS region string
@@ -114,9 +114,9 @@ class BackendNode(pulumi.ComponentResource):
 
         # ------------------------------------------------------------------
         # EC2 instance
-        # No EIP: relay nodes use the auto-assigned public IP or DNS name
-        # stored in RELAY_BACKEND_URL. The backend IP is stable as long as
-        # the instance is running and is not expected to change frequently.
+        # associate_public_ip_address is False - the Elastic IP below provides
+        # the stable public address. Relying on the auto-assigned ephemeral IP
+        # would cause SSH timeouts and broken RELAY_BACKEND_URL after any stop/start.
         # ------------------------------------------------------------------
         instance = aws.ec2.Instance(
             f"instance-{node_name}",
@@ -125,7 +125,7 @@ class BackendNode(pulumi.ComponentResource):
             subnet_id=net.subnet.id,
             vpc_security_group_ids=[net.sg_backend.id],
             key_name=key_pair.key_name,
-            associate_public_ip_address=True,
+            associate_public_ip_address=False,
             user_data=_USER_DATA,
             user_data_replace_on_change=False,
             root_block_device=aws.ec2.InstanceRootBlockDeviceArgs(
@@ -143,9 +143,31 @@ class BackendNode(pulumi.ComponentResource):
         )
 
         # ------------------------------------------------------------------
+        # Elastic IP - stable public address for Ansible SSH and
+        # RELAY_BACKEND_URL used by relay nodes. Without this the auto-assigned
+        # IP changes on every instance stop/start, invalidating the inventory.
+        # ------------------------------------------------------------------
+        eip = aws.ec2.Eip(
+            f"eip-{node_name}",
+            domain="vpc",
+            tags={
+                "Name":  f"eip-{node_name}",
+                "Stack": stack_name,
+            },
+            opts=child_opts,
+        )
+
+        aws.ec2.EipAssociation(
+            f"eip-assoc-{node_name}",
+            instance_id=instance.id,
+            allocation_id=eip.id,
+            opts=child_opts,
+        )
+
+        # ------------------------------------------------------------------
         # Register component outputs
         # ------------------------------------------------------------------
-        self.public_ip   = instance.public_ip
+        self.public_ip   = eip.public_ip
         self.private_ip  = instance.private_ip
         self.instance_id = instance.id
         self.region      = pulumi.Output.from_input(region)
