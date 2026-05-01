@@ -96,15 +96,18 @@ jobs:
   # Requires Rust nightly + bpf-linker. relay-xdp-ebpf is NOT a
   # workspace member - it is built separately targeting bpfel-unknown-none.
   #
-  # bpf-linker MUST produce .BTF and .BTF.ext sections (--btf flag in
-  # relay-xdp-ebpf/.cargo/config.toml). Without BTF, aya 0.13 cannot
-  # relocate subprogram calls and fails with "function not found" at
-  # load time. LLVM 14 is required for bpf-linker to generate BTF.
+  # bpf-linker MUST produce .BTF and .BTF.ext sections. Without BTF,
+  # aya 0.13 cannot relocate subprogram calls and fails with
+  # "function not found" at load time.
+  #
+  # Root cause of missing BTF in CI: actions-rust-lang/setup-rust-toolchain
+  # sets RUSTFLAGS="-D warnings" at the workflow level, which overrides ALL
+  # config.toml rustflags (including target.bpfel-unknown-none.rustflags).
+  # The build step therefore explicitly sets RUSTFLAGS with the required flags.
   #
   # NOTE: relay-xdp-ebpf/target is intentionally NOT cached. Caching
-  # the target directory causes stale artifacts (built without bpf-linker
-  # or without --btf) to persist across linker config changes, bypassing
-  # the rebuild and producing an .o without BTF sections.
+  # the target directory causes stale artifacts (built without --btf)
+  # to persist across linker config changes.
   # ------------------------------------------------------------------
   build-ebpf:
     name: Build eBPF object
@@ -113,10 +116,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install LLVM 14 (required by bpf-linker for BTF generation)
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y llvm-14 llvm-14-dev libclang-14-dev
 
       - name: Install Rust nightly with rust-src
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -146,14 +145,20 @@ jobs:
 
       - name: Install bpf-linker
         if: steps.cache-bpf-linker.outputs.cache-hit != 'true'
-        run: |
-          LLVM_SYS_140_PREFIX=/usr/lib/llvm-14 \
-          cargo install bpf-linker --version 0.10.3 --locked
+        run: cargo install bpf-linker --version 0.10.3 --locked
 
       - name: Build eBPF program
         working-directory: relay-xdp-ebpf
+        # RUSTFLAGS must be set explicitly here because actions-rust-lang/
+        # setup-rust-toolchain sets RUSTFLAGS="-D warnings" as a workflow-level
+        # env var, which overrides ALL config.toml rustflags (including
+        # target.bpfel-unknown-none.rustflags). Without debuginfo=2, bpf-linker
+        # has no DWARF to convert to BTF. Without link-arg=--btf, bpf-linker
+        # does not emit .BTF/.BTF.ext sections. Both are required for aya 0.13+
+        # to load programs with subprogram calls.
+        env:
+          RUSTFLAGS: "-C debuginfo=2 -C link-arg=--btf"
         run: |
-          LLVM_SYS_140_PREFIX=/usr/lib/llvm-14 \
           cargo +nightly build \
             --target bpfel-unknown-none \
             -Z build-std=core \
