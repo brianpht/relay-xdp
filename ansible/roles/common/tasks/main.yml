@@ -51,6 +51,7 @@
     - "{{ relay_data_dir }}"
     - "{{ relay_backup_dir }}"
     - "{{ relay_conf_dir }}"
+    - /var/lib/relay
 
 - name: Configure sysctl for high-throughput UDP
   ansible.posix.sysctl:

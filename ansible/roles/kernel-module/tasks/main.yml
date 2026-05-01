@@ -59,6 +59,7 @@
     name:
       - "linux-headers-{{ ansible_kernel }}"
       - build-essential
+      - gcc-12
       - kmod
       - dwarves
     state: present
@@ -86,15 +87,27 @@
   when: not ansible_check_mode
   failed_when: false  # skip silently if BTF file absent on this kernel
 
+- name: Create kernel module Makefile
+  ansible.builtin.copy:
+    content: "obj-m += relay_module.o\n"
+    dest: "{{ ko_build_dir }}/Makefile"
+    owner: root
+    group: root
+    mode: "0644"
+  when: not ansible_check_mode
+
 - name: Build relay_module.ko on host
   # make is invoked against the running kernel's build tree so the compiled
-  # .ko carries the correct vermagic. PAHOLE is passed explicitly because
-  # the kernel build system may not find it via PATH from make's environment.
+  # .ko carries the correct vermagic. PAHOLE and CC are passed explicitly:
+  # - PAHOLE: kernel build system may not find it via PATH from make's environment
+  # - CC=gcc-12: AWS kernel was compiled with gcc-12; build-essential installs
+  #   gcc-11 by default on Ubuntu 22.04, causing "gcc-12: not found" errors
   ansible.builtin.command:
     cmd: >-
       make -C /lib/modules/{{ ansible_kernel }}/build
       M={{ ko_build_dir }}
       PAHOLE=/usr/bin/pahole
+      CC=gcc-12
       modules
   args:
     chdir: "{{ ko_build_dir }}"
@@ -122,10 +135,13 @@
   when: not ansible_check_mode
 
 - name: Unload existing relay_module if loaded
-  community.general.modprobe:
-    name: relay_module
-    state: absent
-  ignore_errors: "true"  # not fatal if not loaded yet
+  # rmmod must be used here - modprobe cannot locate modules loaded via insmod
+  # because they are not registered in /lib/modules/<kernel>/modules.dep.
+  ansible.builtin.command:
+    cmd: rmmod relay_module
+  register: rmmod_result
+  changed_when: rmmod_result.rc == 0
+  failed_when: false  # rc=1 means not loaded - not an error
   when: not ansible_check_mode
 
 - name: Load relay_module.ko

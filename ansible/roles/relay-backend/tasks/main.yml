@@ -41,6 +41,14 @@
   # the service. Ignore the error so the rest of the dry-run completes cleanly.
   ignore_errors: "{{ ansible_check_mode }}"
 
+- name: Flush handlers to apply any pending restarts before healthcheck
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for relay-backend to finish startup
+  ansible.builtin.pause:
+    seconds: "{{ relay_startup_wait_s }}"
+  when: not ansible_check_mode
+
 - name: Wait for relay-backend healthcheck
   ansible.builtin.uri:
     url: "http://127.0.0.1:{{ backend_http_port }}/health"

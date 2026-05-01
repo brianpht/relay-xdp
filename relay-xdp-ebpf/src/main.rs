@@ -1562,8 +1562,10 @@ unsafe fn handle_session_pong(
 // =====================================================================
 
 #[no_mangle]
-#[link_section = "xdp/relay_xdp"]
-pub fn relay_xdp_filter(ctx: *mut aya_ebpf::bindings::xdp_md) -> u32 {
+// Aya 0.13+ requires section name "xdp" (not "xdp/prog_name").
+// The program is then addressed by ELF symbol name via bpf.program_mut("relay_xdp").
+#[link_section = "xdp"]
+pub fn relay_xdp(ctx: *mut aya_ebpf::bindings::xdp_md) -> u32 {
     let ctx = XdpContext::new(ctx);
     match unsafe { try_relay_xdp_filter(&ctx) } {
         Ok(action) => action,

@@ -1,0 +1,14 @@
+# .cargo/config.toml for relay-xdp-ebpf
+#
+# bpf-linker is the aya custom BPF linker that properly generates .BTF and
+# .BTF.ext sections (including kfunc_info required for kfunc resolution by
+# aya 0.13+). The default rust-lld linker does NOT generate these sections.
+#
+# --btf: emit BTF info (opt-in flag, REQUIRED for kfunc calls via aya 0.13+)
+# debuginfo=2: include DWARF debug info which bpf-linker converts to BTF
+#
+# Install bpf-linker: cargo install bpf-linker
+[target.bpfel-unknown-none]
+linker = "bpf-linker"
+rustflags = ["-C", "debuginfo=2", "-C", "link-arg=--btf"]
+

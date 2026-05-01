@@ -81,6 +81,9 @@
   # the service. Ignore the error so the rest of the dry-run completes cleanly.
   ignore_errors: "{{ ansible_check_mode }}"
 
+- name: Flush handlers to apply any pending restarts before verification
+  ansible.builtin.meta: flush_handlers
+
 - name: Wait for relay-xdp startup
   ansible.builtin.pause:
     seconds: "{{ relay_startup_wait_s }}"
@@ -92,7 +95,11 @@
     cmd: systemctl is-active relay-xdp
   register: svc_active
   changed_when: false
-  failed_when: svc_active.rc != 0
+  # Retry while service is still "activating" (BPF attach + XDP setup can take >5s)
+  until: svc_active.stdout == "active"
+  retries: "{{ relay_verify_retries }}"
+  delay: "{{ relay_verify_delay_s }}"
+  failed_when: svc_active.stdout not in ["active", "activating"]
   when: not ansible_check_mode
 
 - name: Verify XDP BPF program is loaded
