@@ -963,10 +963,63 @@ fn btf_kind_extra_bytes(kind: u32, vlen: usize) -> usize {
 ///   offset 48: prog_name  ([u8;16]) (optional, for bpftool display)
 ///   offset 120: fd_array  (u64) = ptr to [module_btf_fd as u32]
 pub fn raw_load_xdp(insns: &[aya_obj::generated::bpf_insn], module_btf_fd: i32) -> Result<i32> {
+    // --- Debug: verify btf_fd is still valid right before the syscall ---
+    let fcntl_check = unsafe { libc::fcntl(module_btf_fd, libc::F_GETFD) };
+    log::info!(
+        "raw_load_xdp: module_btf_fd={} fcntl(F_GETFD)={} (>=0 means valid)",
+        module_btf_fd,
+        fcntl_check
+    );
+    if fcntl_check < 0 {
+        let e = unsafe { *libc::__errno_location() };
+        log::error!(
+            "raw_load_xdp: btf_fd {} is INVALID before BPF_PROG_LOAD! errno={}",
+            module_btf_fd,
+            e
+        );
+    }
+
+    // --- Debug: log instruction[0] and all src_reg=2 kfunc instructions ---
+    if let Some(insn0) = insns.first() {
+        log::info!(
+            "raw_load_xdp: insns[0] code=0x{:02x} src_reg={} dst_reg={} off={} imm={}",
+            insn0.code,
+            insn0.src_reg(),
+            insn0.dst_reg(),
+            insn0.off,
+            insn0.imm,
+        );
+    }
+    let kfunc_insns: Vec<(usize, i16, i32)> = insns
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i.code == BPF_CALL_OPCODE && i.src_reg() == BPF_PSEUDO_KFUNC_CALL)
+        .map(|(idx, i)| (idx, i.off, i.imm))
+        .collect();
+    log::info!(
+        "raw_load_xdp: {} kfunc instructions (src_reg=2): {:?}",
+        kfunc_insns.len(),
+        kfunc_insns
+    );
+
+    // --- Debug: enumerate open fds in /proc/self/fd ---
+    if let Ok(entries) = std::fs::read_dir("/proc/self/fd") {
+        let fds: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect();
+        log::info!("raw_load_xdp: open fds = {:?}", fds);
+    }
+
     // Build fd_array: single entry pointing to the module BTF fd.
     // Kernel interprets fd_array[insn.off - 1] as the BTF object fd.
     // For off=1 (our kfunc insns), kernel uses fd_array[0].
     let fd_array: [u32; 1] = [module_btf_fd as u32];
+    log::info!(
+        "raw_load_xdp: fd_array[0]={} (u32), addr=0x{:x}",
+        fd_array[0],
+        fd_array.as_ptr() as u64
+    );
 
     let license = b"GPL\0";
 
