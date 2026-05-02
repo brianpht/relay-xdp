@@ -44,8 +44,8 @@ const BPF_CALL_OPCODE: u8 = 0x85;
 /// BPF_LD | BPF_IMM | BPF_DW opcode (0x18) - identifies 64-bit immediate loads (map FDs).
 const BPF_LD_IMM64_OPCODE: u8 = 0x18;
 
-/// BPF_PSEUDO_MAP_FD src_reg - marks map FD load instructions pre-relocation (used in verification).
-#[allow(dead_code)]
+/// BPF_PSEUDO_MAP_FD src_reg - marks BPF_LD_IMM64 instructions as map FD loads.
+/// The verifier substitutes the FD with the map pointer when this bit is set.
 const BPF_PSEUDO_MAP_FD: u8 = 1;
 
 /// BPF instruction size in bytes.
@@ -277,6 +277,19 @@ pub fn patch_elf_map_fds(elf: &[u8], map_fds: &HashMap<String, i32>) -> Result<V
         // Write FD as little-endian i32 into bytes 4-7 (imm field of first insn)
         let imm_pos = insn_file_pos + 4;
         patched[imm_pos..imm_pos + 4].copy_from_slice(&fd.to_le_bytes());
+
+        // Set src_reg = BPF_PSEUDO_MAP_FD (1) on the BPF_LD_IMM64 instruction.
+        // bpf-linker emits BPF_LD_IMM64 with src_reg=0; the verifier needs
+        // src_reg=1 to recognize the imm as a map FD and substitute the
+        // map pointer. Without this, the verifier treats r1 as a scalar
+        // and rejects the subsequent bpf_map_lookup_elem call:
+        //   "R1 type=scalar expected=map_ptr"
+        // libbpf/aya normally do this in relocate_maps(); we skip that step
+        // and patch the ELF directly, so we must set src_reg ourselves.
+        // Byte layout of bpf_insn regs byte (offset +1):
+        //   bits 0-3: dst_reg, bits 4-7: src_reg
+        let regs_pos = insn_file_pos + 1;
+        patched[regs_pos] = (patched[regs_pos] & 0x0f) | (BPF_PSEUDO_MAP_FD << 4);
 
         // Zero the imm of the second instruction (bytes 12-15, i.e. +8+4)
         let imm2_pos = insn_file_pos + BPF_INSN_SIZE + 4;
