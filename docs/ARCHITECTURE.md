@@ -314,6 +314,20 @@ Constraints:
 - All loops bounded (BPF verifier must prove termination)
 - Crypto via kfuncs from `relay_module.ko`
 
+**LLVM eBPF kfunc call convention:** kfunc calls cannot use normal `extern "C"`
+declarations. The LLVM eBPF backend does not materialize argument registers
+r1-r4 before the call instruction for extern symbols, causing the BPF verifier
+to reject the program (registers appear undefined at the call site). All kfunc
+calls use `core::arch::asm!` with explicit `in("r1")` .. `in("r4")` register
+constraints to force LLVM to emit the register loads before the call.
+
+**`#[inline(never)]` subroutines:** `verify_ping_token` and
+`verify_session_header` are marked `#[inline(never)]` to stay within the
+512-byte stack limit (inlining both at every call site would overflow). This
+causes `bpf-linker` to place them in `.text` sections separate from the main
+`xdp` section. Both functions contain kfunc calls, so `kfunc.rs` must walk all
+`.text*` sections in addition to `xdp` when patching call sites.
+
 Key helpers:
 
 - `read_u64_le()` - byte-by-byte little-endian decode from raw pointer
@@ -324,7 +338,7 @@ Key helpers:
 - `relay_reflect_packet()` - swap ETH/IP/UDP headers for ping-to-pong
 - `relay_redirect_packet()` - rewrite headers for hop forwarding
 - `decrypt_route_token()` / `decrypt_continue_token()` - kfunc wrappers
-- `verify_ping_token()` / `verify_session_header()` - SHA-256 kfunc wrappers
+- `verify_ping_token()` / `verify_session_header()` - SHA-256 kfunc wrappers (`#[inline(never)]`)
 - `increment_counter()` / `add_counter()` - per-CPU stats updates
 
 ### relay-backend - Route Optimization Backend
