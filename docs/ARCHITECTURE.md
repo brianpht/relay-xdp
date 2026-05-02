@@ -13,6 +13,7 @@
 - [Crate Structure](#crate-structure)
     - [relay-xdp-common - Shared Types](#relay-xdp-common---shared-types)
     - [relay-xdp - Userspace Control Plane](#relay-xdp---userspace-control-plane)
+        - [kfunc Loader](#kfunc-loader-kfuncs)
     - [relay-xdp-ebpf - eBPF Data Plane](#relay-xdp-ebpf---ebpf-data-plane)
     - [relay-backend - Route Optimization Backend](#relay-backend---route-optimization-backend)
     - [relay-sdk - Game Client/Server SDK](#relay-sdk---game-clientserver-sdk)
@@ -69,9 +70,10 @@ relay-xdp/
 |   |-- Cargo.toml                 Pure-Rust deps (sha2, crypto_box, x25519-dalek, blake2)
 |   |-- src/
 |   |   |-- lib.rs                 Re-exports for integration tests (~16 lines)
-|   |   |-- main.rs                Entry point, signal handling (~111 lines)
+|   |   |-- main.rs                Entry point, signal handling (~112 lines)
 |   |   |-- config.rs              Env vars, key derivation (~178 lines)
-|   |   |-- bpf.rs                 XDP loader, 6 BPF maps via Aya (~227 lines)
+|   |   |-- bpf.rs                 XDP loader orchestrator, 6 BPF maps via Aya (~381 lines)
+|   |   |-- kfunc.rs               kfunc ELF patcher + raw BPF syscall loader (~1309 lines)
 |   |   |-- main_thread.rs         HTTP update loop 1 Hz (~666 lines)
 |   |   |-- ping_thread.rs         UDP ping/pong 10 Hz (~279 lines)
 |   |   |-- manager.rs             Relay set tracking (~180 lines)
@@ -141,7 +143,7 @@ relay-xdp/
 |-- relay-xdp-ebpf/               eBPF kernel program (NOT a workspace member)
 |   |-- Cargo.toml                 target: bpfel-unknown-none
 |   |-- rust-toolchain.toml        nightly + rust-src
-|   +-- src/main.rs                12 packet handlers (~1773 lines)
+|   +-- src/main.rs                13 packet handlers (~1947 lines)
 |
 |-- module/                        Linux kernel module (C)
 |   |-- relay_module.c             SHA-256 + XChaCha20-Poly1305 kfuncs (~249 lines)
@@ -233,18 +235,19 @@ continue request/response, client/server/relay ping/pong.
 Pure Rust binary with no C dependencies. Crypto uses `sha2`, `crypto_box`,
 `x25519-dalek`, `blake2`, `getrandom`.
 
-| Module             | Lines | Purpose                                                                    |
-|--------------------|-------|----------------------------------------------------------------------------|
-| `main.rs`          | ~111  | Entry point, signal handling (SIGINT/SIGTERM/SIGHUP), thread orchestration |
-| `config.rs`        | ~178  | Read environment variables, derive secret key (X25519 + BLAKE2B)           |
-| `bpf.rs`           | ~227  | Load XDP program via Aya, attach to NIC, manage 6 BPF maps                 |
-| `main_thread.rs`   | ~666  | 1 Hz HTTP update loop, BPF map management, session timeouts                |
-| `ping_thread.rs`   | ~279  | 10 Hz UDP relay-to-relay ping/pong                                         |
-| `manager.rs`       | ~180  | Relay set tracking, ping history aggregation                               |
-| `ping_history.rs`  | ~214  | Circular buffer (64 entries), RTT/jitter/packet loss computation           |
-| `encoding.rs`      | ~306  | Little-endian binary `Writer`/`Reader` matching C wire format              |
-| `packet_filter.rs` | ~149  | Pittle/chonkle DDoS filter generation (FNV-1a)                             |
-| `platform.rs`      | ~106  | Monotonic time, sleep, UDP socket creation, random bytes                   |
+| Module             | Lines  | Purpose                                                                    |
+|--------------------|--------|----------------------------------------------------------------------------|
+| `main.rs`          | ~112   | Entry point, signal handling (SIGINT/SIGTERM/SIGHUP), thread orchestration |
+| `config.rs`        | ~178   | Read environment variables, derive secret key (X25519 + BLAKE2B)           |
+| `bpf.rs`           | ~381   | XDP loader orchestrator: calls kfunc.rs steps, manages 6 BPF map handles  |
+| `kfunc.rs`         | ~1309  | kfunc ELF patcher, BTF resolver, raw BPF_PROG_LOAD / BPF_LINK_CREATE      |
+| `main_thread.rs`   | ~666   | 1 Hz HTTP update loop, BPF map management, session timeouts                |
+| `ping_thread.rs`   | ~279   | 10 Hz UDP relay-to-relay ping/pong                                         |
+| `manager.rs`       | ~180   | Relay set tracking, ping history aggregation                               |
+| `ping_history.rs`  | ~214   | Circular buffer (64 entries), RTT/jitter/packet loss computation           |
+| `encoding.rs`      | ~306   | Little-endian binary `Writer`/`Reader` matching C wire format              |
+| `packet_filter.rs` | ~149   | Pittle/chonkle DDoS filter generation (FNV-1a)                             |
+| `platform.rs`      | ~106   | Monotonic time, sleep, UDP socket creation, random bytes                   |
 
 #### Startup flow
 
@@ -259,23 +262,47 @@ main()
        +-- ping_handle.join()             Wait for ping thread
 ```
 
-#### BPF loader (bpf.rs)
+#### BPF loader (bpf.rs + kfunc.rs) {#kfunc-loader-kfuncs}
+
+Aya's standard `Ebpf::load_file()` + `Xdp::attach()` cannot load eBPF programs
+that call kernel module kfuncs. `bpf-linker` emits those calls (and standard BPF
+helpers like `bpf_xdp_adjust_head`) as `BPF_PSEUDO_CALL` with UNDEF-symbol
+`R_BPF_64_32` relocations. `aya-obj::relocate_calls()` filters UNDEF symbols and
+fails with `UnknownFunction`. Aya also has no `fd_array` support for module BTF.
+
+`bpf.rs` orchestrates `kfunc.rs` to implement an 11-step manual load path:
 
 ```
-BpfContext::init(xdp_obj_path, relay_address, internal_address)
-  +-- Check root (geteuid)
-  +-- Find NIC matching relay address (getifaddrs)
-  +-- Cleanup existing XDP (xdp-loader unload)
-  +-- Cleanup BPF pins (/sys/fs/bpf/*)
-  +-- Ebpf::load_file(relay_xdp_rust.o)
-  +-- Xdp::attach(native mode)
-  |   +-- fallback to SKB mode
-  +-- Return BpfContext { bpf, interface_index }
+BpfContext::init(xdp_obj_path, relay_public_address, relay_internal_address)
+  +-- 1. Read ELF bytes from disk
+  +-- 2. patch_elf_skip_kfuncs()     src_reg 1->2 for kfunc sites; encode kfunc
+  |       (kfunc.rs)                 index in imm; walk both xdp + .text* sections
+  +-- 2b. patch_elf_bpf_helpers()    src_reg 1->0, imm -> kernel helper ID
+  |        (kfunc.rs)                (bpf_xdp_adjust_head=44, bpf_xdp_adjust_tail=65)
+  +-- 3. Ebpf::load(patched_v1)      create all 6 maps (Aya manages map FDs)
+  +-- 4. collect_map_fds()           extract raw FD ints via typed-map API
+  +-- 5. patch_elf_map_fds()         write FD values into BPF_LD_IMM64 insns;
+  |       (kfunc.rs)                 set src_reg=BPF_PSEUDO_MAP_FD; zero imm2
+  +-- 6. get_xdp_instructions()      aya_obj second parse + relocate_calls()
+  |       (kfunc.rs)                 -> flat instruction Vec (kfunc stubs intact)
+  +-- 7. find_module_btf()           BPF_BTF_GET_NEXT_ID enumerate; match "relay_module";
+  |       (kfunc.rs)                 BPF_OBJ_GET_INFO_BY_FD -> btf_fd + raw BTF bytes
+  +-- 8. parse_btf_func_ids()        parse split BTF (module local + vmlinux base);
+  |       (kfunc.rs)                 global_type_id = vmlinux_nr_types + local_id
+  +-- 9. patch_kfunc_instructions()  set insn.off=fd_array_idx(1), insn.imm=btf_type_id
+  |       (kfunc.rs)                 identity by imm=kfunc_index (robust vs aya reorder)
+  +-- 10. raw_load_xdp()             BPF_PROG_LOAD with fd_array=[0, module_btf_fd]
+  |        (kfunc.rs)                256 KB verifier log buffer on failure
+  +-- 11. raw_create_xdp_link()      BPF_LINK_CREATE native mode; fallback SKB mode
+           (kfunc.rs)                (EOPNOTSUPP/EINVAL -> retry with XDP_FLAGS_SKB_MODE)
 ```
+
+> See [ADR-003](decisions/ADR-003-custom-kfunc-elf-loader.md) for the rationale
+> behind this approach over patching/forking Aya.
 
 ### relay-xdp-ebpf - eBPF Data Plane
 
-~1773 lines of Rust targeting `bpfel-unknown-none`. Runs at NIC driver level
+~1947 lines of Rust targeting `bpfel-unknown-none`. Runs at NIC driver level
 via the XDP hook. Built separately with nightly Rust.
 
 Constraints:
