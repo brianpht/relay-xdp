@@ -73,14 +73,74 @@ const BPF_XDP: u32 = 37;
 // Step 1: collect kfunc relocation offsets from ELF
 // ---------------------------------------------------------------------------
 
-/// Parses `.relxdp` section in the BPF ELF and returns a map of
-/// `xdp_section_byte_offset -> kfunc_name` for all R_BPF_64_32 relocations
-/// whose symbol name is in `kfunc_names`.
+/// One code-section relocation table: target section's file offset and the
+/// raw bytes of its corresponding `.rel*` SHT_REL section.
+struct CodeRelTable {
+    target_section_name: String,
+    target_file_offset: usize,
+    rel_data: Vec<u8>,
+}
+
+/// Returns relocation tables for every code section in the ELF.
+///
+/// A "code section" is any section whose name is `xdp` or starts with `.text`.
+/// For each such section `S`, looks for a sibling section named `.rel<S>`
+/// (LLVM emits `.relxdp` for `xdp`, `.rel.text` for `.text`, etc.) and
+/// returns its raw SHT_REL data along with the file offset of `S`.
+///
+/// Sections without a sibling rel table (no relocations) are skipped.
+fn code_relocation_tables(file: &object::File<'_>) -> Result<Vec<CodeRelTable>> {
+    let mut tables = Vec::new();
+
+    for section in file.sections() {
+        let name = section.name().unwrap_or("");
+        let is_code = name == "xdp" || name == ".text" || name.starts_with(".text.");
+        if !is_code {
+            continue;
+        }
+
+        let (target_offset, _size) = match section.file_range() {
+            Some(r) => r,
+            None => continue, // SHT_NOBITS or empty
+        };
+        let target_offset = target_offset as usize;
+
+        // LLVM convention: `.rel<S>` immediately concatenated. So for "xdp"
+        // we look for ".relxdp"; for ".text" we look for ".rel.text".
+        let rel_name = format!(".rel{name}");
+        let rel_section = match file.section_by_name(&rel_name) {
+            Some(s) => s,
+            None => continue,
+        };
+        let rel_data = rel_section
+            .data()
+            .with_context(|| format!("failed to read {rel_name} data"))?
+            .to_vec();
+
+        tables.push(CodeRelTable {
+            target_section_name: name.to_owned(),
+            target_file_offset: target_offset,
+            rel_data,
+        });
+    }
+
+    Ok(tables)
+}
+
+/// Parses every `.rel<code>` section in the BPF ELF and returns a list of
+/// `(target_section_name, byte_offset_within_section, kfunc_name)` for all
+/// R_BPF_64_32 relocations whose symbol name is in `kfunc_names`.
 ///
 /// Only entries with symbol names matching `kfunc_names` are returned.
 /// Standard BPF helpers (bpf_xdp_adjust_head etc.) are intentionally excluded
 /// because they are NOT in kfunc_names and aya-obj handles them separately.
-pub fn collect_kfunc_offsets(elf: &[u8], kfunc_names: &[&str]) -> Result<HashMap<u64, String>> {
+///
+/// Both `xdp` and `.text*` sections are walked because BPF subroutines marked
+/// `#[inline(never)]` (e.g., `verify_ping_token`) emit kfunc calls in `.text`.
+pub fn collect_kfunc_offsets(
+    elf: &[u8],
+    kfunc_names: &[&str],
+) -> Result<Vec<(String, u64, String)>> {
     let file = object::File::parse(elf).context("ELF parse failed in collect_kfunc_offsets")?;
 
     // Build symbol-index -> name map, limited to names we care about.
@@ -93,30 +153,28 @@ pub fn collect_kfunc_offsets(elf: &[u8], kfunc_names: &[&str]) -> Result<HashMap
         }
     }
 
-    // Parse .relxdp raw bytes as SHT_REL entries (16 bytes each):
-    //   r_offset: u64 (little-endian) - byte offset within xdp section
-    //   r_info:   u64 (little-endian) - high 32 bits = sym index, low 32 bits = reloc type
-    let relxdp = file
-        .section_by_name(".relxdp")
-        .context(".relxdp section not found in BPF ELF")?;
-    let data = relxdp.data().context("failed to read .relxdp data")?;
+    let mut result = Vec::new();
+    for table in code_relocation_tables(&file)? {
+        let entry_count = table.rel_data.len() / 16;
+        for i in 0..entry_count {
+            let base = i * 16;
+            let r_offset =
+                u64::from_le_bytes(table.rel_data[base..base + 8].try_into().expect("8 bytes"));
+            let r_info = u64::from_le_bytes(
+                table.rel_data[base + 8..base + 16]
+                    .try_into()
+                    .expect("8 bytes"),
+            );
+            let r_type = (r_info & 0xffff_ffff) as u32;
+            let r_sym = (r_info >> 32) as usize;
 
-    let entry_count = data.len() / 16;
-    let mut result = HashMap::new();
+            if r_type != R_BPF_64_32 {
+                continue;
+            }
 
-    for i in 0..entry_count {
-        let base = i * 16;
-        let r_offset = u64::from_le_bytes(data[base..base + 8].try_into().expect("8 bytes"));
-        let r_info = u64::from_le_bytes(data[base + 8..base + 16].try_into().expect("8 bytes"));
-        let r_type = (r_info & 0xffff_ffff) as u32;
-        let r_sym = (r_info >> 32) as usize;
-
-        if r_type != R_BPF_64_32 {
-            continue;
-        }
-
-        if let Some(name) = sym_index_to_name.get(&r_sym) {
-            result.insert(r_offset, name.clone());
+            if let Some(name) = sym_index_to_name.get(&r_sym) {
+                result.push((table.target_section_name.clone(), r_offset, name.clone()));
+            }
         }
     }
 
@@ -124,65 +182,123 @@ pub fn collect_kfunc_offsets(elf: &[u8], kfunc_names: &[&str]) -> Result<HashMap
 }
 
 // ---------------------------------------------------------------------------
-// Step 2: patch ELF kfunc call sites (src_reg 1 -> 2)
+// Step 2: patch ELF kfunc call sites (src_reg 1 -> 2, encode kfunc index in imm)
 // ---------------------------------------------------------------------------
 
-/// Patches kfunc call instructions in the `xdp` section of the ELF bytes.
+/// Patches kfunc call instructions in every code section of the ELF bytes.
 ///
-/// For each byte offset in `kfunc_offsets`, changes the `src_reg` nibble of
-/// the BPF instruction from 1 (BPF_PSEUDO_CALL) to 2 (BPF_PSEUDO_KFUNC_CALL).
-/// After this patch, aya-obj's `relocate_calls()` will SKIP these instructions
-/// (it only inlines src_reg=1 calls).
+/// For each kfunc call site (R_BPF_64_32 reloc against a symbol in `kfunc_names`),
+/// this function:
+///   1. Changes the `src_reg` nibble of the BPF instruction from 1
+///      (BPF_PSEUDO_CALL) to 2 (BPF_PSEUDO_KFUNC_CALL). aya-obj's
+///      `relocate_calls()` SKIPS src_reg=2 instructions, leaving them
+///      untouched in the flattened output.
+///   2. Writes the index of the kfunc within `kfunc_names` into the `imm`
+///      field. The original placeholder is `imm=-1`; we use a small positive
+///      integer instead. `patch_kfunc_instructions()` reads this index back
+///      after relocation flattening to map each call site to its real BTF
+///      type ID. Using `imm` for identity avoids fragile positional ordering
+///      across the `xdp` section and any inlined `.text` subroutines.
+///
+/// Walks both `xdp` and `.text*` code sections, since BPF subroutines marked
+/// `#[inline(never)]` (e.g., `verify_ping_token`) live in `.text` and may
+/// contain kfunc calls of their own.
 ///
 /// BPF instruction byte layout:
 ///   byte 0: opcode
 ///   byte 1: dst_reg (low nibble) | src_reg (high nibble)
 ///   bytes 2-3: offset (i16)
 ///   bytes 4-7: imm (i32)
-pub fn patch_elf_skip_kfuncs(elf: &[u8], kfunc_offsets: &HashMap<u64, String>) -> Result<Vec<u8>> {
+pub fn patch_elf_skip_kfuncs(elf: &[u8], kfunc_names: &[&str]) -> Result<Vec<u8>> {
     let mut patched = elf.to_vec();
 
     let file = object::File::parse(elf).context("ELF parse failed in patch_elf_skip_kfuncs")?;
-    let xdp_section = file
-        .section_by_name("xdp")
-        .context("xdp section not found in BPF ELF")?;
-    let (xdp_file_offset, _xdp_size) = xdp_section
-        .file_range()
-        .context("xdp section has no file range")?;
-    let xdp_file_offset = xdp_file_offset as usize;
 
-    for (insn_offset, name) in kfunc_offsets {
-        // byte 1 of the instruction = regs byte
-        let regs_file_pos = xdp_file_offset + *insn_offset as usize + 1;
-        if regs_file_pos >= patched.len() {
-            bail!("kfunc {} offset 0x{:x} out of bounds", name, insn_offset);
+    // Build symbol-index -> kfunc_index map.
+    let mut sym_to_kfunc_idx: HashMap<usize, usize> = HashMap::new();
+    for sym in file.symbols() {
+        if let Ok(name) = sym.name() {
+            if let Some(idx) = kfunc_names.iter().position(|n| *n == name) {
+                sym_to_kfunc_idx.insert(sym.index().0, idx);
+            }
         }
-
-        let regs_byte = patched[regs_file_pos];
-        // Verify opcode at byte 0
-        let opcode = patched[xdp_file_offset + *insn_offset as usize];
-        if opcode != BPF_CALL_OPCODE {
-            bail!(
-                "kfunc {} at offset 0x{:x}: expected call opcode 0x{:02x}, got 0x{:02x}",
-                name,
-                insn_offset,
-                BPF_CALL_OPCODE,
-                opcode
-            );
-        }
-        // Verify src_reg is currently 1 (high nibble of regs_byte = 0x10)
-        let src_reg = (regs_byte >> 4) & 0x0f;
-        if src_reg != 1 {
-            bail!(
-                "kfunc {} at 0x{:x}: expected src_reg=1, got src_reg={}",
-                name,
-                insn_offset,
-                src_reg
-            );
-        }
-        // Change src_reg nibble from 1 to 2: 0x10 -> 0x20, 0x11 -> 0x21, etc.
-        patched[regs_file_pos] = (regs_byte & 0x0f) | (BPF_PSEUDO_KFUNC_CALL << 4);
     }
+
+    let mut total_patched = 0usize;
+    for table in code_relocation_tables(&file)? {
+        let entry_count = table.rel_data.len() / 16;
+        for i in 0..entry_count {
+            let base = i * 16;
+            let r_offset =
+                u64::from_le_bytes(table.rel_data[base..base + 8].try_into().expect("8 bytes"))
+                    as usize;
+            let r_info = u64::from_le_bytes(
+                table.rel_data[base + 8..base + 16]
+                    .try_into()
+                    .expect("8 bytes"),
+            );
+            let r_type = (r_info & 0xffff_ffff) as u32;
+            let r_sym = (r_info >> 32) as usize;
+
+            if r_type != R_BPF_64_32 {
+                continue;
+            }
+            let kfunc_idx = match sym_to_kfunc_idx.get(&r_sym) {
+                Some(&idx) => idx,
+                None => continue,
+            };
+            let kfunc_name = kfunc_names[kfunc_idx];
+
+            let insn_pos = table.target_file_offset + r_offset;
+            if insn_pos + BPF_INSN_SIZE > patched.len() {
+                bail!(
+                    "kfunc {} in section {} at offset 0x{:x} out of bounds",
+                    kfunc_name,
+                    table.target_section_name,
+                    r_offset
+                );
+            }
+
+            // Verify opcode at byte 0.
+            let opcode = patched[insn_pos];
+            if opcode != BPF_CALL_OPCODE {
+                bail!(
+                    "kfunc {} in {} at offset 0x{:x}: expected call opcode 0x{:02x}, got 0x{:02x}",
+                    kfunc_name,
+                    table.target_section_name,
+                    r_offset,
+                    BPF_CALL_OPCODE,
+                    opcode
+                );
+            }
+            let regs_pos = insn_pos + 1;
+            let regs_byte = patched[regs_pos];
+            let src_reg = (regs_byte >> 4) & 0x0f;
+            if src_reg != 1 {
+                bail!(
+                    "kfunc {} in {} at 0x{:x}: expected src_reg=1, got src_reg={}",
+                    kfunc_name,
+                    table.target_section_name,
+                    r_offset,
+                    src_reg
+                );
+            }
+
+            // src_reg: 1 -> BPF_PSEUDO_KFUNC_CALL (2)
+            patched[regs_pos] = (regs_byte & 0x0f) | (BPF_PSEUDO_KFUNC_CALL << 4);
+            // imm: encode kfunc_idx (small positive i32). Replaces the -1
+            // placeholder. patch_kfunc_instructions() reads this back later.
+            let imm_pos = insn_pos + 4;
+            patched[imm_pos..imm_pos + 4].copy_from_slice(&(kfunc_idx as i32).to_le_bytes());
+
+            total_patched += 1;
+        }
+    }
+
+    log::debug!(
+        "patch_elf_skip_kfuncs: patched {} kfunc call site(s) across all code sections",
+        total_patched
+    );
 
     Ok(patched)
 }
@@ -218,83 +334,77 @@ pub fn patch_elf_map_fds(elf: &[u8], map_fds: &HashMap<String, i32>) -> Result<V
         }
     }
 
-    let xdp_section = file
-        .section_by_name("xdp")
-        .context("xdp section not found")?;
-    let (xdp_file_offset, _) = xdp_section
-        .file_range()
-        .context("xdp section has no file range")?;
-    let xdp_file_offset = xdp_file_offset as usize;
-
-    let relxdp = file
-        .section_by_name(".relxdp")
-        .context(".relxdp section not found")?;
-    let data = relxdp.data().context("failed to read .relxdp")?;
-
-    let entry_count = data.len() / 16;
-
-    for i in 0..entry_count {
-        let base = i * 16;
-        let r_offset =
-            u64::from_le_bytes(data[base..base + 8].try_into().expect("8 bytes")) as usize;
-        let r_info = u64::from_le_bytes(data[base + 8..base + 16].try_into().expect("8 bytes"));
-        let r_type = (r_info & 0xffff_ffff) as u32;
-        let r_sym = (r_info >> 32) as usize;
-
-        if r_type != R_BPF_64_64 {
-            continue;
-        }
-
-        let map_name = match sym_index_to_map.get(&r_sym) {
-            Some(n) => n,
-            None => continue, // not a map we know about
-        };
-
-        let fd = match map_fds.get(map_name.as_str()) {
-            Some(&fd) => fd,
-            None => bail!("no FD found for map '{}'", map_name),
-        };
-
-        // Verify opcode at instruction start in the xdp section
-        let insn_file_pos = xdp_file_offset + r_offset;
-        if insn_file_pos + BPF_INSN_SIZE > patched.len() {
-            bail!(
-                "map reloc for {} at offset 0x{:x} out of bounds",
-                map_name,
-                r_offset
+    for table in code_relocation_tables(&file)? {
+        let entry_count = table.rel_data.len() / 16;
+        for i in 0..entry_count {
+            let base = i * 16;
+            let r_offset =
+                u64::from_le_bytes(table.rel_data[base..base + 8].try_into().expect("8 bytes"))
+                    as usize;
+            let r_info = u64::from_le_bytes(
+                table.rel_data[base + 8..base + 16]
+                    .try_into()
+                    .expect("8 bytes"),
             );
-        }
-        let opcode = patched[insn_file_pos];
-        if opcode != BPF_LD_IMM64_OPCODE {
-            bail!(
-                "map {} at 0x{:x}: expected BPF_LD_IMM64 opcode 0x18, got 0x{:02x}",
-                map_name,
-                r_offset,
-                opcode
-            );
-        }
+            let r_type = (r_info & 0xffff_ffff) as u32;
+            let r_sym = (r_info >> 32) as usize;
 
-        // Write FD as little-endian i32 into bytes 4-7 (imm field of first insn)
-        let imm_pos = insn_file_pos + 4;
-        patched[imm_pos..imm_pos + 4].copy_from_slice(&fd.to_le_bytes());
+            if r_type != R_BPF_64_64 {
+                continue;
+            }
 
-        // Set src_reg = BPF_PSEUDO_MAP_FD (1) on the BPF_LD_IMM64 instruction.
-        // bpf-linker emits BPF_LD_IMM64 with src_reg=0; the verifier needs
-        // src_reg=1 to recognize the imm as a map FD and substitute the
-        // map pointer. Without this, the verifier treats r1 as a scalar
-        // and rejects the subsequent bpf_map_lookup_elem call:
-        //   "R1 type=scalar expected=map_ptr"
-        // libbpf/aya normally do this in relocate_maps(); we skip that step
-        // and patch the ELF directly, so we must set src_reg ourselves.
-        // Byte layout of bpf_insn regs byte (offset +1):
-        //   bits 0-3: dst_reg, bits 4-7: src_reg
-        let regs_pos = insn_file_pos + 1;
-        patched[regs_pos] = (patched[regs_pos] & 0x0f) | (BPF_PSEUDO_MAP_FD << 4);
+            let map_name = match sym_index_to_map.get(&r_sym) {
+                Some(n) => n,
+                None => continue, // not a map we know about
+            };
 
-        // Zero the imm of the second instruction (bytes 12-15, i.e. +8+4)
-        let imm2_pos = insn_file_pos + BPF_INSN_SIZE + 4;
-        if imm2_pos + 4 <= patched.len() {
-            patched[imm2_pos..imm2_pos + 4].copy_from_slice(&0i32.to_le_bytes());
+            let fd = match map_fds.get(map_name.as_str()) {
+                Some(&fd) => fd,
+                None => bail!("no FD found for map '{}'", map_name),
+            };
+
+            let insn_file_pos = table.target_file_offset + r_offset;
+            if insn_file_pos + BPF_INSN_SIZE > patched.len() {
+                bail!(
+                    "map reloc for {} in {} at offset 0x{:x} out of bounds",
+                    map_name,
+                    table.target_section_name,
+                    r_offset
+                );
+            }
+            let opcode = patched[insn_file_pos];
+            if opcode != BPF_LD_IMM64_OPCODE {
+                bail!(
+                    "map {} in {} at 0x{:x}: expected BPF_LD_IMM64 opcode 0x18, got 0x{:02x}",
+                    map_name,
+                    table.target_section_name,
+                    r_offset,
+                    opcode
+                );
+            }
+
+            // Write FD as little-endian i32 into bytes 4-7 (imm field of first insn)
+            let imm_pos = insn_file_pos + 4;
+            patched[imm_pos..imm_pos + 4].copy_from_slice(&fd.to_le_bytes());
+
+            // Set src_reg = BPF_PSEUDO_MAP_FD (1) on the BPF_LD_IMM64 instruction.
+            // bpf-linker emits BPF_LD_IMM64 with src_reg=0; the verifier needs
+            // src_reg=1 to recognize the imm as a map FD and substitute the
+            // map pointer. Without this, the verifier treats r1 as a scalar
+            // and rejects the subsequent bpf_map_lookup_elem call:
+            //   "R1 type=scalar expected=map_ptr"
+            // libbpf/aya normally do this in relocate_maps(); we skip that step
+            // and patch the ELF directly, so we must set src_reg ourselves.
+            // Byte layout of bpf_insn regs byte (offset +1):
+            //   bits 0-3: dst_reg, bits 4-7: src_reg
+            let regs_pos = insn_file_pos + 1;
+            patched[regs_pos] = (patched[regs_pos] & 0x0f) | (BPF_PSEUDO_MAP_FD << 4);
+
+            // Zero the imm of the second instruction (bytes 12-15, i.e. +8+4)
+            let imm2_pos = insn_file_pos + BPF_INSN_SIZE + 4;
+            if imm2_pos + 4 <= patched.len() {
+                patched[imm2_pos..imm2_pos + 4].copy_from_slice(&0i32.to_le_bytes());
+            }
         }
     }
 
@@ -352,73 +462,73 @@ pub fn patch_elf_bpf_helpers(elf: &[u8]) -> Result<Vec<u8>> {
         return Ok(patched); // no known helpers referenced in this ELF
     }
 
-    let xdp_section = file
-        .section_by_name("xdp")
-        .context("xdp section not found in patch_elf_bpf_helpers")?;
-    let (xdp_file_offset, _) = xdp_section
-        .file_range()
-        .context("xdp section has no file range")?;
-    let xdp_file_offset = xdp_file_offset as usize;
-
-    let relxdp = file
-        .section_by_name(".relxdp")
-        .context(".relxdp section not found in patch_elf_bpf_helpers")?;
-    let data = relxdp.data().context("failed to read .relxdp data")?;
-    let entry_count = data.len() / 16;
-
     let mut patched_count = 0usize;
 
-    for i in 0..entry_count {
-        let base = i * 16;
-        let r_offset =
-            u64::from_le_bytes(data[base..base + 8].try_into().expect("8 bytes")) as usize;
-        let r_info = u64::from_le_bytes(data[base + 8..base + 16].try_into().expect("8 bytes"));
-        let r_type = (r_info & 0xffff_ffff) as u32;
-        let r_sym = (r_info >> 32) as usize;
-
-        if r_type != R_BPF_64_32 {
-            continue;
-        }
-
-        let helper_id = match sym_to_helper_id.get(&r_sym) {
-            Some(&id) => id,
-            None => continue,
-        };
-
-        let insn_file_pos = xdp_file_offset + r_offset;
-        if insn_file_pos + BPF_INSN_SIZE > patched.len() {
-            bail!("BPF helper call at xdp+0x{:x} is out of bounds", r_offset);
-        }
-
-        // Verify BPF_CALL opcode at byte 0 of the instruction.
-        let opcode = patched[insn_file_pos];
-        if opcode != BPF_CALL_OPCODE {
-            bail!(
-                "expected BPF_CALL (0x85) at helper offset 0x{:x}, got 0x{:02x}",
-                r_offset,
-                opcode
+    for table in code_relocation_tables(&file)? {
+        let entry_count = table.rel_data.len() / 16;
+        for i in 0..entry_count {
+            let base = i * 16;
+            let r_offset =
+                u64::from_le_bytes(table.rel_data[base..base + 8].try_into().expect("8 bytes"))
+                    as usize;
+            let r_info = u64::from_le_bytes(
+                table.rel_data[base + 8..base + 16]
+                    .try_into()
+                    .expect("8 bytes"),
             );
+            let r_type = (r_info & 0xffff_ffff) as u32;
+            let r_sym = (r_info >> 32) as usize;
+
+            if r_type != R_BPF_64_32 {
+                continue;
+            }
+
+            let helper_id = match sym_to_helper_id.get(&r_sym) {
+                Some(&id) => id,
+                None => continue,
+            };
+
+            let insn_file_pos = table.target_file_offset + r_offset;
+            if insn_file_pos + BPF_INSN_SIZE > patched.len() {
+                bail!(
+                    "BPF helper call in {} at +0x{:x} is out of bounds",
+                    table.target_section_name,
+                    r_offset
+                );
+            }
+
+            // Verify BPF_CALL opcode at byte 0 of the instruction.
+            let opcode = patched[insn_file_pos];
+            if opcode != BPF_CALL_OPCODE {
+                bail!(
+                    "expected BPF_CALL (0x85) at helper offset 0x{:x} in {}, got 0x{:02x}",
+                    r_offset,
+                    table.target_section_name,
+                    opcode
+                );
+            }
+
+            // Verify src_reg=1 (BPF_PSEUDO_CALL) - it should not have been patched yet.
+            let regs_byte = patched[insn_file_pos + 1];
+            let src_reg = (regs_byte >> 4) & 0x0f;
+            if src_reg != 1 {
+                bail!(
+                    "BPF helper at 0x{:x} in {}: expected src_reg=1, got {}",
+                    r_offset,
+                    table.target_section_name,
+                    src_reg
+                );
+            }
+
+            // Patch src_reg: clear high nibble of regs byte (dst_reg stays in low nibble).
+            // src_reg=0 = direct helper call (not BPF_PSEUDO_CALL).
+            patched[insn_file_pos + 1] = regs_byte & 0x0f;
+
+            // Patch imm: write helper ID as little-endian i32 at bytes 4-7.
+            patched[insn_file_pos + 4..insn_file_pos + 8].copy_from_slice(&helper_id.to_le_bytes());
+
+            patched_count += 1;
         }
-
-        // Verify src_reg=1 (BPF_PSEUDO_CALL) - it should not have been patched yet.
-        let regs_byte = patched[insn_file_pos + 1];
-        let src_reg = (regs_byte >> 4) & 0x0f;
-        if src_reg != 1 {
-            bail!(
-                "BPF helper at 0x{:x}: expected src_reg=1, got {}",
-                r_offset,
-                src_reg
-            );
-        }
-
-        // Patch src_reg: clear high nibble of regs byte (dst_reg stays in low nibble).
-        // src_reg=0 = direct helper call (not BPF_PSEUDO_CALL).
-        patched[insn_file_pos + 1] = regs_byte & 0x0f;
-
-        // Patch imm: write helper ID as little-endian i32 at bytes 4-7.
-        patched[insn_file_pos + 4..insn_file_pos + 8].copy_from_slice(&helper_id.to_le_bytes());
-
-        patched_count += 1;
     }
 
     log::debug!(
@@ -487,61 +597,53 @@ pub fn get_xdp_instructions(elf_patched: &[u8]) -> Result<Vec<aya_obj::generated
 
 /// Patches kfunc placeholder instructions in the instruction array.
 ///
-/// After `get_xdp_instructions()`, kfunc calls have:
-///   src_reg=2, imm=-1 (placeholder), off=0
+/// `patch_elf_skip_kfuncs()` previously set each kfunc call to:
+///   src_reg=2, imm=<kfunc_index> (small positive), off=0
 ///
 /// After this function, they have:
 ///   src_reg=2, imm=<btf_type_id>, off=<fd_array_idx>
 ///
-/// Uses relative ordering: the Nth src_reg=2 instruction in the flattened
-/// array corresponds to the Nth kfunc offset (sorted ascending by byte offset)
-/// in the original xdp section. This is valid because:
-/// - relocate_calls() only expands src_reg=1 BPF-to-BPF call sites
-/// - src_reg=2 instructions pass through unmodified in relative order
+/// Identification is by `imm` value (kfunc index) - NOT by positional ordering.
+/// This is robust against aya's `relocate_calls()` reordering, which inlines
+/// `.text` BPF subroutines after the `xdp` program: the byte offsets of kfunc
+/// calls inside inlined subroutines no longer correspond to their original
+/// section offsets.
 pub fn patch_kfunc_instructions(
     insns: &mut [aya_obj::generated::bpf_insn],
-    kfunc_offsets: &HashMap<u64, String>,
+    kfunc_names: &[&str],
     btf_ids: &HashMap<String, u32>,
     fd_array_idx: u16,
 ) -> Result<()> {
-    // Sort kfunc sites by byte offset to get stable ordering.
-    let mut sorted_kfuncs: Vec<(u64, &str)> = kfunc_offsets
-        .iter()
-        .map(|(off, name)| (*off, name.as_str()))
-        .collect();
-    sorted_kfuncs.sort_by_key(|(off, _)| *off);
-
-    // Collect indices of all src_reg=2 instructions in the flat array.
-    let kfunc_insn_indices: Vec<usize> = insns
-        .iter()
-        .enumerate()
-        .filter(|(_, insn)| insn.code == BPF_CALL_OPCODE && insn.src_reg() == BPF_PSEUDO_KFUNC_CALL)
-        .map(|(i, _)| i)
-        .collect();
-
-    if kfunc_insn_indices.len() != sorted_kfuncs.len() {
-        bail!(
-            "kfunc count mismatch: ELF has {} kfunc relocs, flat insn array has {} src_reg=2 call sites",
-            sorted_kfuncs.len(),
-            kfunc_insn_indices.len()
-        );
-    }
-
-    for (insn_idx, (_byte_offset, kfunc_name)) in
-        kfunc_insn_indices.iter().zip(sorted_kfuncs.iter())
-    {
-        let btf_id = btf_ids.get(*kfunc_name).copied().ok_or_else(|| {
+    let mut patched_count = 0usize;
+    for insn in insns.iter_mut() {
+        if insn.code != BPF_CALL_OPCODE || insn.src_reg() != BPF_PSEUDO_KFUNC_CALL {
+            continue;
+        }
+        let kfunc_idx = insn.imm;
+        if kfunc_idx < 0 || (kfunc_idx as usize) >= kfunc_names.len() {
+            bail!(
+                "src_reg=2 call insn has unexpected imm={} (expected 0..{} kfunc index)",
+                kfunc_idx,
+                kfunc_names.len()
+            );
+        }
+        let kfunc_name = kfunc_names[kfunc_idx as usize];
+        let btf_id = btf_ids.get(kfunc_name).copied().ok_or_else(|| {
             anyhow!(
                 "BTF type ID not found for kfunc '{}' - is relay_module.ko loaded?",
                 kfunc_name
             )
         })?;
 
-        let insn = &mut insns[*insn_idx];
-        // src_reg=2 already set from patch_elf_skip_kfuncs, preserved through parse+relocate
         insn.off = fd_array_idx as i16;
         insn.imm = btf_id as i32;
+        patched_count += 1;
     }
+
+    log::debug!(
+        "patch_kfunc_instructions: patched {} kfunc call site(s) in flat insn array",
+        patched_count
+    );
 
     Ok(())
 }
@@ -1174,27 +1276,30 @@ mod tests {
         assert!(!kfunc_offsets.is_empty(), "no kfunc offsets found");
 
         // All entries should be bpf_relay_* names
-        for name in kfunc_offsets.values() {
+        for (_section, _offset, name) in &kfunc_offsets {
             assert!(
                 RELAY_MODULE_KFUNCS.contains(&name.as_str()),
-                "unexpected kfunc name: {}",
-                name
+                "unexpected kfunc name: {name}"
             );
         }
 
         let patched =
-            patch_elf_skip_kfuncs(&elf, &kfunc_offsets).expect("patch_elf_skip_kfuncs failed");
+            patch_elf_skip_kfuncs(&elf, RELAY_MODULE_KFUNCS).expect("patch_elf_skip_kfuncs failed");
 
         // Verify patched bytes: at each kfunc offset, byte 1 should have src_reg nibble = 2
         let file = object::File::parse(elf.as_slice()).unwrap();
-        let xdp = file.section_by_name("xdp").unwrap();
-        let (xdp_offset, _) = xdp.file_range().unwrap();
-        let xdp_offset = xdp_offset as usize;
 
-        for (offset, _name) in &kfunc_offsets {
-            let regs_pos = xdp_offset + *offset as usize + 1;
+        for (section_name, offset, _name) in &kfunc_offsets {
+            let sec = file
+                .section_by_name(section_name)
+                .unwrap_or_else(|| panic!("section {section_name} missing"));
+            let (sec_offset, _) = sec.file_range().unwrap();
+            let regs_pos = sec_offset as usize + *offset as usize + 1;
             let src_reg = (patched[regs_pos] >> 4) & 0x0f;
-            assert_eq!(src_reg, 2, "expected src_reg=2 at offset 0x{:x}", offset);
+            assert_eq!(
+                src_reg, 2,
+                "expected src_reg=2 at {section_name}+0x{offset:x}"
+            );
         }
     }
 }

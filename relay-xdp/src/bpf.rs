@@ -105,16 +105,18 @@ impl BpfContext {
         let elf_bytes = std::fs::read(xdp_obj_path)
             .with_context(|| format!("failed to read BPF ELF from {}", xdp_obj_path.display()))?;
 
-        // --- Step 2: Collect kfunc offsets and patch ELF (src_reg 1->2) ---
-        let kfunc_offsets = collect_kfunc_offsets(&elf_bytes, RELAY_MODULE_KFUNCS)
+        // --- Step 2: Patch kfunc call sites in all code sections (xdp + .text*) ---
+        // src_reg 1 -> 2 and encode kfunc index in imm. Walks .relxdp + .rel.text*
+        // because BPF subroutines marked #[inline(never)] (e.g. verify_ping_token)
+        // live in .text and contain kfunc calls of their own.
+        let kfunc_sites = collect_kfunc_offsets(&elf_bytes, RELAY_MODULE_KFUNCS)
             .context("failed to collect kfunc offsets from ELF")?;
         info!(
             "Found {} kfunc call sites in ELF for {:?}",
-            kfunc_offsets.len(),
+            kfunc_sites.len(),
             RELAY_MODULE_KFUNCS
         );
-
-        let patched_v1 = patch_elf_skip_kfuncs(&elf_bytes, &kfunc_offsets)
+        let patched_v1 = patch_elf_skip_kfuncs(&elf_bytes, RELAY_MODULE_KFUNCS)
             .context("failed to patch kfunc src_reg in ELF")?;
 
         // --- Step 2b: Patch standard BPF helper calls (src_reg 1->0, imm -> helper ID) ---
@@ -154,11 +156,13 @@ impl BpfContext {
         info!("BTF type IDs: {:?}", btf_ids);
 
         // --- Step 8: Patch kfunc instructions with BTF IDs ---
+        // Identifies each src_reg=2 call by reading the kfunc index encoded in
+        // imm during step 2 - robust against aya's relocation reordering.
         patch_kfunc_instructions(
             &mut insns,
-            &kfunc_offsets,
+            RELAY_MODULE_KFUNCS,
             &btf_ids,
-            1, // fd_array index 1: kernel uses fd_array[off-1] = fd_array[0] = btf_fd
+            1, // fd_array index 1: kernel reads fd_array[off] = fd_array[1] = btf_fd
         )
         .context("failed to patch kfunc instructions")?;
 
