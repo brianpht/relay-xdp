@@ -1215,10 +1215,13 @@ pub fn raw_create_xdp_link(prog_fd: i32, ifindex: u32) -> Result<i32> {
         let err_no = unsafe { *libc::__errno_location() };
 
         // EOPNOTSUPP: driver has ndo_bpf but XDP native setup failed (e.g., ENA on
-        // t3.medium). Fall through to retry with SKB mode.
-        if flags == 0 && err_no == libc::EOPNOTSUPP {
+        // t3.medium). EINVAL: ENA driver advertises XDP support but rejects the
+        // program in native mode (typically because the netdev has too many TX
+        // queues for native XDP, or the program uses features the driver does
+        // not support natively). In both cases, retry with SKB (generic) mode.
+        if flags == 0 && (err_no == libc::EOPNOTSUPP || err_no == libc::EINVAL) {
             log::warn!(
-                "Native XDP mode not supported (EOPNOTSUPP), retrying with SKB (generic) mode"
+                "Native XDP mode not supported (errno {err_no}), retrying with SKB (generic) mode"
             );
             continue;
         }
