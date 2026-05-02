@@ -7,6 +7,7 @@
 
 #![no_std]
 #![no_main]
+#![feature(asm_experimental_arch)]
 #![allow(non_upper_case_globals)]
 
 use aya_ebpf::{
@@ -106,6 +107,61 @@ extern "C" {
         data__sz: i32,
         crypto: *const Chacha20Poly1305Crypto,
     ) -> i32;
+}
+
+/// Safe wrapper around `bpf_relay_sha256` that defeats two LLVM eBPF backend
+/// bugs in the way it models the kfunc:
+///
+/// 1. **Args not materialized in r2-r4**: LLVM emits the `call -0x1`
+///    placeholder for the kfunc but does NOT set up r2/r3/r4 with
+///    `data__sz`, `output`, `output__sz`. It treats the kfunc as readnone
+///    on its non-r1 args (likely because the extern declaration has no
+///    body, so IR-level inference concludes "args are unused"). The kernel
+///    verifier rejects the call with errors like "R2 min value is negative"
+///    or "memory, len pair leads to invalid memory access".
+/// 2. **Output not modeled as written**: subsequent reads from the buffer
+///    pointed to by `output` are constant-folded against the buffer's
+///    pre-call contents (typically zero from `let mut hash = [0u8; 32]`).
+///
+/// Earlier mitigation attempts that did NOT work:
+/// - `core::hint::black_box` on individual args: shares a single fp-8
+///   scratch slot, so consecutive args clobber each other (alpha.17 bug).
+/// - `core::ptr::read_volatile(&local)` round-trip: each arg lands in a
+///   separate stack slot, but LLVM then reloads all of them into r1
+///   sequentially before the call, overwriting r1 each time.
+/// - `core::hint::black_box(rc)` after the call: makes the result
+///   observable but does not affect arg lowering.
+/// - `asm!("")` memory barrier: prevents constant-folding of post-call
+///   loads from `output` but does not affect arg lowering.
+///
+/// The fix here is to emit the kfunc call directly from an inline asm block
+/// with explicit `in("rN")` constraints. This bypasses LLVM's call lowering
+/// entirely and guarantees r1-r4 hold the correct values at the call site.
+/// `sym bpf_relay_sha256` produces the same R_BPF_64_32 relocation against
+/// the kfunc symbol that bpf-linker emits for normal extern calls, so the
+/// existing kfunc loader (`patch_elf_skip_kfuncs` etc.) handles it
+/// identically. `clobber_abi("C")` lets LLVM know that all caller-saved
+/// registers may be modified by the call.
+#[inline(always)]
+unsafe fn relay_sha256(
+    data: *const u8,
+    data_sz: i32,
+    output: *mut u8,
+    output_sz: i32,
+) -> i32 {
+    let rc: i64;
+    core::arch::asm!(
+        "call {kfunc}",
+        kfunc = sym bpf_relay_sha256,
+        in("r1") data,
+        in("r2") data_sz as i64,
+        in("r3") output,
+        in("r4") output_sz as i64,
+        lateout("r0") rc,
+        clobber_abi("C"),
+        options(nostack, preserves_flags),
+    );
+    rc as i32
 }
 
 // =====================================================================
@@ -212,11 +268,18 @@ unsafe fn read_u64_le(p: *const u8) -> u64 {
 }
 
 /// Compare N bytes at two pointers. Returns true if equal.
+///
+/// `a` is loaded with `core::ptr::read_volatile`. This is required when `a`
+/// points to a buffer just written by an opaque kfunc (e.g. the SHA-256
+/// output of `bpf_relay_sha256`): the BPF backend does not model kfuncs as
+/// writing to their `*mut` args, so without a volatile load it constant-folds
+/// the read against the buffer's pre-call value (typically zero) and reduces
+/// the entire compare to "is `b` all zeros".
 #[inline(always)]
 unsafe fn bytes_equal(a: *const u8, b: *const u8, n: usize) -> bool {
     let mut i = 0usize;
     while i < n {
-        if *a.add(i) != *b.add(i) {
+        if core::ptr::read_volatile(a.add(i)) != *b.add(i) {
             return false;
         }
         i += 1;
@@ -226,14 +289,16 @@ unsafe fn bytes_equal(a: *const u8, b: *const u8, n: usize) -> bool {
 
 /// Compare 32 bytes using u64-word comparison (4 iterations instead of 32).
 /// Both pointers must be to stack-allocated, naturally aligned buffers.
+///
+/// See `bytes_equal` for why `a` is loaded volatilely.
 #[inline(always)]
 unsafe fn bytes_equal_32(a: *const u8, b: *const u8) -> bool {
     let a = a as *const u64;
     let b = b as *const u64;
-    (*a.add(0) == *b.add(0))
-        && (*a.add(1) == *b.add(1))
-        && (*a.add(2) == *b.add(2))
-        && (*a.add(3) == *b.add(3))
+    core::ptr::read_volatile(a.add(0)) == *b.add(0)
+        && core::ptr::read_volatile(a.add(1)) == *b.add(1)
+        && core::ptr::read_volatile(a.add(2)) == *b.add(2)
+        && core::ptr::read_volatile(a.add(3)) == *b.add(3)
 }
 
 /// Copy N bytes from src to dst (non-overlapping).
@@ -579,7 +644,7 @@ unsafe fn verify_ping_token(
     fallback_addr: u32,
 ) -> bool {
     let mut hash = [0u8; RELAY_PING_TOKEN_BYTES];
-    bpf_relay_sha256(
+    relay_sha256(
         verify_data as *const u8,
         core::mem::size_of::<PingTokenData>() as i32,
         hash.as_mut_ptr(),
@@ -592,7 +657,7 @@ unsafe fn verify_ping_token(
 
     // Try with fallback address
     (*verify_data).dest_address = fallback_addr;
-    bpf_relay_sha256(
+    relay_sha256(
         verify_data as *const u8,
         core::mem::size_of::<PingTokenData>() as i32,
         hash.as_mut_ptr(),
@@ -615,7 +680,7 @@ unsafe fn verify_session_header(
     expected: *const u8,
 ) -> bool {
     let mut hash = [0u8; 32];
-    bpf_relay_sha256(
+    relay_sha256(
         verify_data as *const u8,
         core::mem::size_of::<HeaderData>() as i32,
         hash.as_mut_ptr(),
@@ -791,7 +856,7 @@ unsafe fn handle_client_ping(
     );
 
     let mut hash = [0u8; 32];
-    bpf_relay_sha256(
+    relay_sha256(
         &verify_data as *const PingTokenData as *const u8,
         core::mem::size_of::<PingTokenData>() as i32,
         hash.as_mut_ptr(),
