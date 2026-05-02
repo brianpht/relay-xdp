@@ -640,12 +640,11 @@ unsafe fn verify_session_header(
     );
 
     let mut hash = [0u8; 32];
-    bpf_relay_sha256(
-        &verify_data as *const HeaderData as *const u8,
-        core::mem::size_of::<HeaderData>() as i32,
-        hash.as_mut_ptr(),
-        32,
-    );
+    let p0 = core::hint::black_box(&verify_data as *const HeaderData as *const u8);
+    let p1 = core::hint::black_box(core::mem::size_of::<HeaderData>() as i32);
+    let p2 = core::hint::black_box(hash.as_mut_ptr());
+    let p3 = core::hint::black_box(32_i32);
+    bpf_relay_sha256(p0, p1, p2, p3);
 
     bytes_equal(hash.as_ptr(), expected, 8)
 }
