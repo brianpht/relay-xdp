@@ -561,41 +561,26 @@ unsafe fn decrypt_continue_token(config: *const RelayConfig, continue_token: *mu
 // SHA-256 verification helpers
 // =====================================================================
 
-/// Verify ping token using SHA-256. Tries the address matching daddr first
-/// to avoid a wasted kfunc call (~200-500ns savings on internal packets).
-#[inline(always)]
+/// Verify ping token using SHA-256. Tries primary address first, then fallback
+/// (~200-500ns savings on internal packets).
+//
+// NOT inlined: the LLVM eBPF backend mis-schedules kfunc call args (r1-r5)
+// when this is inlined into handlers with adjacent control flow. The cold
+// counter-offset moves get hoisted into r1/r2 just before the sha256 call,
+// clobbering the kfunc args and triggering verifier errors. Keeping this
+// as a real BPF subroutine forces LLVM to honor the call ABI.
+//
+// Caller must construct PingTokenData with the primary address and copy
+// state.ping_key into it. Function takes <=5 args (BPF subroutine limit).
+#[inline(never)]
 unsafe fn verify_ping_token(
-    source_address: u32,
-    source_port: u16,
-    config: *const RelayConfig,
-    state: *const RelayState,
-    expire_timestamp: u64,
+    verify_data: *mut PingTokenData,
     ping_token: *const u8,
-    daddr: u32,
+    fallback_addr: u32,
 ) -> bool {
-    // Pick primary/fallback address based on which address the packet arrived on
-    let (primary_addr, fallback_addr) = if daddr == (*config).relay_internal_address {
-        ((*config).relay_internal_address, (*config).relay_public_address)
-    } else {
-        ((*config).relay_public_address, (*config).relay_internal_address)
-    };
-
-    let mut verify_data = PingTokenData {
-        ping_key: [0u8; RELAY_PING_KEY_BYTES],
-        expire_timestamp,
-        source_address,
-        source_port,
-        dest_address: primary_addr,
-        dest_port: (*config).relay_port,
-    };
-    copy_bytes_32(
-        (*state).ping_key.as_ptr(),
-        verify_data.ping_key.as_mut_ptr(),
-    );
-
     let mut hash = [0u8; RELAY_PING_TOKEN_BYTES];
     bpf_relay_sha256(
-        &verify_data as *const PingTokenData as *const u8,
+        verify_data as *const u8,
         core::mem::size_of::<PingTokenData>() as i32,
         hash.as_mut_ptr(),
         RELAY_PING_TOKEN_BYTES as i32,
@@ -606,9 +591,9 @@ unsafe fn verify_ping_token(
     }
 
     // Try with fallback address
-    verify_data.dest_address = fallback_addr;
+    (*verify_data).dest_address = fallback_addr;
     bpf_relay_sha256(
-        &verify_data as *const PingTokenData as *const u8,
+        verify_data as *const u8,
         core::mem::size_of::<PingTokenData>() as i32,
         hash.as_mut_ptr(),
         RELAY_PING_TOKEN_BYTES as i32,
@@ -618,33 +603,24 @@ unsafe fn verify_ping_token(
 }
 
 /// Verify session header SHA-256. Returns true if first 8 bytes of hash match expected.
-#[inline(always)]
+//
+// NOT inlined: see verify_ping_token comment - LLVM mis-schedules kfunc args
+// when inlined alongside replay checks. Caller constructs HeaderData; this
+// function only does the hash + compare so the kfunc arg setup is contained
+// in a tiny function with no surrounding control flow to confuse the
+// scheduler.
+#[inline(never)]
 unsafe fn verify_session_header(
-    session_private_key: *const u8,
-    packet_type: u8,
-    packet_sequence: u64,
-    session_id: u64,
-    session_version: u8,
+    verify_data: *const HeaderData,
     expected: *const u8,
 ) -> bool {
-    let mut verify_data = HeaderData {
-        session_private_key: [0u8; RELAY_SESSION_PRIVATE_KEY_BYTES],
-        packet_type,
-        packet_sequence,
-        session_id,
-        session_version,
-    };
-    copy_bytes_32(
-        session_private_key,
-        verify_data.session_private_key.as_mut_ptr(),
-    );
-
     let mut hash = [0u8; 32];
-    let p0 = core::hint::black_box(&verify_data as *const HeaderData as *const u8);
-    let p1 = core::hint::black_box(core::mem::size_of::<HeaderData>() as i32);
-    let p2 = core::hint::black_box(hash.as_mut_ptr());
-    let p3 = core::hint::black_box(32_i32);
-    bpf_relay_sha256(p0, p1, p2, p3);
+    bpf_relay_sha256(
+        verify_data as *const u8,
+        core::mem::size_of::<HeaderData>() as i32,
+        hash.as_mut_ptr(),
+        32,
+    );
 
     bytes_equal(hash.as_ptr(), expected, 8)
 }
@@ -722,16 +698,26 @@ unsafe fn handle_relay_ping(
     }
 
     // Verify ping token
-    let ping_token = payload.add(8 + 8 + 1);
-    if !verify_ping_token(
-        (*ip).saddr,
-        (*udp).source,
-        config,
-        state,
+    // Pick primary/fallback dest address by matching the arrival daddr.
+    let (primary_addr, fallback_addr) = if (*ip).daddr == (*config).relay_internal_address {
+        ((*config).relay_internal_address, (*config).relay_public_address)
+    } else {
+        ((*config).relay_public_address, (*config).relay_internal_address)
+    };
+    let mut verify_data = PingTokenData {
+        ping_key: [0u8; RELAY_PING_KEY_BYTES],
         expire_timestamp,
-        ping_token,
-        (*ip).daddr,
-    ) {
+        source_address: (*ip).saddr,
+        source_port: (*udp).source,
+        dest_address: primary_addr,
+        dest_port: (*config).relay_port,
+    };
+    copy_bytes_32(
+        (*state).ping_key.as_ptr(),
+        verify_data.ping_key.as_mut_ptr(),
+    );
+    let ping_token = payload.add(8 + 8 + 1);
+    if !verify_ping_token(&mut verify_data, ping_token, fallback_addr) {
         increment_counter(stats, RELAY_COUNTER_RELAY_PING_PACKET_DID_NOT_VERIFY);
         return count_drop(stats, data_end - data);
     }
@@ -867,16 +853,26 @@ unsafe fn handle_server_ping(
         return count_drop(stats, data_end - data);
     }
 
-    let ping_token = payload.add(8 + 8);
-    if !verify_ping_token(
-        (*ip).saddr,
-        (*udp).source,
-        config,
-        state,
+    // Pick primary/fallback dest address by matching the arrival daddr.
+    let (primary_addr, fallback_addr) = if (*ip).daddr == (*config).relay_internal_address {
+        ((*config).relay_internal_address, (*config).relay_public_address)
+    } else {
+        ((*config).relay_public_address, (*config).relay_internal_address)
+    };
+    let mut verify_data = PingTokenData {
+        ping_key: [0u8; RELAY_PING_KEY_BYTES],
         expire_timestamp,
-        ping_token,
-        (*ip).daddr,
-    ) {
+        source_address: (*ip).saddr,
+        source_port: (*udp).source,
+        dest_address: primary_addr,
+        dest_port: (*config).relay_port,
+    };
+    copy_bytes_32(
+        (*state).ping_key.as_ptr(),
+        verify_data.ping_key.as_mut_ptr(),
+    );
+    let ping_token = payload.add(8 + 8);
+    if !verify_ping_token(&mut verify_data, ping_token, fallback_addr) {
         increment_counter(stats, RELAY_COUNTER_SERVER_PING_PACKET_DID_NOT_VERIFY);
         return count_drop(stats, data_end - data);
     }
@@ -1083,11 +1079,19 @@ unsafe fn handle_route_response(
         return count_drop(stats, data_end - data);
     }
 
-    let expected = header.add(8 + 8 + 1);
-    if !verify_session_header(
+    let mut verify_data = HeaderData {
+        session_private_key: [0u8; RELAY_SESSION_PRIVATE_KEY_BYTES],
+        packet_type,
+        packet_sequence,
+        session_id,
+        session_version,
+    };
+    copy_bytes_32(
         (*session).session_private_key.as_ptr(),
-        packet_type, packet_sequence, session_id, session_version, expected,
-    ) {
+        verify_data.session_private_key.as_mut_ptr(),
+    );
+    let expected = header.add(8 + 8 + 1);
+    if !verify_session_header(&verify_data, expected) {
         increment_counter(stats, RELAY_COUNTER_ROUTE_RESPONSE_PACKET_HEADER_DID_NOT_VERIFY);
         return count_drop(stats, data_end - data);
     }
@@ -1159,11 +1163,19 @@ unsafe fn handle_client_to_server(
         return count_drop(stats, data_end - data);
     }
 
-    let expected = header.add(8 + 8 + 1);
-    if !verify_session_header(
+    let mut verify_data = HeaderData {
+        session_private_key: [0u8; RELAY_SESSION_PRIVATE_KEY_BYTES],
+        packet_type,
+        packet_sequence,
+        session_id,
+        session_version,
+    };
+    copy_bytes_32(
         (*session).session_private_key.as_ptr(),
-        packet_type, packet_sequence, session_id, session_version, expected,
-    ) {
+        verify_data.session_private_key.as_mut_ptr(),
+    );
+    let expected = header.add(8 + 8 + 1);
+    if !verify_session_header(&verify_data, expected) {
         increment_counter(stats, RELAY_COUNTER_CLIENT_TO_SERVER_PACKET_HEADER_DID_NOT_VERIFY);
         return count_drop(stats, data_end - data);
     }
@@ -1235,11 +1247,19 @@ unsafe fn handle_server_to_client(
         return count_drop(stats, data_end - data);
     }
 
-    let expected = header.add(8 + 8 + 1);
-    if !verify_session_header(
+    let mut verify_data = HeaderData {
+        session_private_key: [0u8; RELAY_SESSION_PRIVATE_KEY_BYTES],
+        packet_type,
+        packet_sequence,
+        session_id,
+        session_version,
+    };
+    copy_bytes_32(
         (*session).session_private_key.as_ptr(),
-        packet_type, packet_sequence, session_id, session_version, expected,
-    ) {
+        verify_data.session_private_key.as_mut_ptr(),
+    );
+    let expected = header.add(8 + 8 + 1);
+    if !verify_session_header(&verify_data, expected) {
         increment_counter(stats, RELAY_COUNTER_SERVER_TO_CLIENT_PACKET_HEADER_DID_NOT_VERIFY);
         return count_drop(stats, data_end - data);
     }
@@ -1387,11 +1407,19 @@ unsafe fn handle_continue_response(
         return count_drop(stats, data_end - data);
     }
 
-    let expected = header.add(8 + 8 + 1);
-    if !verify_session_header(
+    let mut verify_data = HeaderData {
+        session_private_key: [0u8; RELAY_SESSION_PRIVATE_KEY_BYTES],
+        packet_type,
+        packet_sequence,
+        session_id,
+        session_version,
+    };
+    copy_bytes_32(
         (*session).session_private_key.as_ptr(),
-        packet_type, packet_sequence, session_id, session_version, expected,
-    ) {
+        verify_data.session_private_key.as_mut_ptr(),
+    );
+    let expected = header.add(8 + 8 + 1);
+    if !verify_session_header(&verify_data, expected) {
         increment_counter(stats, RELAY_COUNTER_CONTINUE_RESPONSE_PACKET_HEADER_DID_NOT_VERIFY);
         return count_drop(stats, data_end - data);
     }
@@ -1457,11 +1485,19 @@ unsafe fn handle_session_ping(
         return count_drop(stats, data_end - data);
     }
 
-    let expected = header.add(8 + 8 + 1);
-    if !verify_session_header(
+    let mut verify_data = HeaderData {
+        session_private_key: [0u8; RELAY_SESSION_PRIVATE_KEY_BYTES],
+        packet_type,
+        packet_sequence,
+        session_id,
+        session_version,
+    };
+    copy_bytes_32(
         (*session).session_private_key.as_ptr(),
-        packet_type, packet_sequence, session_id, session_version, expected,
-    ) {
+        verify_data.session_private_key.as_mut_ptr(),
+    );
+    let expected = header.add(8 + 8 + 1);
+    if !verify_session_header(&verify_data, expected) {
         increment_counter(stats, RELAY_COUNTER_SESSION_PING_PACKET_HEADER_DID_NOT_VERIFY);
         return count_drop(stats, data_end - data);
     }
@@ -1527,11 +1563,19 @@ unsafe fn handle_session_pong(
         return count_drop(stats, data_end - data);
     }
 
-    let expected = header.add(8 + 8 + 1);
-    if !verify_session_header(
+    let mut verify_data = HeaderData {
+        session_private_key: [0u8; RELAY_SESSION_PRIVATE_KEY_BYTES],
+        packet_type,
+        packet_sequence,
+        session_id,
+        session_version,
+    };
+    copy_bytes_32(
         (*session).session_private_key.as_ptr(),
-        packet_type, packet_sequence, session_id, session_version, expected,
-    ) {
+        verify_data.session_private_key.as_mut_ptr(),
+    );
+    let expected = header.add(8 + 8 + 1);
+    if !verify_session_header(&verify_data, expected) {
         increment_counter(stats, RELAY_COUNTER_SESSION_PONG_PACKET_HEADER_DID_NOT_VERIFY);
         return count_drop(stats, data_end - data);
     }
