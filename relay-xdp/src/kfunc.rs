@@ -979,6 +979,21 @@ pub fn raw_load_xdp(insns: &[aya_obj::generated::bpf_insn], module_btf_fd: i32) 
         );
     }
 
+    // Read kernel version to correlate with BPF ABI
+    if let Ok(ver) = std::fs::read_to_string("/proc/version") {
+        log::info!("raw_load_xdp: kernel = {}", ver.trim());
+    }
+
+    // Check what /proc/self/fd/<btf_fd> actually points to.
+    // For a real BTF fd this should be "anon_inode:[btf]".
+    // If it shows something different, the fd type is the root cause.
+    let fd_link = std::fs::read_link(format!("/proc/self/fd/{}", module_btf_fd));
+    log::info!(
+        "raw_load_xdp: /proc/self/fd/{} -> {:?}",
+        module_btf_fd,
+        fd_link
+    );
+
     // --- Debug: log instruction[0] and all src_reg=2 kfunc instructions ---
     if let Some(insn0) = insns.first() {
         log::info!(
