@@ -193,12 +193,50 @@ unsafe fn relay_xchacha20poly1305_decrypt(
 // =====================================================================
 // BPF helper imports
 // =====================================================================
+//
+// LLVM eBPF backend has a long-standing bug where args are not always
+// materialized into r1-r5 right before a `call <helper_id>` instruction
+// when the helper is reached via `extern "C"` or function pointer
+// transmute. The kernel verifier then rejects the call with
+// "R1 type=scalar expected=ctx" or similar. To guarantee the argument
+// layout we emit the helper call from inline asm with explicit
+// `in("rN")` constraints, mirroring the kfunc wrappers above.
 
-extern "C" {
-    #[allow(improper_ctypes)]
-    fn bpf_xdp_adjust_head(xdp_md: *mut aya_ebpf::bindings::xdp_md, delta: i32) -> i64;
-    #[allow(improper_ctypes)]
-    fn bpf_xdp_adjust_tail(xdp_md: *mut aya_ebpf::bindings::xdp_md, delta: i32) -> i64;
+/// Safe wrapper around BPF helper `bpf_xdp_adjust_head` (id 44).
+#[inline(always)]
+unsafe fn bpf_xdp_adjust_head(
+    xdp_md: *mut aya_ebpf::bindings::xdp_md,
+    delta: i32,
+) -> i64 {
+    let rc: i64;
+    core::arch::asm!(
+        "call 44",
+        in("r1") xdp_md,
+        in("r2") delta as i64,
+        lateout("r0") rc,
+        clobber_abi("C"),
+        options(nostack, preserves_flags),
+    );
+    rc
+}
+
+/// Safe wrapper around BPF helper `bpf_xdp_adjust_tail` (id 65).
+#[inline(always)]
+#[allow(dead_code)]
+unsafe fn bpf_xdp_adjust_tail(
+    xdp_md: *mut aya_ebpf::bindings::xdp_md,
+    delta: i32,
+) -> i64 {
+    let rc: i64;
+    core::arch::asm!(
+        "call 65",
+        in("r1") xdp_md,
+        in("r2") delta as i64,
+        lateout("r0") rc,
+        clobber_abi("C"),
+        options(nostack, preserves_flags),
+    );
+    rc
 }
 
 // Map update flags
