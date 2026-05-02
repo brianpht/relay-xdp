@@ -113,8 +113,8 @@ aws configure --profile relay-xdp-infra
 
 | Key | Production | Staging | Description |
 |-----|-----------|---------|-------------|
-| `relay_regions` | `[us-east-1, eu-west-1, ap-southeast-1]` | `[us-east-1]` | AWS regions for relay nodes |
-| `relay_count` | `3` | `1` | Number of relay nodes |
+| `relay_regions` | `[us-east-1, eu-west-1, ap-southeast-1]` | `[us-east-1, eu-west-1, ap-southeast-1]` | AWS regions for relay nodes |
+| `relay_count` | `3` | `3` | Number of relay nodes |
 | `relay_instance_type` | `c5n.xlarge` | `t3.medium` | EC2 type for relay nodes |
 | `backend_region` | `us-east-1` | `us-east-1` | Region for backend node |
 | `backend_instance_type` | `c5.large` | `t3.medium` | EC2 type for backend |
@@ -131,9 +131,16 @@ aws configure --profile relay-xdp-infra
 
 ## WARNING: EIP Cost
 
-Each relay node has an Elastic IP. AWS charges $0.005/hr per EIP when the
-associated instance is stopped (but not terminated). Run
-`pulumi destroy --stack staging` when staging is not in use to avoid idle charges.
+Each node (relay + backend) has an Elastic IP. AWS charges $0.005/hr per EIP
+when the associated instance is stopped (but not terminated).
+
+Current EIP count per stack:
+- Staging:    4 EIPs (3 relay + 1 backend) = ~$0.02/hr when all instances stopped
+- Production: 4 EIPs (3 relay + 1 backend) = ~$0.02/hr when all instances stopped
+
+Run `pulumi destroy --stack staging` when staging is not in use to avoid idle charges.
+Production EIPs are intentionally persistent - destroying them invalidates game client
+configs that reference relay public addresses.
 
 ## File Structure
 

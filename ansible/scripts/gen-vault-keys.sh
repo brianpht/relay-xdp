@@ -98,9 +98,11 @@ echo "# ENCRYPT IMMEDIATELY - do not commit this file unencrypted." >&2
 echo "" >&2
 
 if [[ "$ENVIRONMENT" == "staging" ]]; then
-  RELAY_NAMES=("relay-staging-1")
+  RELAY_NAMES=("relay-staging-1" "relay-staging-2" "relay-staging-3")
 else
-  RELAY_NAMES=("relay-prod-1" "relay-prod-2" "relay-prod-3")
+  # Node names must match Pulumi output: relay-{stack_name}-{n}
+  # stack_name for production stack = "production"
+  RELAY_NAMES=("relay-production-1" "relay-production-2" "relay-production-3")
 fi
 
 # Backend keypair

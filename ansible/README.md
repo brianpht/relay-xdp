@@ -49,7 +49,8 @@ ansible/
 ```bash
 cd ansible
 
-# Generate keypairs and encrypt immediately
+# Generate keypairs (staging: 3 relay nodes, production: 3 relay nodes)
+# and encrypt immediately - plaintext file is shredded after encryption.
 ./scripts/gen-vault-keys.sh staging > /tmp/vault_staging_plain.yml
 ansible-vault encrypt --output playbooks/group_vars/staging/vault.yml /tmp/vault_staging_plain.yml
 shred -u /tmp/vault_staging_plain.yml
@@ -60,13 +61,24 @@ ansible-vault encrypt --output playbooks/group_vars/production/vault.yml /tmp/va
 shred -u /tmp/vault_production_plain.yml
 ```
 
+Note: relay node names in the vault MUST match Pulumi output names:
+- Staging:    `relay-staging-1`, `relay-staging-2`, `relay-staging-3`
+- Production: `relay-production-1`, `relay-production-2`, `relay-production-3`
+
 ### 2. Full deploy to staging
 
 ```bash
 cd ansible
+
+# Interactive (prompts for vault password)
 ansible-playbook -i inventory/staging.yml playbooks/site.yml \
   -e relay_version=v1.2.3 \
   --ask-vault-pass
+
+# Non-interactive (e.g. scripted or CI)
+ansible-playbook -i inventory/staging.yml playbooks/site.yml \
+  -e relay_version=v1.2.3 \
+  --vault-password-file <(echo "staging")
 ```
 
 ### 3. Rolling deploy to production
@@ -86,7 +98,7 @@ proceeding. Stops on first failure - run `rollback.yml` to restore.
 ```bash
 cd ansible
 ansible-playbook -i inventory/production.yml playbooks/rollback.yml \
-  --limit relay-prod-2 \
+  --limit relay-production-2 \
   --ask-vault-pass
 ```
 

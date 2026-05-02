@@ -13,13 +13,21 @@ all:
         backend_servers:
           hosts:
             backend-staging-1:
-              ansible_host: 98.95.54.111
+              ansible_host: 52.72.87.111
               ansible_user: ubuntu
         relay_servers:
           hosts:
             relay-staging-1:
-              ansible_host: 54.86.177.211
+              ansible_host: 98.85.61.157
               ansible_user: ubuntu
               relay_name: relay-staging-1
+            relay-staging-2:
+              ansible_host: 34.242.181.210
+              ansible_user: ubuntu
+              relay_name: relay-staging-2
+            relay-staging-3:
+              ansible_host: 52.74.50.135
+              ansible_user: ubuntu
+              relay_name: relay-staging-3
   vars:
     ansible_python_interpreter: /usr/bin/python3

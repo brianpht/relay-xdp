@@ -4,7 +4,7 @@ __main__.py - Pulumi entrypoint for relay-xdp-infra.
 Orchestrates all AWS resources across regions:
   - Production:  3x RelayNode (us-east-1, eu-west-1, ap-southeast-1)
                + 1x BackendNode (us-east-1)
-  - Staging:     1x RelayNode (us-east-1)
+  - Staging:     3x RelayNode (us-east-1, eu-west-1, ap-southeast-1)
                + 1x BackendNode (us-east-1)
 
 Stack config is read from Pulumi.<stack>.yaml via config.load().

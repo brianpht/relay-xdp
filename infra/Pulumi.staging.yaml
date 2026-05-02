@@ -1,7 +1,9 @@
 config:
   relay-xdp-infra:relay_regions:
     - us-east-1
-  relay-xdp-infra:relay_count: "1"
+    - eu-west-1
+    - ap-southeast-1
+  relay-xdp-infra:relay_count: "3"
   relay-xdp-infra:relay_instance_type: t3.medium
   relay-xdp-infra:backend_region: us-east-1
   relay-xdp-infra:backend_instance_type: t3.medium
