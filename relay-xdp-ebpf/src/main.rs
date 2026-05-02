@@ -164,6 +164,32 @@ unsafe fn relay_sha256(
     rc as i32
 }
 
+/// Safe wrapper around `bpf_relay_xchacha20poly1305_decrypt`. Same LLVM eBPF
+/// backend issue as `relay_sha256`: the kernel verifier rejects the bare
+/// extern call with "arg#0 pointer type UNKNOWN must point to scalar, or
+/// struct with scalar" because LLVM does not materialize r1-r3 for the kfunc.
+/// Emitting the call from inline asm with explicit `in("rN")` constraints
+/// guarantees the correct argument layout.
+#[inline(always)]
+unsafe fn relay_xchacha20poly1305_decrypt(
+    data: *mut u8,
+    data_sz: i32,
+    crypto: *const Chacha20Poly1305Crypto,
+) -> i32 {
+    let rc: i64;
+    core::arch::asm!(
+        "call {kfunc}",
+        kfunc = sym bpf_relay_xchacha20poly1305_decrypt,
+        in("r1") data,
+        in("r2") data_sz as i64,
+        in("r3") crypto,
+        lateout("r0") rc,
+        clobber_abi("C"),
+        options(nostack, preserves_flags),
+    );
+    rc as i32
+}
+
 // =====================================================================
 // BPF helper imports
 // =====================================================================
@@ -595,7 +621,7 @@ unsafe fn decrypt_route_token(config: *const RelayConfig, route_token: *mut u8) 
         (*config).relay_secret_key.as_ptr(),
         crypto.key.as_mut_ptr(),
     );
-    bpf_relay_xchacha20poly1305_decrypt(
+    relay_xchacha20poly1305_decrypt(
         encrypted,
         (RELAY_ENCRYPTED_ROUTE_TOKEN_BYTES - 24) as i32,
         &crypto,
@@ -615,7 +641,7 @@ unsafe fn decrypt_continue_token(config: *const RelayConfig, continue_token: *mu
         (*config).relay_secret_key.as_ptr(),
         crypto.key.as_mut_ptr(),
     );
-    bpf_relay_xchacha20poly1305_decrypt(
+    relay_xchacha20poly1305_decrypt(
         encrypted,
         (RELAY_ENCRYPTED_CONTINUE_TOKEN_BYTES - 24) as i32,
         &crypto,
