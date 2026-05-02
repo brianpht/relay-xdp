@@ -2,19 +2,20 @@
 //! Port of `relay_bpf.c`.
 //!
 //! Loading flow:
-//!   1. Read ELF bytes from disk.
-//!   2a. Patch kfunc call sites: src_reg 1->2 so aya-obj skips them.
-//!   2b. Patch BPF helper calls: src_reg 1->0, imm -> kernel helper ID.
-//!       Needed because aya-obj filters UNDEF-symbol relocations and falls
-//!       through to a pc-relative lookup that fails with UnknownFunction.
-//!   3. Ebpf::load(patched) to create all 6 maps (aya manages map FDs).
-//!   4. Extract raw map FDs via typed-map API.
-//!   5. Patch map FD values directly into ELF bytes (bypass relocate_maps).
-//!   6. aya_obj second parse + relocate_calls => flat instruction Vec.
-//!   7. Find relay_module.ko BTF, parse kfunc BTF type IDs.
-//!   8. Patch kfunc instructions with BTF IDs and fd_array index.
-//!   9. raw BPF_PROG_LOAD with fd_array -> prog_fd.
-//!  10. raw BPF_LINK_CREATE -> link_fd (holds XDP attachment for NIC lifetime).
+//!
+//! 1. Read ELF bytes from disk.
+//! 2. Patch kfunc call sites: src_reg 1->2 so aya-obj skips them.
+//! 3. Patch BPF helper calls: src_reg 1->0, imm -> kernel helper ID
+//!    (aya-obj filters UNDEF-symbol relocations and falls through to a
+//!    pc-relative lookup that fails with UnknownFunction without this).
+//! 4. Ebpf::load(patched) to create all 6 maps (aya manages map FDs).
+//! 5. Extract raw map FDs via typed-map API.
+//! 6. Patch map FD values directly into ELF bytes (bypass relocate_maps).
+//! 7. aya_obj second parse + relocate_calls => flat instruction Vec.
+//! 8. Find relay_module.ko BTF, parse kfunc BTF type IDs.
+//! 9. Patch kfunc instructions with BTF IDs and fd_array index.
+//! 10. raw BPF_PROG_LOAD with fd_array -> prog_fd.
+//! 11. raw BPF_LINK_CREATE -> link_fd (holds XDP attachment for NIC lifetime).
 
 use anyhow::{Context, Result};
 use aya::maps::{Array, HashMap as AyaHashMap, IterableMap, MapData, PerCpuArray};
