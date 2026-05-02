@@ -29,9 +29,21 @@ standard load path has two hard failures against this output:
    via `bpf_attr.fd_array`. Without this, `BPF_PROG_LOAD` fails because the
    kfunc type IDs reference the module's BTF namespace, not vmlinux.
 
-Additionally, `relay-xdp-ebpf` uses inline asm `core::arch::asm!` for kfunc
-calls to work around an LLVM eBPF backend bug that does not materialize r1-r4
-argument registers for extern calls declared the normal way.
+**LLVM eBPF backend register materialization bug:** `relay-xdp-ebpf` cannot
+use normal `extern "C"` declarations for kfunc calls. The LLVM eBPF backend
+does not materialize argument registers r1-r4 before the call instruction when
+an external symbol is used as a direct call target. The BPF verifier rejects
+the program because those argument registers appear undefined at the call site.
+The workaround is `core::arch::asm!` with explicit `in("r1")` .. `in("r4")`
+register constraints, forcing LLVM to emit the register loads before the call.
+
+**`#[inline(never)]` subroutine sections:** Two verifier-heavy functions
+(`verify_ping_token`, `verify_session_header`) are marked `#[inline(never)]`
+to stay within the 512-byte eBPF stack limit. `bpf-linker` places them in
+`.text` sections (not the main `xdp` section). Both functions contain kfunc
+calls, so any ELF patching pass must walk all `.text*` sections in addition to
+the `xdp` section, or those kfunc call sites will be missed and the verifier
+will reject the program.
 
 The consequence of inaction: the relay binary cannot load the XDP program at
 all when `relay_module.ko` is loaded and kfuncs are required.
@@ -54,23 +66,34 @@ all when `relay_module.ko` is loaded and kfuncs are required.
 ### Option B: Custom ELF patcher + raw BPF syscalls in-tree (kfunc.rs)
 
 - **Description:** Keep Aya only for map creation and map FD access (what it
-  does well). Implement a standalone `kfunc.rs` module that:
-  1. Patches kfunc call sites (src_reg 1->2, encode kfunc index in imm).
-  2. Patches BPF helper calls (src_reg 1->0, imm -> kernel helper ID).
-  3. Patches map FD values directly into `BPF_LD_IMM64` instructions in the
-     ELF, bypassing `relocate_maps()`.
-  4. Calls `aya_obj::relocate_calls()` on the patched ELF (kfunc stubs are
-     skipped because src_reg=2).
-  5. Enumerates loaded BTF objects via `BPF_BTF_GET_NEXT_ID` to find
-     `relay_module` BTF.
-  6. Parses split BTF (module local types + vmlinux base offsets) to compute
-     global kfunc type IDs.
-  7. Patches kfunc instructions with final `imm=btf_type_id`,
-     `off=fd_array_idx`.
-  8. Calls `BPF_PROG_LOAD` with `fd_array=[0, module_btf_fd]` via raw
-     `libc::syscall`.
-  9. Calls `BPF_LINK_CREATE` with native XDP, fallback to SKB mode on
-     `EOPNOTSUPP`/`EINVAL`.
+  does well). Implement a standalone `kfunc.rs` module (~1309 lines) that
+  executes an 11-step load pipeline matching `bpf.rs`:
+  1. Read ELF bytes from disk.
+  2. Patch kfunc call sites in all code sections (`xdp` + `.text*`): set
+     src_reg 1->2 (`BPF_PSEUDO_KFUNC_CALL`) so `aya-obj` skips them in
+     `relocate_calls()`. Encode the kfunc index (not -1) into `imm` as an
+     identity marker, because `aya_obj::relocate_calls()` reorders instructions
+     when inlining `.text` subroutines - positional order is unreliable after
+     flattening. The index in `imm` lets `patch_kfunc_instructions()` map each
+     call site to its correct BTF type ID regardless of instruction reordering.
+  2b. Patch standard BPF helper calls: src_reg 1->0, imm -> kernel helper ID.
+      With src_reg=0, `insn_is_call()` returns false and `aya-obj` skips them.
+  3. `Ebpf::load(patched_elf)` to create all 6 maps (Aya manages map FDs).
+  4. Extract raw map FDs via Aya typed-map API.
+  5. Patch map FD values directly into `BPF_LD_IMM64` instructions in the ELF,
+     bypassing `relocate_maps()`.
+  6. Second `aya_obj` parse + `relocate_calls()` to flatten `.text` subroutines
+     into a single instruction Vec.
+  7. Find `relay_module.ko` BTF via `BPF_BTF_GET_NEXT_ID` enumeration; parse
+     split BTF (module local types + vmlinux base offsets) to compute global
+     kfunc type IDs.
+  8. Patch kfunc instructions with final `imm=btf_type_id`, `off=fd_array_idx`
+     using the kfunc index stored in step 2 as the lookup key.
+  9. `BPF_PROG_LOAD` via raw `libc::syscall` with `fd_array=[0, module_btf_fd]`
+     and a 256 KB verifier log buffer.
+  10. Close `module_btf_fd` (no longer needed after load).
+  11. `BPF_LINK_CREATE` with native XDP mode; fallback to SKB (generic) mode on
+      `EOPNOTSUPP`/`EINVAL` (e.g., ENA driver on t3.medium).
 - **Pros:** Zero Aya fork. Self-contained, auditable, fully tested in-tree
   (unit tests in `kfunc.rs`, integration via `relay_xdp_rust.o`). Pinned
   to our exact requirements - no churn from unrelated Aya changes. The raw
@@ -108,19 +131,20 @@ append-only (old fields never change meaning). The `R_BPF_64_32` relocation
 format and BTF binary format are similarly stable. This makes maintenance risk
 low once the implementation is correct and tested.
 
-The 256 KB verifier log buffer in `raw_load_xdp` ensures that any future
-verifier rejections produce actionable diagnostics, reducing the risk of silent
-failures.
-
 ## Consequences
 
 - **Positive:** No Aya fork to maintain. Load path is fully auditable in-tree.
   Native + SKB XDP mode auto-fallback works correctly for both production
   (native, c5n.xlarge) and staging (SKB, t3.medium) instances. Unit tests
   exercise the ELF patching logic against the real `relay_xdp_rust.o` object.
+  The 256 KB verifier log buffer in `raw_load_xdp` ensures that any verifier
+  rejection produces actionable diagnostics with the exact failing instruction
+  and register state - critical for debugging future eBPF changes in production.
 - **Negative:** ~1309 lines of low-level syscall code to own. Must be revisited
   if `bpf-linker` changes its UNDEF relocation strategy or if the BPF ELF
-  format changes (unlikely - both are de-facto stable).
+  format changes (unlikely - both are de-facto stable). The `imm`-as-identity
+  trick in step 2 is a non-obvious convention; must be preserved if kfunc.rs is
+  refactored.
 - **Neutral:** Aya is still used for map creation, map FD management, and
   userspace map access. Only the program load + attach path is bypassed.
   Relationship with Aya is partial, not eliminated.
@@ -142,6 +166,9 @@ failures.
 - Aya adds first-class `fd_array` support and module kfunc loading
   (`aya::Ebpf::load_with_fd_array` or equivalent) - Option A may become viable
   with low maintenance cost at that point.
+- The LLVM eBPF backend bug (register materialization for extern calls) is
+  fixed - the `core::arch::asm!` workarounds in `relay-xdp-ebpf` can then be
+  replaced with normal `extern "C"` declarations.
 - Kernel BPF ABI breaks compatibility (extremely unlikely; BPF ABI is
   guaranteed stable by the kernel community).
 
@@ -156,4 +183,3 @@ failures.
    2026-05-02).
 5. Production deploy to follow using same Ansible playbook, native XDP mode
    expected on c5n.xlarge (ENA driver supports native XDP).
-
