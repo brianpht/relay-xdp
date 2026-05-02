@@ -1,0 +1,20 @@
+{
+  "relays": [
+{%- set relay_hosts = groups['relay_servers'] | sort %}
+{%- for host in relay_hosts %}
+{%- set rname = hostvars[host]['relay_name'] %}
+{%- set pubaddr = hostvars[host]['ansible_host'] ~ ':' ~ relay_udp_port %}
+    {
+      "name": "{{ rname }}",
+      "address": "{{ pubaddr }}",
+      "datacenter_id": {{ loop.index }},
+      "price": 0,
+      "dest": true,
+      "public_key": "{{ vault_relay_keys[rname].public_key }}"
+    }{% if not loop.last %},{% endif %}
+
+{%- endfor %}
+
+  ]
+}
+

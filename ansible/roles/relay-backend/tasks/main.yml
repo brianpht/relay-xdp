@@ -11,6 +11,15 @@
     group: root
   notify: restart relay-backend
 
+- name: Deploy relay data file (relays.json)
+  ansible.builtin.template:
+    src: relays.json.j2
+    dest: "{{ relay_conf_dir }}/relays.json"
+    owner: "{{ relay_user }}"
+    group: "{{ relay_group }}"
+    mode: "0640"
+  notify: restart relay-backend
+
 - name: Deploy relay-backend environment file
   ansible.builtin.template:
     src: backend.env.j2
