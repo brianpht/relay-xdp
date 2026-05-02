@@ -620,6 +620,16 @@ pub fn find_module_btf(module_name: &str) -> Result<(i32, Vec<u8>)> {
         }
 
         // Found the module - fetch the raw BTF bytes
+        log::info!(
+            "find_module_btf: found '{}' BTF id={} btf_size={} bytes",
+            found_name, next_id, btf_size
+        );
+        if btf_size == 0 {
+            bail!(
+                "module BTF '{}' has btf_size=0 - module may not have BTF compiled in (missing CONFIG_DEBUG_INFO_BTF_MODULES or pahole)",
+                module_name
+            );
+        }
         let mut btf_data = vec![0u8; btf_size as usize];
         get_btf_data(btf_fd, &mut btf_data)?;
 
@@ -731,21 +741,47 @@ pub fn parse_btf_func_ids(btf: &[u8], names: &[&str]) -> Result<HashMap<String, 
     let type_off = u32::from_le_bytes(btf[8..12].try_into().expect("4 bytes")) as usize;
     let type_len = u32::from_le_bytes(btf[12..16].try_into().expect("4 bytes")) as usize;
     let str_off = u32::from_le_bytes(btf[16..20].try_into().expect("4 bytes")) as usize;
+    let str_len = u32::from_le_bytes(btf[20..24].try_into().expect("4 bytes")) as usize;
+
+    log::info!(
+        "parse_btf_func_ids: btf_len={} hdr_len={} type_off={} type_len={} str_off={} str_len={}",
+        btf.len(), hdr_len, type_off, type_len, str_off, str_len
+    );
 
     let type_section_start = hdr_len + type_off;
     let type_section_end = type_section_start + type_len;
     let str_section_start = hdr_len + str_off;
+    let str_section_end = str_section_start + str_len;
 
-    if type_section_end > btf.len() || str_section_start > btf.len() {
-        bail!("BTF type/string section out of bounds");
+    if type_section_end > btf.len() || str_section_end > btf.len() {
+        bail!(
+            "BTF type/string section out of bounds: btf_len={} type={}..{} str={}..{}",
+            btf.len(), type_section_start, type_section_end, str_section_start, str_section_end
+        );
     }
 
     let type_bytes = &btf[type_section_start..type_section_end];
-    let str_bytes = &btf[str_section_start..];
+    let str_bytes = &btf[str_section_start..str_section_end];
+
+    // Compute base type ID offset from vmlinux BTF so the IDs we return are
+    // the correct "global" IDs that the BPF verifier expects when resolving
+    // kfunc calls via fd_array.  Module BTF is split BTF: its raw bytes only
+    // contain the module-local types, but the kernel numbers them starting at
+    // vmlinux_nr_types + 1.  Reading vmlinux from sysfs is the most reliable
+    // way to get the base count.
+    let base_nr_types = get_vmlinux_nr_types().unwrap_or_else(|e| {
+        log::warn!("failed to get vmlinux type count ({}), assuming base_nr_types=0; kfunc IDs may be wrong", e);
+        0
+    });
+    log::info!(
+        "parse_btf_func_ids: vmlinux base_nr_types={} -> module type IDs start at {}",
+        base_nr_types, base_nr_types + 1
+    );
 
     let mut result = HashMap::new();
     let mut pos: usize = 0;
-    let mut type_id: u32 = 1; // BTF type IDs are 1-based; ID 0 = void
+    let mut local_type_id: u32 = 1; // 1-based within module BTF section
+    let mut func_count: u32 = 0;
 
     while pos + 12 <= type_bytes.len() {
         let name_off = u32::from_le_bytes(type_bytes[pos..pos + 4].try_into().expect("4")) as usize;
@@ -755,35 +791,91 @@ pub fn parse_btf_func_ids(btf: &[u8], names: &[&str]) -> Result<HashMap<String, 
 
         // BTF_KIND_FUNC = 12 - function declaration (0 extra bytes)
         if kind == 12 {
-            // Read function name from string section
+            func_count += 1;
+            // Global BTF type ID = vmlinux base count + local position
+            let global_type_id = base_nr_types + local_type_id;
             if name_off < str_bytes.len() {
                 let name_bytes = &str_bytes[name_off..];
                 if let Ok(cstr) = std::ffi::CStr::from_bytes_until_nul(name_bytes) {
                     let name = cstr.to_string_lossy();
+                    log::info!(
+                        "parse_btf_func_ids: FUNC local_id={} global_id={} name='{}'",
+                        local_type_id, global_type_id, name
+                    );
                     if names.contains(&name.as_ref()) {
-                        result.insert(name.into_owned(), type_id);
+                        result.insert(name.into_owned(), global_type_id);
                     }
                 }
+            } else {
+                log::warn!(
+                    "parse_btf_func_ids: FUNC local_id={} name_off={} out of str_bytes (len={})",
+                    local_type_id, name_off, str_bytes.len()
+                );
             }
         }
 
         // Advance past this type entry: 12 base bytes + extra bytes per kind
         let extra = btf_kind_extra_bytes(kind, vlen);
+        log::debug!(
+            "parse_btf_func_ids: pos={} kind={} vlen={} extra={} local_id={}",
+            pos, kind, vlen, extra, local_type_id
+        );
         pos += 12 + extra;
-        type_id += 1;
+        local_type_id += 1;
     }
+
+    log::info!(
+        "parse_btf_func_ids: iterated {} types, found {} FUNC entries, matched {}/{}",
+        local_type_id - 1, func_count, result.len(), names.len()
+    );
 
     // Verify all requested names were found
     for name in names {
         if !result.contains_key(*name) {
             bail!(
-                "BTF func '{}' not found in module BTF - module may need rebuild",
-                name
+                "BTF func '{}' not found in module BTF (base_nr_types={}, {} types parsed, {} FUNC entries) - module may need rebuild",
+                name, base_nr_types, local_type_id - 1, func_count
             );
         }
     }
 
     Ok(result)
+}
+
+/// Counts the number of types in the vmlinux BTF by reading /sys/kernel/btf/vmlinux.
+/// Returns the total type count so module BTF type IDs can be correctly offset.
+fn get_vmlinux_nr_types() -> Result<u32> {
+    let vmlinux_btf = std::fs::read("/sys/kernel/btf/vmlinux")
+        .context("failed to read /sys/kernel/btf/vmlinux")?;
+
+    if vmlinux_btf.len() < 24 {
+        bail!("vmlinux BTF too short");
+    }
+
+    let hdr_len = u32::from_le_bytes(vmlinux_btf[4..8].try_into().expect("4")) as usize;
+    let type_off = u32::from_le_bytes(vmlinux_btf[8..12].try_into().expect("4")) as usize;
+    let type_len = u32::from_le_bytes(vmlinux_btf[12..16].try_into().expect("4")) as usize;
+
+    let type_start = hdr_len + type_off;
+    let type_end = type_start + type_len;
+    if type_end > vmlinux_btf.len() {
+        bail!("vmlinux BTF type section out of bounds");
+    }
+
+    let type_bytes = &vmlinux_btf[type_start..type_end];
+    let mut pos = 0usize;
+    let mut nr_types: u32 = 0;
+
+    while pos + 12 <= type_bytes.len() {
+        let info = u32::from_le_bytes(type_bytes[pos + 4..pos + 8].try_into().expect("4"));
+        let kind = (info >> 24) & 0x1f;
+        let vlen = (info & 0xffff) as usize;
+        let extra = btf_kind_extra_bytes(kind, vlen);
+        pos += 12 + extra;
+        nr_types += 1;
+    }
+
+    Ok(nr_types)
 }
 
 /// Returns extra bytes after the 12-byte type base depending on BTF kind.
