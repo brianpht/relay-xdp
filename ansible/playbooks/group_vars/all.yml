@@ -2,7 +2,7 @@
 # Override in group_vars/staging.yml or group_vars/production.yml.
 
 # ---- Artifact / version ------------------------------------------------
-relay_version: "v0.1.0-alpha.4"
+relay_version: "v0.1.0-alpha.5"
 github_repo: "brianpht/relay-xdp"
 artifact_base_url: "https://github.com/{{ github_repo }}/releases/download/{{ relay_version }}"
 
@@ -26,7 +26,7 @@ min_kernel_minor: 5
 
 # ---- Logging -----------------------------------------------------------
 rust_log: info
-rust_backtrace: 0
+rust_backtrace: 1
 
 # ---- Timeouts / intervals ----------------------------------------------
 relay_ping_interval_ms: 100

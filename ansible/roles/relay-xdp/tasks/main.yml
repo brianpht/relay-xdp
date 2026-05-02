@@ -90,55 +90,56 @@
   # No live service in check mode - skip all post-deploy verification.
   when: not ansible_check_mode
 
-- name: Verify relay-xdp systemd service is active
-  ansible.builtin.command:
-    cmd: systemctl is-active relay-xdp
-  register: svc_active
-  changed_when: false
-  # Retry while service is still "activating" (BPF attach + XDP setup can take >5s)
-  until: svc_active.stdout == "active"
-  retries: "{{ relay_verify_retries }}"
-  delay: "{{ relay_verify_delay_s }}"
-  failed_when: svc_active.stdout not in ["active", "activating"]
+# Verification block: always capture journal so failures are diagnosable.
+- name: Verify relay-xdp startup and XDP attachment
   when: not ansible_check_mode
+  block:
+    - name: Verify relay-xdp systemd service is active
+      ansible.builtin.command:
+        cmd: systemctl is-active relay-xdp
+      register: svc_active
+      changed_when: false
+      # Retry while service is still "activating" (kfunc load + XDP attach can take >5s)
+      until: svc_active.stdout == "active"
+      retries: "{{ relay_verify_retries }}"
+      delay: "{{ relay_verify_delay_s }}"
+      failed_when: svc_active.stdout not in ["active", "activating"]
 
-- name: Verify XDP BPF program is loaded
-  ansible.builtin.command:
-    cmd: bpftool prog list
-  register: bpftool_output
-  changed_when: false
-  when: not ansible_check_mode
+    - name: Verify XDP BPF program is loaded
+      ansible.builtin.command:
+        cmd: bpftool prog list
+      register: bpftool_output
+      changed_when: false
 
-- name: Assert XDP program present in bpftool
-  ansible.builtin.assert:
-    that:
-      - "'xdp' in bpftool_output.stdout"
-    fail_msg: "XDP program not found in bpftool prog list. relay-xdp may have failed to attach."
-  when: not ansible_check_mode
+    - name: Assert XDP program present in bpftool
+      ansible.builtin.assert:
+        that:
+          - "'xdp' in bpftool_output.stdout"
+        fail_msg: "XDP program not found in bpftool prog list. relay-xdp may have failed to attach."
 
-- name: Verify relay_module kernel module is present
-  ansible.builtin.command:
-    cmd: lsmod
-  register: lsmod_output
-  changed_when: false
-  when: not ansible_check_mode
+    - name: Verify relay_module kernel module is present
+      ansible.builtin.command:
+        cmd: lsmod
+      register: lsmod_output
+      changed_when: false
 
-- name: Assert relay_module loaded
-  ansible.builtin.assert:
-    that:
-      - "'relay_module' in lsmod_output.stdout"
-    fail_msg: "relay_module not in lsmod - kernel module was unloaded."
-  when: not ansible_check_mode
+    - name: Assert relay_module loaded
+      ansible.builtin.assert:
+        that:
+          - "'relay_module' in lsmod_output.stdout"
+        fail_msg: "relay_module not in lsmod - kernel module was unloaded."
 
-- name: Check relay-xdp journal for startup message
-  ansible.builtin.command:
-    cmd: journalctl -u relay-xdp --since "{{ relay_startup_wait_s + 5 }} seconds ago" --no-pager
-  register: journal_output
-  changed_when: false
-  when: not ansible_check_mode
+  always:
+    # Always print the last 60 journal lines so failures are self-diagnosing
+    # without needing a second SSH session.
+    - name: Capture relay-xdp journal (last 60 lines)
+      ansible.builtin.command:
+        cmd: journalctl -u relay-xdp -n 60 --no-pager
+      register: journal_always
+      changed_when: false
+      failed_when: false
 
-- name: Print recent relay-xdp journal entries
-  ansible.builtin.debug:
-    msg: "{{ journal_output.stdout_lines[-20:] }}"
-  when: not ansible_check_mode
+    - name: Print relay-xdp journal
+      ansible.builtin.debug:
+        msg: "{{ journal_always.stdout_lines }}"
 

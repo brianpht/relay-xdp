@@ -751,47 +751,76 @@ pub fn raw_load_xdp(insns: &[aya_obj::generated::bpf_insn], module_btf_fd: i32) 
 // Step 9: attach XDP program via raw BPF_LINK_CREATE syscall
 // ---------------------------------------------------------------------------
 
+/// XDP_FLAGS_SKB_MODE - use kernel generic (SKB-based) XDP instead of native
+/// driver mode. Required for drivers that do not support native XDP
+/// (e.g., ENA on t3.medium AWS instances).
+const XDP_FLAGS_SKB_MODE: u32 = 1 << 1;
+
 /// Attaches the loaded XDP program to a network interface using `BPF_LINK_CREATE`.
 ///
 /// Returns the link file descriptor. Closing this fd detaches the XDP program
 /// from the interface. Keep it alive for the lifetime of the XDP attachment.
 ///
+/// Tries native mode (flags=0) first. If the driver does not support native XDP
+/// (EOPNOTSUPP), automatically retries with SKB (generic) mode.
+/// This handles staging instances (t3.medium/ENA) that only support generic XDP.
+///
 /// `bpf_attr` for BPF_LINK_CREATE (XDP):
-///   offset 0: prog_fd      (u32)
+///   offset 0: prog_fd        (u32)
 ///   offset 4: target_ifindex (u32) - network interface index
-///   offset 8: attach_type  (u32) = BPF_XDP = 37
-///   offset 12: flags       (u32) = 0
+///   offset 8: attach_type    (u32) = BPF_XDP = 37
+///   offset 12: flags         (u32) = 0 (native) or XDP_FLAGS_SKB_MODE (2)
 pub fn raw_create_xdp_link(prog_fd: i32, ifindex: u32) -> Result<i32> {
-    let mut attr = [0u8; 64];
+    for &flags in &[0u32, XDP_FLAGS_SKB_MODE] {
+        let mut attr = [0u8; 64];
 
-    // prog_fd at offset 0
-    attr[0..4].copy_from_slice(&(prog_fd as u32).to_le_bytes());
-    // target_ifindex at offset 4
-    attr[4..8].copy_from_slice(&ifindex.to_le_bytes());
-    // attach_type at offset 8
-    attr[8..12].copy_from_slice(&BPF_XDP.to_le_bytes());
-    // flags at offset 12 (0 = default/native mode; set 1 for SKB fallback)
-    attr[12..16].copy_from_slice(&0u32.to_le_bytes());
+        // prog_fd at offset 0
+        attr[0..4].copy_from_slice(&(prog_fd as u32).to_le_bytes());
+        // target_ifindex at offset 4
+        attr[4..8].copy_from_slice(&ifindex.to_le_bytes());
+        // attach_type at offset 8
+        attr[8..12].copy_from_slice(&BPF_XDP.to_le_bytes());
+        // flags at offset 12
+        attr[12..16].copy_from_slice(&flags.to_le_bytes());
 
-    let link_fd = unsafe {
-        libc::syscall(
-            SYS_BPF,
-            BPF_LINK_CREATE,
-            attr.as_mut_ptr() as *mut libc::c_void,
-            attr.len() as u32,
-        )
-    } as i32;
+        let link_fd = unsafe {
+            libc::syscall(
+                SYS_BPF,
+                BPF_LINK_CREATE,
+                attr.as_mut_ptr() as *mut libc::c_void,
+                attr.len() as u32,
+            )
+        } as i32;
 
-    if link_fd < 0 {
+        if link_fd >= 0 {
+            if flags == XDP_FLAGS_SKB_MODE {
+                log::info!(
+                    "XDP attached in SKB (generic) mode - native mode not supported by driver"
+                );
+            }
+            return Ok(link_fd);
+        }
+
         let err_no = unsafe { *libc::__errno_location() };
+
+        // EOPNOTSUPP: driver has ndo_bpf but XDP native setup failed (e.g., ENA on
+        // t3.medium). Fall through to retry with SKB mode.
+        if flags == 0 && err_no == libc::EOPNOTSUPP {
+            log::warn!(
+                "Native XDP mode not supported (EOPNOTSUPP), retrying with SKB (generic) mode"
+            );
+            continue;
+        }
+
         bail!(
-            "BPF_LINK_CREATE (XDP) failed for ifindex {}: errno {}",
+            "BPF_LINK_CREATE (XDP) failed for ifindex {} flags={}: errno {}",
             ifindex,
+            flags,
             err_no
         );
     }
 
-    Ok(link_fd)
+    unreachable!("BPF_LINK_CREATE loop exhausted");
 }
 
 // ---------------------------------------------------------------------------
