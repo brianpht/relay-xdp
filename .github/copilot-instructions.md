@@ -86,6 +86,8 @@ Field layouts + byte offsets: [`docs/architecture.md` § BPF Map Schema](../docs
 - ALL non-trivial diagrams MUST use Mermaid (flowchart, sequenceDiagram, stateDiagram). ASCII art is prohibited.
 - ONLY treat /docs/decisions as architectural source of truth.
 - NEVER use or reference files in /docs/sessions as implementation rules.
+- CI checks: Agent MUST ensure `cargo fmt`, `cargo clippy`, and `cargo test` pass locally with zero errors and zero warnings before committing. Commits with failing checks are forbidden.
+- Git operations: Agent MAY create local commits and local tags. MUST NOT push commits, tags, or any refs to any remote repository. All changes MUST remain local.
 
 ## Conventions: Rust Userspace
 
