@@ -3,7 +3,10 @@
 //!
 //! Loading flow:
 //!   1. Read ELF bytes from disk.
-//!   2. Patch kfunc call sites: src_reg 1->2 so aya-obj skips them.
+//!   2a. Patch kfunc call sites: src_reg 1->2 so aya-obj skips them.
+//!   2b. Patch BPF helper calls: src_reg 1->0, imm -> kernel helper ID.
+//!       Needed because aya-obj filters UNDEF-symbol relocations and falls
+//!       through to a pc-relative lookup that fails with UnknownFunction.
 //!   3. Ebpf::load(patched) to create all 6 maps (aya manages map FDs).
 //!   4. Extract raw map FDs via typed-map API.
 //!   5. Patch map FD values directly into ELF bytes (bypass relocate_maps).
@@ -25,8 +28,8 @@ use relay_xdp_common::*;
 
 use crate::kfunc::{
     collect_kfunc_offsets, find_module_btf, get_xdp_instructions, parse_btf_func_ids,
-    patch_elf_map_fds, patch_elf_skip_kfuncs, patch_kfunc_instructions, raw_create_xdp_link,
-    raw_load_xdp, RELAY_MODULE_KFUNCS,
+    patch_elf_bpf_helpers, patch_elf_map_fds, patch_elf_skip_kfuncs, patch_kfunc_instructions,
+    raw_create_xdp_link, raw_load_xdp, RELAY_MODULE_KFUNCS,
 };
 
 /// Holds the loaded BPF program and map handles.
@@ -112,6 +115,15 @@ impl BpfContext {
 
         let patched_v1 = patch_elf_skip_kfuncs(&elf_bytes, &kfunc_offsets)
             .context("failed to patch kfunc src_reg in ELF")?;
+
+        // --- Step 2b: Patch standard BPF helper calls (src_reg 1->0, imm -> helper ID) ---
+        // bpf-linker emits bpf_xdp_adjust_head/tail as BPF_PSEUDO_CALL (src_reg=1, imm=-1)
+        // with R_BPF_64_32 relocations against UNDEF symbols.  aya-obj's relocate_calls()
+        // filters UNDEF-symbol relocations and then tries a self-referential pc-relative
+        // lookup that fails with UnknownFunction.  Pre-patching to src_reg=0 makes
+        // insn_is_call() return false, so aya-obj skips them entirely.
+        let patched_v1 = patch_elf_bpf_helpers(&patched_v1)
+            .context("failed to patch BPF helper calls in ELF")?;
 
         // --- Step 3: Ebpf::load creates all 6 maps ---
         let mut bpf = Ebpf::load(&patched_v1).with_context(|| {

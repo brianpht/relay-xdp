@@ -3,15 +3,18 @@
 //!
 //! Background: bpf-linker emits module kfunc calls as BPF_PSEUDO_CALL (src_reg=1)
 //! with imm=-1 and an R_BPF_64_32 ELF relocation. aya-obj does not understand these
-//! and fails in relocate_calls(). This module:
+//! and fails in relocate_calls(). Standard BPF helpers (bpf_xdp_adjust_head/tail)
+//! are also emitted the same way and fail for the same reason. This module:
 //!   1. Patches the ELF to mark kfunc call sites as BPF_PSEUDO_KFUNC_CALL (src_reg=2)
 //!      so aya-obj skips them in relocate_calls().
-//!   2. Applies actual map FD values directly into the ELF bytes before the second
+//!   2. Patches the ELF to resolve standard BPF helper calls: src_reg=0, imm=helper_id.
+//!      With src_reg=0, insn_is_call() returns false and aya-obj skips them too.
+//!   3. Applies actual map FD values directly into the ELF bytes before the second
 //!      aya_obj parse, avoiding the need to call relocate_maps().
-//!   3. Calls aya_obj::Object::relocate_calls() to inline .text helpers.
-//!   4. Patches kfunc instructions with the correct BTF type IDs from the kernel module.
-//!   5. Loads via raw BPF_PROG_LOAD syscall with fd_array pointing to module BTF FD.
-//!   6. Attaches via raw BPF_LINK_CREATE syscall.
+//!   4. Calls aya_obj::Object::relocate_calls() to inline .text helpers (memset).
+//!   5. Patches kfunc instructions with the correct BTF type IDs from the kernel module.
+//!   6. Loads via raw BPF_PROG_LOAD syscall with fd_array pointing to module BTF FD.
+//!   7. Attaches via raw BPF_LINK_CREATE syscall.
 
 use anyhow::{anyhow, bail, Context, Result};
 use aya_obj::Object as AyaObj;
@@ -281,6 +284,141 @@ pub fn patch_elf_map_fds(elf: &[u8], map_fds: &HashMap<String, i32>) -> Result<V
             patched[imm2_pos..imm2_pos + 4].copy_from_slice(&0i32.to_le_bytes());
         }
     }
+
+    Ok(patched)
+}
+
+// ---------------------------------------------------------------------------
+// Step 3b: patch standard BPF helper calls (src_reg 1->0, imm -> helper ID)
+// ---------------------------------------------------------------------------
+
+/// BPF helper function IDs for helpers used in the relay XDP program.
+/// Values from Linux kernel `include/uapi/linux/bpf.h` (stable, append-only ABI).
+static BPF_HELPER_IDS: &[(&str, i32)] = &[
+    ("bpf_xdp_adjust_head", 44),
+    ("bpf_xdp_adjust_tail", 65),
+];
+
+/// Patches standard BPF helper call instructions in the `xdp` section.
+///
+/// bpf-linker emits helper calls (e.g., `bpf_xdp_adjust_head`) as
+/// BPF_PSEUDO_CALL (src_reg=1, imm=-1) with an R_BPF_64_32 ELF relocation
+/// against the helper name as an UNDEF (section=0) symbol.
+///
+/// aya-obj's `relocate_calls()` ONLY handles Text-section callees. UNDEF symbols
+/// are filtered out, causing `relocate_calls()` to fall through to the pc-relative
+/// callee branch, which computes `callee_address = instruction_offset` (a
+/// self-reference that is not in `obj.functions`), and fails with
+/// `UnknownFunction`.
+///
+/// After this patch:
+/// - `src_reg = 0` (direct helper call, not BPF_PSEUDO_CALL=1)
+/// - `imm = <kernel helper ID>` (stable Linux BPF helper number)
+///
+/// With `src_reg=0`, `insn_is_call()` in aya-obj returns false (it requires
+/// `src_reg == BPF_PSEUDO_CALL == 1`). Combined with the UNDEF symbol's reloc
+/// being filtered to `rel=None`, the condition `!is_call && rel.is_none()` is
+/// true and aya-obj SKIPS these instructions entirely in `relocate_calls()`.
+///
+/// The kernel BPF verifier resolves `src_reg=0` calls via the imm (helper ID)
+/// directly - no further patching needed.
+pub fn patch_elf_bpf_helpers(elf: &[u8]) -> Result<Vec<u8>> {
+    let mut patched = elf.to_vec();
+    let file = object::File::parse(elf).context("ELF parse in patch_elf_bpf_helpers")?;
+
+    // Build symbol-index -> helper_id map for known BPF helpers.
+    let mut sym_to_helper_id: HashMap<usize, i32> = HashMap::new();
+    for sym in file.symbols() {
+        if let Ok(name) = sym.name() {
+            for &(helper_name, helper_id) in BPF_HELPER_IDS {
+                if name == helper_name {
+                    sym_to_helper_id.insert(sym.index().0, helper_id);
+                }
+            }
+        }
+    }
+
+    if sym_to_helper_id.is_empty() {
+        return Ok(patched); // no known helpers referenced in this ELF
+    }
+
+    let xdp_section = file
+        .section_by_name("xdp")
+        .context("xdp section not found in patch_elf_bpf_helpers")?;
+    let (xdp_file_offset, _) = xdp_section
+        .file_range()
+        .context("xdp section has no file range")?;
+    let xdp_file_offset = xdp_file_offset as usize;
+
+    let relxdp = file
+        .section_by_name(".relxdp")
+        .context(".relxdp section not found in patch_elf_bpf_helpers")?;
+    let data = relxdp.data().context("failed to read .relxdp data")?;
+    let entry_count = data.len() / 16;
+
+    let mut patched_count = 0usize;
+
+    for i in 0..entry_count {
+        let base = i * 16;
+        let r_offset =
+            u64::from_le_bytes(data[base..base + 8].try_into().expect("8 bytes")) as usize;
+        let r_info = u64::from_le_bytes(data[base + 8..base + 16].try_into().expect("8 bytes"));
+        let r_type = (r_info & 0xffff_ffff) as u32;
+        let r_sym = (r_info >> 32) as usize;
+
+        if r_type != R_BPF_64_32 {
+            continue;
+        }
+
+        let helper_id = match sym_to_helper_id.get(&r_sym) {
+            Some(&id) => id,
+            None => continue,
+        };
+
+        let insn_file_pos = xdp_file_offset + r_offset;
+        if insn_file_pos + BPF_INSN_SIZE > patched.len() {
+            bail!(
+                "BPF helper call at xdp+0x{:x} is out of bounds",
+                r_offset
+            );
+        }
+
+        // Verify BPF_CALL opcode at byte 0 of the instruction.
+        let opcode = patched[insn_file_pos];
+        if opcode != BPF_CALL_OPCODE {
+            bail!(
+                "expected BPF_CALL (0x85) at helper offset 0x{:x}, got 0x{:02x}",
+                r_offset,
+                opcode
+            );
+        }
+
+        // Verify src_reg=1 (BPF_PSEUDO_CALL) - it should not have been patched yet.
+        let regs_byte = patched[insn_file_pos + 1];
+        let src_reg = (regs_byte >> 4) & 0x0f;
+        if src_reg != 1 {
+            bail!(
+                "BPF helper at 0x{:x}: expected src_reg=1, got {}",
+                r_offset,
+                src_reg
+            );
+        }
+
+        // Patch src_reg: clear high nibble of regs byte (dst_reg stays in low nibble).
+        // src_reg=0 = direct helper call (not BPF_PSEUDO_CALL).
+        patched[insn_file_pos + 1] = regs_byte & 0x0f;
+
+        // Patch imm: write helper ID as little-endian i32 at bytes 4-7.
+        patched[insn_file_pos + 4..insn_file_pos + 8]
+            .copy_from_slice(&helper_id.to_le_bytes());
+
+        patched_count += 1;
+    }
+
+    log::debug!(
+        "patch_elf_bpf_helpers: patched {} BPF helper call site(s)",
+        patched_count
+    );
 
     Ok(patched)
 }
