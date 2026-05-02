@@ -702,7 +702,7 @@ unsafe fn handle_relay_ping(
 
     // Exact size: 18 + 8(echo) + 8(expire) + 1(type) + 32(token) = 67
     let expected_end = packet_data as usize + 18 + 8 + 8 + 1 + RELAY_PING_TOKEN_BYTES;
-    if expected_end != data_end {
+    if expected_end > data_end || data_end > expected_end {
         increment_counter(stats, RELAY_COUNTER_RELAY_PING_PACKET_WRONG_SIZE);
         return count_drop(stats, data_end - data);
     }
@@ -777,7 +777,7 @@ unsafe fn handle_client_ping(
 
     // Exact size: 18 + 8(echo) + 8(session_id) + 8(expire) + 32(token) = 74
     let expected_end = packet_data as usize + 18 + 8 + 8 + 8 + RELAY_PING_TOKEN_BYTES;
-    if expected_end != data_end {
+    if expected_end > data_end || data_end > expected_end {
         increment_counter(stats, RELAY_COUNTER_CLIENT_PING_PACKET_WRONG_SIZE);
         return count_drop(stats, data_end - data);
     }
@@ -855,7 +855,7 @@ unsafe fn handle_server_ping(
 
     // Exact size: 18 + 8(echo) + 8(expire) + 32(token) = 66
     let expected_end = packet_data as usize + 18 + 8 + 8 + RELAY_PING_TOKEN_BYTES;
-    if expected_end != data_end {
+    if expected_end > data_end || data_end > expected_end {
         increment_counter(stats, RELAY_COUNTER_SERVER_PING_PACKET_WRONG_SIZE);
         return count_drop(stats, data_end - data);
     }
@@ -919,7 +919,7 @@ unsafe fn handle_relay_pong(
     increment_counter(stats, RELAY_COUNTER_RELAY_PONG_PACKET_RECEIVED);
 
     let expected_end = packet_data as usize + 18 + 8;
-    if expected_end != data_end {
+    if expected_end > data_end || data_end > expected_end {
         increment_counter(stats, RELAY_COUNTER_RELAY_PONG_PACKET_WRONG_SIZE);
         return count_drop(stats, data_end - data);
     }
@@ -1059,7 +1059,7 @@ unsafe fn handle_route_response(
 
     let header = packet_data.add(18);
     let expected_end = header as usize + RELAY_HEADER_BYTES;
-    if expected_end != data_end {
+    if expected_end > data_end || data_end > expected_end {
         increment_counter(stats, RELAY_COUNTER_ROUTE_RESPONSE_PACKET_WRONG_SIZE);
         return count_drop(stats, data_end - data);
     }
@@ -1362,7 +1362,7 @@ unsafe fn handle_continue_response(
 
     let header = packet_data.add(18);
     let expected_end = header as usize + RELAY_HEADER_BYTES;
-    if expected_end != data_end {
+    if expected_end > data_end || data_end > expected_end {
         increment_counter(stats, RELAY_COUNTER_CONTINUE_RESPONSE_PACKET_WRONG_SIZE);
         return count_drop(stats, data_end - data);
     }
@@ -1433,7 +1433,7 @@ unsafe fn handle_session_ping(
 
     let header = packet_data.add(18);
     let expected_end = header as usize + RELAY_HEADER_BYTES + 8;
-    if expected_end != data_end {
+    if expected_end > data_end || data_end > expected_end {
         increment_counter(stats, RELAY_COUNTER_SESSION_PING_PACKET_WRONG_SIZE);
         return count_drop(stats, data_end - data);
     }
@@ -1503,7 +1503,7 @@ unsafe fn handle_session_pong(
 
     let header = packet_data.add(18);
     let expected_end = header as usize + RELAY_HEADER_BYTES + 8;
-    if expected_end != data_end {
+    if expected_end > data_end || data_end > expected_end {
         increment_counter(stats, RELAY_COUNTER_SESSION_PONG_PACKET_WRONG_SIZE);
         return count_drop(stats, data_end - data);
     }
