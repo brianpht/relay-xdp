@@ -35,7 +35,7 @@ env_logger = "0.11"
 log = "0.4"
 anyhow = "1"
 num_cpus = "1"
-lru = "0.12"  # P1-01: per-relay nonce LRU for /relay_update replay protection
+lru = "0.16"  # P1-01: per-relay nonce LRU for /relay_update replay protection; >=0.16.3 fixes RUSTSEC-2026-0002 (IterMut Stacked Borrows unsoundness)
 
 [dev-dependencies]
 relay-xdp = { path = "../relay-xdp" }
