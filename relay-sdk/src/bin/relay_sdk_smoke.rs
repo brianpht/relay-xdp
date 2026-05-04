@@ -8,8 +8,9 @@
 // Exit code: 0 = all 13 assertions passed, 1 = any failure.
 //
 // Env vars:
-//   BACKEND_HOST  (default: 172.28.0.3)
-//   BACKEND_PORT  (default: 80)
+//   BACKEND_HOST        (default: 172.28.0.3)
+//   BACKEND_PORT        (default: 80)   - public port: /health, /ready, /relay_update
+//   ADMIN_BACKEND_PORT  (default: 81)   - admin port: /active_relays, /relays, /metrics, etc.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -94,6 +95,10 @@ fn main() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(80);
+    let admin_port: u16 = std::env::var("ADMIN_BACKEND_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(81);
 
     let mut t = Runner::new();
 
@@ -104,7 +109,8 @@ fn main() {
     let status = http_status(&host, port, "/health");
     t.check("1.1  GET /health returns 200", status == 200);
 
-    let body = http_body(&host, port, "/active_relays");
+    // /active_relays is on the admin port (P1-14 route separation)
+    let body = http_body(&host, admin_port, "/active_relays");
     t.check(
         "1.2  GET /active_relays contains relay-a",
         body.contains("relay-a"),
