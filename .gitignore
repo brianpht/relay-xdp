@@ -4,5 +4,3 @@ target
 relay-xdp-ebpf/target
 /relay_xdp_rust.o
 /debug.txt
-.claude
-CLAUDE.md
