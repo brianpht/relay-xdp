@@ -4,8 +4,12 @@
 //   relay_client_t  - game client relay session
 //   relay_server_t  - game server as final relay destination
 //
-// Every entry point wraps its body in std::panic::catch_unwind to prevent
-// Rust panics from crossing the FFI boundary (undefined behaviour in C).
+// Every entry point wraps its body in `panic::ffi_catch` (P1-02 / ADR-006),
+// which calls `std::panic::catch_unwind` and additionally invokes the
+// registered C panic hook (if any) before returning the function's "error"
+// sentinel. Embedders can register a hook with `relay_set_panic_hook` to
+// observe internal panics; without one, the historical "silent swallow"
+// behaviour is preserved.
 //
 // Callers are responsible for:
 //   - Passing valid non-null pointers to all *mut / *const parameters.
@@ -20,24 +24,57 @@
 //   - Functions that return a pointer: null indicates failure.
 //   - Functions that return c_int: 0 = ok, -1 = error.
 //   - Functions that return u32/u64: 0 is the "no error / no data" sentinel.
-//   - Void-returning functions (open_session, close_session, register_session,
-//     expire_session, clear_last_send_error): panics inside catch_unwind are
-//     silently swallowed because there is no return channel. Callers cannot
-//     distinguish a panic from normal execution in these paths.
+//   - Void-returning functions: panics still cannot be reported in-band
+//     (no return channel) but the optional panic hook surfaces them out of
+//     band. Callers that have not registered a hook will not observe the
+//     panic; callers that have will receive a null-terminated message.
 
 // Safety: all extern "C" entry points perform explicit null checks on every
 // raw pointer argument before any dereference. Suppressing the lint here is
 // intentional - these are FFI boundary functions with documented contracts.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
+mod panic;
+
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
-use std::panic::catch_unwind;
+
+use zeroize::Zeroizing;
 
 use crate::address::Address;
 use crate::client::{Client, ClientInner};
 use crate::constants::SESSION_PRIVATE_KEY_BYTES;
 use crate::server::{Server, ServerInner};
+
+// P1-02 / ADR-006: assert at compile time that wrapping a 32-byte session
+// secret in `Zeroizing` does not silently lose the `Zeroize` impl across
+// future `zeroize` crate version bumps.
+const _: fn() = || {
+    fn assert_zeroize<T: zeroize::Zeroize>() {}
+    assert_zeroize::<Zeroizing<[u8; SESSION_PRIVATE_KEY_BYTES]>>();
+};
+
+/// Register a C callback that receives the formatted message of any panic
+/// caught at the FFI boundary. The hook is opt-in: embedders that never
+/// call this observe the historical "silent swallow" behaviour. Pass a
+/// null function pointer to clear (use `relay_clear_panic_hook` from C).
+///
+/// The pointer passed to the hook is a null-terminated UTF-8 string and is
+/// only valid for the duration of the callback - do NOT retain it.
+///
+/// See `docs/decisions/ADR-006-ffi-panic-policy-for-relay-sdk.md`.
+#[no_mangle]
+pub extern "C" fn relay_set_panic_hook(hook: panic::PanicHook) {
+    panic::set_hook(Some(hook));
+}
+
+/// Clear the panic hook previously installed by `relay_set_panic_hook`.
+/// After this returns, panics inside FFI bodies are silently swallowed
+/// (the pre-ADR-006 behaviour).
+#[no_mangle]
+pub extern "C" fn relay_clear_panic_hook() {
+    panic::set_hook(None);
+}
 
 // ── relay_client_t ────────────────────────────────────────────────────────────
 
@@ -53,7 +90,7 @@ pub struct RelayClient {
 /// The returned pointer must be freed with `relay_client_destroy`.
 #[no_mangle]
 pub extern "C" fn relay_client_create(bind_address: *const c_char) -> *mut RelayClient {
-    catch_unwind(|| {
+    panic::ffi_catch(std::ptr::null_mut(), || {
         let addr_str = unsafe {
             if bind_address.is_null() {
                 return std::ptr::null_mut();
@@ -68,14 +105,13 @@ pub extern "C" fn relay_client_create(bind_address: *const c_char) -> *mut Relay
         let boxed = Box::new(RelayClient { inner, client });
         Box::into_raw(boxed)
     })
-    .unwrap_or(std::ptr::null_mut())
 }
 
 /// Destroy a relay client previously created with `relay_client_create`.
 /// Passing null is a no-op.
 #[no_mangle]
 pub extern "C" fn relay_client_destroy(handle: *mut RelayClient) {
-    let _ = catch_unwind(|| {
+    panic::ffi_catch((), || {
         if !handle.is_null() {
             // Safety: handle was created by relay_client_create via Box::into_raw.
             drop(unsafe { Box::from_raw(handle) });
@@ -92,7 +128,7 @@ pub extern "C" fn relay_client_open_session(
     server_address: *const c_char,
     client_secret_key: *const u8,
 ) {
-    let _ = catch_unwind(|| {
+    panic::ffi_catch((), || {
         if handle.is_null() || server_address.is_null() || client_secret_key.is_null() {
             return;
         }
@@ -107,14 +143,19 @@ pub extern "C" fn relay_client_open_session(
             Ok(a) => a,
             Err(_) => return,
         };
-        let mut key = [0u8; SESSION_PRIVATE_KEY_BYTES];
+        // P1-02: wrap the FFI-side stack copy of the session secret in
+        // `Zeroizing` so the bytes are wiped when this scope exits.
+        // `[u8; 32]` is `Copy`, so the value passed to `open_session` is a
+        // separate stack copy on the callee side; this `Zeroizing`
+        // guarantees the FFI-layer copy here does not linger.
+        let mut key = Zeroizing::new([0u8; SESSION_PRIVATE_KEY_BYTES]);
         unsafe {
             key.copy_from_slice(std::slice::from_raw_parts(
                 client_secret_key,
                 SESSION_PRIVATE_KEY_BYTES,
             ))
         };
-        h.client.open_session(addr, key);
+        h.client.open_session(addr, *key);
         h.inner.pump_commands();
     });
 }
@@ -123,7 +164,7 @@ pub extern "C" fn relay_client_open_session(
 /// No-op if handle is null.
 #[no_mangle]
 pub extern "C" fn relay_client_close_session(handle: *mut RelayClient) {
-    let _ = catch_unwind(|| {
+    panic::ffi_catch((), || {
         if handle.is_null() {
             return;
         }
@@ -142,7 +183,7 @@ pub extern "C" fn relay_client_send_packet(
     data: *const u8,
     bytes: c_int,
 ) {
-    let _ = catch_unwind(|| {
+    panic::ffi_catch((), || {
         if handle.is_null() || data.is_null() || bytes <= 0 {
             return;
         }
@@ -168,7 +209,7 @@ pub extern "C" fn relay_client_recv_packet(
     out: *mut u8,
     max_bytes: c_int,
 ) -> c_int {
-    catch_unwind(|| {
+    panic::ffi_catch(0, || {
         if handle.is_null() || out.is_null() || max_bytes <= 0 {
             return 0;
         }
@@ -183,7 +224,6 @@ pub extern "C" fn relay_client_recv_packet(
             }
         }
     })
-    .unwrap_or(0)
 }
 
 /// Return the current route flags bitmask for this client.
@@ -192,7 +232,7 @@ pub extern "C" fn relay_client_recv_packet(
 /// Returns 0 if handle is null.
 #[no_mangle]
 pub extern "C" fn relay_client_flags(handle: *mut RelayClient) -> u32 {
-    catch_unwind(|| {
+    panic::ffi_catch(0, || {
         if handle.is_null() {
             return 0u32;
         }
@@ -201,7 +241,6 @@ pub extern "C" fn relay_client_flags(handle: *mut RelayClient) -> u32 {
         h.client.drain_notify();
         h.client.flags
     })
-    .unwrap_or(0)
 }
 
 // ── relay_server_t ────────────────────────────────────────────────────────────
@@ -218,7 +257,7 @@ pub struct RelayServer {
 /// The returned pointer must be freed with `relay_server_destroy`.
 #[no_mangle]
 pub extern "C" fn relay_server_create(bind_address: *const c_char) -> *mut RelayServer {
-    catch_unwind(|| {
+    panic::ffi_catch(std::ptr::null_mut(), || {
         let addr_str = unsafe {
             if bind_address.is_null() {
                 return std::ptr::null_mut();
@@ -237,14 +276,13 @@ pub extern "C" fn relay_server_create(bind_address: *const c_char) -> *mut Relay
         let boxed = Box::new(RelayServer { inner, server });
         Box::into_raw(boxed)
     })
-    .unwrap_or(std::ptr::null_mut())
 }
 
 /// Destroy a relay server previously created with `relay_server_create`.
 /// Passing null is a no-op.
 #[no_mangle]
 pub extern "C" fn relay_server_destroy(handle: *mut RelayServer) {
-    let _ = catch_unwind(|| {
+    panic::ffi_catch((), || {
         if !handle.is_null() {
             // Safety: handle was created by relay_server_create via Box::into_raw.
             drop(unsafe { Box::from_raw(handle) });
@@ -264,7 +302,7 @@ pub extern "C" fn relay_server_register_session(
     session_private_key: *const u8,
     relay_address: *const c_char,
 ) {
-    let _ = catch_unwind(|| {
+    panic::ffi_catch((), || {
         if handle.is_null() || session_private_key.is_null() || relay_address.is_null() {
             return;
         }
@@ -279,7 +317,10 @@ pub extern "C" fn relay_server_register_session(
             Ok(a) => a,
             Err(_) => return,
         };
-        let mut key = [0u8; SESSION_PRIVATE_KEY_BYTES];
+        // P1-02: see comment in `relay_client_open_session`. The key is
+        // copied from the C buffer once into a `Zeroizing`-protected stack
+        // slot before being moved into `register_session`.
+        let mut key = Zeroizing::new([0u8; SESSION_PRIVATE_KEY_BYTES]);
         unsafe {
             key.copy_from_slice(std::slice::from_raw_parts(
                 session_private_key,
@@ -287,7 +328,7 @@ pub extern "C" fn relay_server_register_session(
             ))
         };
         h.server
-            .register_session(session_id, session_version, key, addr);
+            .register_session(session_id, session_version, *key, addr);
         h.inner.pump_commands();
     });
 }
@@ -296,7 +337,7 @@ pub extern "C" fn relay_server_register_session(
 /// No-op if handle is null or session not found.
 #[no_mangle]
 pub extern "C" fn relay_server_expire_session(handle: *mut RelayServer, session_id: u64) {
-    let _ = catch_unwind(|| {
+    panic::ffi_catch((), || {
         if handle.is_null() {
             return;
         }
@@ -320,7 +361,7 @@ pub extern "C" fn relay_server_send_packet(
     magic: *const u8,
     from_address: *const c_char,
 ) -> c_int {
-    catch_unwind(|| {
+    panic::ffi_catch(-1, || {
         if handle.is_null()
             || data.is_null()
             || magic.is_null()
@@ -357,7 +398,6 @@ pub extern "C" fn relay_server_send_packet(
         h.server.drain_notify();
         0i32
     })
-    .unwrap_or(-1)
 }
 
 /// Return the session_id from the last failed send, or 0 if no error is pending.
@@ -365,7 +405,7 @@ pub extern "C" fn relay_server_send_packet(
 /// Call `relay_server_clear_last_send_error` after handling the error.
 #[no_mangle]
 pub extern "C" fn relay_server_last_send_error(handle: *mut RelayServer) -> u64 {
-    catch_unwind(|| {
+    panic::ffi_catch(0, || {
         if handle.is_null() {
             return 0u64;
         }
@@ -377,13 +417,12 @@ pub extern "C" fn relay_server_last_send_error(handle: *mut RelayServer) -> u64 
             None => 0,
         }
     })
-    .unwrap_or(0)
 }
 
 /// Clear the last send error recorded on the server handle.
 #[no_mangle]
 pub extern "C" fn relay_server_clear_last_send_error(handle: *mut RelayServer) {
-    let _ = catch_unwind(|| {
+    panic::ffi_catch((), || {
         if handle.is_null() {
             return;
         }
@@ -430,7 +469,7 @@ pub extern "C" fn relay_client_get_stats(
     handle: *mut RelayClient,
     out: *mut RelayClientStats,
 ) -> c_int {
-    catch_unwind(|| {
+    panic::ffi_catch(-1, || {
         if handle.is_null() || out.is_null() {
             return -1i32;
         }
@@ -446,7 +485,6 @@ pub extern "C" fn relay_client_get_stats(
         }
         0i32
     })
-    .unwrap_or(-1)
 }
 
 /// Copy a snapshot of the current server event counters into `out`.
@@ -457,7 +495,7 @@ pub extern "C" fn relay_server_get_stats(
     handle: *mut RelayServer,
     out: *mut RelayServerStats,
 ) -> c_int {
-    catch_unwind(|| {
+    panic::ffi_catch(-1, || {
         if handle.is_null() || out.is_null() {
             return -1i32;
         }
@@ -475,7 +513,6 @@ pub extern "C" fn relay_server_get_stats(
         }
         0i32
     })
-    .unwrap_or(-1)
 }
 
 /// Pop the next received game payload into `out` (caller-provided buffer of `max_bytes`).
@@ -489,7 +526,7 @@ pub extern "C" fn relay_server_recv_packet(
     out: *mut u8,
     max_bytes: c_int,
 ) -> c_int {
-    catch_unwind(|| {
+    panic::ffi_catch(0, || {
         if handle.is_null() || out_session_id.is_null() || out.is_null() || max_bytes <= 0 {
             return 0;
         }
@@ -505,7 +542,6 @@ pub extern "C" fn relay_server_recv_packet(
             }
         }
     })
-    .unwrap_or(0)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

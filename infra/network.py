@@ -173,7 +173,9 @@ def create_regional_network(
 
     # ------------------------------------------------------------------
     # Security Group: backend node
-    #   - TCP 8090 open to internet (relay nodes POST /relay_update)
+    #   - TCP 8090 open to internet (relay nodes POST /relay_update + health)
+    #   - TCP 8091 from admin_cidr only (admin / data plane: cost matrix,
+    #     route matrix, /metrics, /relays, /relay_counters - see audit P1-14)
     #   - TCP 6379 from VPC CIDR only (Redis - never expose to internet)
     #   - TCP 22   from admin_cidr only
     #   - All outbound allowed
@@ -185,12 +187,19 @@ def create_regional_network(
         description="relay-xdp backend node security group",
         ingress=[
             aws.ec2.SecurityGroupIngressArgs(
-                description="Backend HTTP (/relay_update, /route_matrix)",
+                description="Backend public HTTP (/relay_update + health)",
                 protocol="tcp",
                 from_port=8090,
                 to_port=8090,
                 cidr_blocks=["0.0.0.0/0"],
                 ipv6_cidr_blocks=["::/0"],
+            ),
+            aws.ec2.SecurityGroupIngressArgs(
+                description="Backend admin HTTP (topology, /metrics) - admin_cidr only",
+                protocol="tcp",
+                from_port=8091,
+                to_port=8091,
+                cidr_blocks=[admin_cidr],
             ),
             aws.ec2.SecurityGroupIngressArgs(
                 description="Redis - internal VPC only",

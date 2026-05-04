@@ -195,6 +195,13 @@ typedef struct relay_RelayClient relay_RelayClient;
 typedef struct relay_RelayServer relay_RelayServer;
 
 /**
+ * C-compatible callback signature: receives a null-terminated UTF-8 string
+ * describing the panic. The pointer is only valid for the duration of the
+ * call - do not retain it past the callback.
+ */
+typedef void (*relay_PanicHook)(const char*);
+
+/**
  * C-visible snapshot of relay client event counters.
  * Populated by `relay_client_get_stats`.
  */
@@ -243,6 +250,26 @@ typedef struct relay_RelayServerStats {
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
+
+/**
+ * Register a C callback that receives the formatted message of any panic
+ * caught at the FFI boundary. The hook is opt-in: embedders that never
+ * call this observe the historical "silent swallow" behaviour. Pass a
+ * null function pointer to clear (use `relay_clear_panic_hook` from C).
+ *
+ * The pointer passed to the hook is a null-terminated UTF-8 string and is
+ * only valid for the duration of the callback - do NOT retain it.
+ *
+ * See `docs/decisions/ADR-006-ffi-panic-policy-for-relay-sdk.md`.
+ */
+void relay_set_panic_hook(relay_PanicHook hook);
+
+/**
+ * Clear the panic hook previously installed by `relay_set_panic_hook`.
+ * After this returns, panics inside FFI bodies are silently swallowed
+ * (the pre-ADR-006 behaviour).
+ */
+void relay_clear_panic_hook(void);
 
 /**
  * Create a new relay client.

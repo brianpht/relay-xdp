@@ -8,6 +8,16 @@ pub struct Config {
     pub route_matrix_interval_ms: u64,
     pub initial_delay: u64,
     pub http_port: u16,
+    /// Listening port for the admin / data-plane router. See P1-14 in
+    /// docs/sessions/2026-05-04-project-audit-plan-v2.md - the public
+    /// `http_port` carries only `/relay_update` and health checks; everything
+    /// that exposes topology, costs, or metrics is on this admin port.
+    pub admin_http_port: u16,
+    /// Bind address for the admin router. Defaults to `127.0.0.1` so admin
+    /// endpoints are unreachable from the network unless operators explicitly
+    /// override (compose tests set `0.0.0.0`; production should bind to the
+    /// VPC IP and rely on the security group).
+    pub admin_bind_address: String,
     pub enable_relay_history: bool,
     pub redis_hostname: String,
     pub internal_address: String,
@@ -60,6 +70,8 @@ pub fn read_config() -> Result<Config> {
     let route_matrix_interval_ms = get_env_int("ROUTE_MATRIX_INTERVAL_MS", 1000) as u64;
     let initial_delay = get_env_int("INITIAL_DELAY", 15) as u64;
     let http_port = get_env_int("HTTP_PORT", 80) as u16;
+    let admin_http_port = get_env_int("ADMIN_HTTP_PORT", (http_port as i64) + 1) as u16;
+    let admin_bind_address = get_env_string("ADMIN_BIND_ADDRESS", "127.0.0.1");
     let enable_relay_history = get_env_bool("ENABLE_RELAY_HISTORY", false);
     let redis_hostname = get_env_string("REDIS_HOSTNAME", "127.0.0.1:6379");
     let internal_address = get_env_string("INTERNAL_ADDRESS", "127.0.0.1");
@@ -84,6 +96,11 @@ pub fn read_config() -> Result<Config> {
     log::info!("route_matrix_interval_ms: {}", route_matrix_interval_ms);
     log::info!("initial_delay: {}", initial_delay);
     log::info!("http_port: {}", http_port);
+    log::info!(
+        "admin_http_port: {} (bind {})",
+        admin_http_port,
+        admin_bind_address
+    );
     log::info!("enable_relay_history: {}", enable_relay_history);
     log::info!("redis_hostname: {}", redis_hostname);
     log::info!("internal_address: {}", internal_address);
@@ -98,6 +115,8 @@ pub fn read_config() -> Result<Config> {
         route_matrix_interval_ms,
         initial_delay,
         http_port,
+        admin_http_port,
+        admin_bind_address,
         enable_relay_history,
         redis_hostname,
         internal_address,

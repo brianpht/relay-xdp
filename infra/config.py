@@ -108,9 +108,10 @@ class InfraConfig:
     # The private key never leaves the local machine.
     key_pub_path: str
 
-    # CIDR block allowed to reach SSH port 22 on all nodes.
-    # Should be set to your operator IP in production, e.g. "203.0.113.5/32".
-    # Defaults to 0.0.0.0/0 (open) - override before first deploy.
+    # CIDR block allowed to reach SSH port 22 on all nodes AND the backend
+    # admin HTTP port (P1-14). Must be set explicitly; the Pulumi config
+    # placeholder REQUIRED_OVERRIDE forces this. Production additionally
+    # refuses 0.0.0.0/0 (P1-04). Set to operator IP /32, e.g. "203.0.113.5/32".
     admin_cidr: str
 
     # Derived: preferred AZ per relay region.
@@ -148,6 +149,28 @@ class InfraConfig:
         return dict(REGION_CIDR_MAP)
 
 
+def _validate_admin_cidr(admin_cidr: str, stack_name: str) -> None:
+    """Refuse to proceed when admin_cidr is the placeholder or wide-open.
+
+    P1-04 / audit v2: production must use a narrow CIDR. Staging is permitted
+    to be slightly wider but must still be set explicitly (the placeholder
+    REQUIRED_OVERRIDE is rejected on every stack).
+    """
+    if admin_cidr == "REQUIRED_OVERRIDE":
+        raise pulumi.RunError(
+            f"admin_cidr is unset on stack {stack_name!r}. "
+            "Override with `pulumi config set admin_cidr <YOUR_IP>/32 "
+            f"--stack {stack_name}` before running `pulumi up`. "
+            "See P1-04 in docs/sessions/2026-05-04-project-audit-plan-v2.md."
+        )
+    if stack_name == "production" and admin_cidr in ("0.0.0.0/0", "::/0"):
+        raise pulumi.RunError(
+            f"admin_cidr={admin_cidr!r} is wide-open and refused on the "
+            "production stack (P1-04). Set a narrow CIDR (e.g. your "
+            "office IP /32) before running `pulumi up --stack production`."
+        )
+
+
 def load() -> InfraConfig:
     """Read Pulumi stack config and return an InfraConfig instance."""
     cfg = pulumi.Config()
@@ -158,7 +181,10 @@ def load() -> InfraConfig:
     backend_region: str = cfg.require("backend_region")
     backend_instance_type: str = cfg.require("backend_instance_type")
     key_pub_path: str = cfg.get("key_pub_path") or "~/.ssh/id_ed25519.pub"
-    admin_cidr: str = cfg.get("admin_cidr") or "0.0.0.0/0"
+    # P1-04: require explicit admin_cidr - no silent default to 0.0.0.0/0.
+    admin_cidr: str = cfg.require("admin_cidr")
+
+    _validate_admin_cidr(admin_cidr, pulumi.get_stack())
 
     return InfraConfig(
         relay_regions=relay_regions,

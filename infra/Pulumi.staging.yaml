@@ -8,6 +8,10 @@ config:
   relay-xdp-infra:backend_region: us-east-1
   relay-xdp-infra:backend_instance_type: t3.medium
   relay-xdp-infra:key_pub_path: ~/.ssh/personal-key.pub
-  relay-xdp-infra:admin_cidr: 0.0.0.0/0
+  # P1-04: staging may use a wider CIDR than production, but the placeholder
+  # forces operators to make the choice explicit. Override with
+  # `pulumi config set admin_cidr <YOUR_IP>/32 --stack staging` (or a small
+  # office range if the team needs SSH access).
+  relay-xdp-infra:admin_cidr: REQUIRED_OVERRIDE
   aws:profile: relay-xdp-infra
 encryptionsalt: v1:02WuvBBhXpM=:v1:gB0yo+1+F+YeUFAZ:cP3y1+0TNqdtOpE8YPkykN8NevYyfA==

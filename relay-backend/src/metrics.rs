@@ -157,6 +157,40 @@ fn render_backend_metrics(state: &Arc<AppState>, out: &mut String) {
         "relay_backend_route_matrix_optimize_ms {}",
         optimize_ms
     );
+
+    // P1-01 / ADR-004: replay-protection counters.
+    let replay_rejected = state
+        .relay_update_replay_rejected
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let clock_skew_rejected = state
+        .relay_update_clock_skew_rejected
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let _ = writeln!(
+        out,
+        "# TYPE relay_backend_relay_update_replay_rejected counter"
+    );
+    let _ = writeln!(
+        out,
+        "# HELP relay_backend_relay_update_replay_rejected /relay_update requests rejected because (relay_index, nonce) was already in the per-relay LRU."
+    );
+    let _ = writeln!(
+        out,
+        "relay_backend_relay_update_replay_rejected {}",
+        replay_rejected
+    );
+    let _ = writeln!(
+        out,
+        "# TYPE relay_backend_relay_update_clock_skew_rejected counter"
+    );
+    let _ = writeln!(
+        out,
+        "# HELP relay_backend_relay_update_clock_skew_rejected /relay_update requests rejected because the payload current_time was outside CLOCK_SKEW_WINDOW_SECS."
+    );
+    let _ = writeln!(
+        out,
+        "relay_backend_relay_update_clock_skew_rejected {}",
+        clock_skew_rejected
+    );
 }
 
 /// Escape a label value for Prometheus text format.

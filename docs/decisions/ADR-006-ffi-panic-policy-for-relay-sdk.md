@@ -1,7 +1,7 @@
 # ADR-006: FFI Panic Policy for relay-sdk
 
 **Date:** 2026-05-04<br>
-**Status:** Proposed<br>
+**Status:** Accepted (implementation landed same day - see P1-02 in companion session)<br>
 **Deciders:** developer<br>
 **Related Tasks:** Phase 1 action P1-02 (audit v2)<br>
 **Related ADRs:** N/A<br>

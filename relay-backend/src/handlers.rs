@@ -18,9 +18,30 @@ use crate::relay_update::{relay_id, RelayUpdateRequest, RelayUpdateResponse};
 use crate::route_matrix::RouteMatrix;
 use crate::state::AppState;
 
-pub fn create_router(state: Arc<AppState>) -> Router {
+/// Public router served on `http_port`. Carries only the encrypted
+/// `/relay_update` ingress and health checks - safe to expose to the
+/// internet (the production security group does this on TCP 8090).
+///
+/// See ADR/audit P1-14: the previous monolithic router exposed cost matrices
+/// and topology on the same port.
+pub fn create_public_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/relay_update", post(relay_update_handler))
+        // Health checks - no sensitive data, safe on public port.
+        .route("/health", get(health_handler))
+        .route("/lb_health", get(lb_health_handler))
+        .route("/vm_health", get(health_handler))
+        .route("/ready", get(ready_handler))
+        .route("/status", get(status_handler))
+        .with_state(state)
+}
+
+/// Admin router served on `admin_http_port`. Carries everything that exposes
+/// topology, cost / route matrices, per-relay counters, and Prometheus
+/// metrics. Defaults to `127.0.0.1` bind so it is unreachable from the
+/// network unless the operator overrides `ADMIN_BIND_ADDRESS`.
+pub fn create_admin_router(state: Arc<AppState>) -> Router {
+    Router::new()
         .route("/relays", get(relays_handler))
         .route("/relay_data", get(relay_data_handler))
         .route("/cost_matrix", get(cost_matrix_handler))
@@ -29,15 +50,23 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/relay_history/{src}/{dest}", get(relay_history_handler))
         .route("/costs", get(costs_handler))
         .route("/active_relays", get(active_relays_handler))
-        // Prometheus metrics
+        // Prometheus metrics - reveal load patterns.
         .route("/metrics", get(metrics_handler))
-        // Health checks
-        .route("/health", get(health_handler))
-        .route("/lb_health", get(lb_health_handler))
-        .route("/vm_health", get(health_handler))
-        .route("/ready", get(ready_handler))
-        .route("/status", get(status_handler))
         .with_state(state)
+}
+
+/// In-process test helper that merges the public and admin routers into
+/// one. Production code in `main.rs` binds the two routers to two listeners
+/// instead - this helper exists so existing `tower::oneshot`-style tests can
+/// keep hitting both endpoint groups without spinning up two listeners. The
+/// merge is safe because the two routers do not share any path.
+///
+/// `#[allow(dead_code)]` because `cargo clippy --bins` cannot see usage from
+/// the integration tests in `tests/` (they compile against the lib, not the
+/// bin); without the allow the bin compile flags this as unused.
+#[allow(dead_code)]
+pub fn create_router(state: Arc<AppState>) -> Router {
+    create_public_router(state.clone()).merge(create_admin_router(state))
 }
 
 async fn relay_update_handler(
@@ -82,6 +111,22 @@ async fn relay_update_handler(
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock before unix epoch")
         .as_secs() as i64;
+
+    // Clock-skew freshness check (P1-01 / ADR-004). Combined with the nonce
+    // cache, this collapses the replay window from infinite to "<=
+    // CLOCK_SKEW_WINDOW_SECS + LRU eviction window".
+    if !crate::replay::is_clock_fresh(request.current_time, current_time) {
+        state
+            .relay_update_clock_skew_rejected
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        log::error!(
+            "relay update clock skew rejected: relay current_time {} vs backend {}, skew {}",
+            request.current_time,
+            current_time,
+            (request.current_time as i64) - current_time
+        );
+        return StatusCode::BAD_REQUEST.into_response();
+    }
 
     // Look up relay
     let relay_data = &state.relay_data;
@@ -187,6 +232,23 @@ fn decrypt_relay_request(state: &AppState, body: &[u8]) -> Result<Vec<u8>, Strin
         return Err(format!(
             "no public key for relay index {} ({})",
             relay_index, addr_str
+        ));
+    }
+
+    // Replay protection (P1-01 / ADR-004): reject if (relay_index, nonce)
+    // has already been accepted. The nonce is part of the AEAD-protected
+    // wire format, so an attacker cannot mutate it without breaking the
+    // MAC - making it an unforgeable replay tag.
+    let nonce_array: [u8; 24] = nonce_bytes
+        .try_into()
+        .map_err(|_| "nonce length mismatch".to_string())?;
+    if !state.nonce_cache.insert(*relay_index, nonce_array) {
+        state
+            .relay_update_replay_rejected
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return Err(format!(
+            "replay rejected: relay {} nonce already seen",
+            relay_index
         ));
     }
 

@@ -45,6 +45,8 @@ services:
       RELAY_BACKEND_PRIVATE_KEY: "CW9sqURAaD39bCsrcYKt753Ci7y811INpzzhcvZ0taA="
       INITIAL_DELAY: "0"
       HTTP_PORT: "80"
+      ADMIN_HTTP_PORT: "81"
+      ADMIN_BIND_ADDRESS: "0.0.0.0"
       RUST_LOG: "info"
     volumes:
       - ./tests/fixtures/test-relays.json:/data/test-relays.json:ro

@@ -12,5 +12,6 @@ pub mod optimizer;
 pub mod redis_client;
 pub mod relay_manager;
 pub mod relay_update;
+pub mod replay;
 pub mod route_matrix;
 pub mod state;

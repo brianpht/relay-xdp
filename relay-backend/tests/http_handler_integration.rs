@@ -36,6 +36,8 @@ fn test_config() -> Config {
         route_matrix_interval_ms: 1000,
         initial_delay: 0,
         http_port: 0,
+        admin_http_port: 0,
+        admin_bind_address: "127.0.0.1".to_string(),
         enable_relay_history: false,
         redis_hostname: "127.0.0.1:6379".to_string(),
         internal_address: "127.0.0.1".to_string(),
@@ -99,6 +101,9 @@ fn test_app_state() -> Arc<AppState> {
         leader_election: Arc::new(RedisLeaderElection::new("127.0.0.1:6379", "test", 0)),
         magic_rotator: Arc::new(MagicRotator::new()),
         last_optimize_ms: AtomicU64::new(0),
+        nonce_cache: relay_backend::replay::NonceCache::new(),
+        relay_update_replay_rejected: AtomicU64::new(0),
+        relay_update_clock_skew_rejected: AtomicU64::new(0),
     })
 }
 

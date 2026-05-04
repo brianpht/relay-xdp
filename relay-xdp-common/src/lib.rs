@@ -381,3 +381,34 @@ unsafe impl aya::Pod for HeaderData {}
 unsafe impl aya::Pod for RouteToken {}
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for ContinueToken {}
+
+// -------------------------------------------------------
+// Wire layout invariants - compile-time assertions
+// -------------------------------------------------------
+//
+// These const-context asserts gate every wire struct against its on-the-wire
+// size. A field added, removed, or reordered by accident becomes a build
+// failure, not a runtime failure caught later by the `wire_compat` integration
+// tests. The runtime tests still run and additionally check field offsets and
+// named constants - this block is the cheaper compile-time gate.
+//
+// Sizes are taken from the C `relay_shared.h` layout on x86_64 Linux and
+// duplicated with the runtime assertions in `relay-xdp/tests/wire_compat.rs`.
+
+const _: () = assert!(core::mem::size_of::<RelayConfig>() == 88);
+const _: () = assert!(core::mem::size_of::<RelayState>() == 64);
+const _: () = assert!(core::mem::size_of::<RelayStats>() == 1200);
+const _: () = assert!(core::mem::size_of::<SessionData>() == 104);
+const _: () = assert!(core::mem::size_of::<SessionKey>() == 16);
+const _: () = assert!(core::mem::size_of::<WhitelistKey>() == 8);
+const _: () = assert!(core::mem::size_of::<WhitelistValue>() == 24);
+const _: () = assert!(core::mem::size_of::<PingTokenData>() == 52);
+const _: () = assert!(core::mem::size_of::<HeaderData>() == 50);
+const _: () = assert!(core::mem::size_of::<RouteToken>() == RELAY_ROUTE_TOKEN_BYTES);
+const _: () = assert!(core::mem::size_of::<RouteToken>() == 71);
+const _: () = assert!(core::mem::size_of::<ContinueToken>() == RELAY_CONTINUE_TOKEN_BYTES);
+const _: () = assert!(core::mem::size_of::<ContinueToken>() == 17);
+const _: () = assert!(
+    core::mem::size_of::<Chacha20Poly1305Crypto>()
+        == XCHACHA20POLY1305_NONCE_SIZE + CHACHA20POLY1305_KEY_SIZE
+);

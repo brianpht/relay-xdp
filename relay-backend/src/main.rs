@@ -13,6 +13,7 @@ mod optimizer;
 mod redis_client;
 mod relay_manager;
 mod relay_update;
+mod replay;
 mod route_matrix;
 mod state;
 
@@ -75,6 +76,9 @@ async fn main() -> anyhow::Result<()> {
         leader_election: leader_election.clone(),
         magic_rotator,
         last_optimize_ms: AtomicU64::new(0),
+        nonce_cache: replay::NonceCache::new(),
+        relay_update_replay_rejected: AtomicU64::new(0),
+        relay_update_clock_skew_rejected: AtomicU64::new(0),
     });
 
     // Spawn background tasks
@@ -83,15 +87,32 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(update_relay_backend_instance(state.clone()));
     tokio::spawn(update_route_matrix(state.clone()));
 
-    // Start web server
-    let router = handlers::create_router(state.clone());
+    // Start web servers - two routers on two ports.
+    // Public: /relay_update + health checks, bound to 0.0.0.0
+    // Admin:  topology, cost/route matrices, /metrics, bound to admin_bind_address (default 127.0.0.1)
+    // See P1-14 in docs/sessions/2026-05-04-project-audit-plan-v2.md.
+    let public_router = handlers::create_public_router(state.clone());
+    let admin_router = handlers::create_admin_router(state.clone());
 
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", http_port)).await?;
-    log::info!("relay_backend listening on 0.0.0.0:{}", http_port);
+    let public_addr = format!("0.0.0.0:{}", http_port);
+    let admin_addr = format!(
+        "{}:{}",
+        state.config.admin_bind_address, state.config.admin_http_port
+    );
 
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    let public_listener = tokio::net::TcpListener::bind(&public_addr).await?;
+    log::info!("relay_backend public listening on {}", public_addr);
+    let admin_listener = tokio::net::TcpListener::bind(&admin_addr).await?;
+    log::info!("relay_backend admin listening on {}", admin_addr);
+
+    let public_server =
+        axum::serve(public_listener, public_router).with_graceful_shutdown(shutdown_signal());
+    let admin_server =
+        axum::serve(admin_listener, admin_router).with_graceful_shutdown(shutdown_signal());
+
+    let (public_result, admin_result) = tokio::join!(public_server, admin_server);
+    public_result?;
+    admin_result?;
 
     log::info!("relay_backend shutdown complete");
     Ok(())

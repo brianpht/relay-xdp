@@ -19,6 +19,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.test.yml"
 BACKEND_URL="http://172.28.0.3:80"
+# Admin port (P1-14): topology, cost matrix, /metrics, /relay_counters all
+# served on a separate port that is NOT internet-exposed in production.
+# Compose binds ADMIN_BIND_ADDRESS=0.0.0.0 so this URL is reachable inside
+# the test network.
+ADMIN_BACKEND_URL="http://172.28.0.3:81"
 
 # Colors for output
 RED='\033[0;31m'
@@ -188,54 +193,82 @@ assert_http_ok \
     "2. GET /ready returns 200" \
     "${BACKEND_URL}/ready"
 
-# 3. GET /active_relays - Contains relay-a, relay-b, relay-c
+# 3. GET /active_relays - Contains relay-a, relay-b, relay-c (admin port)
 assert_body_contains \
     "3. GET /active_relays contains relay-a" \
-    "${BACKEND_URL}/active_relays" \
+    "${ADMIN_BACKEND_URL}/active_relays" \
     "relay-a"
 assert_body_contains \
     "3. GET /active_relays contains relay-b" \
-    "${BACKEND_URL}/active_relays" \
+    "${ADMIN_BACKEND_URL}/active_relays" \
     "relay-b"
 assert_body_contains \
     "3. GET /active_relays contains relay-c" \
-    "${BACKEND_URL}/active_relays" \
+    "${ADMIN_BACKEND_URL}/active_relays" \
     "relay-c"
 
-# 4. GET /relays - 3 "online" rows in CSV
+# 4. GET /relays - 3 "online" rows in CSV (admin port)
 assert_body_line_count_gte \
     "4. GET /relays has 3 online entries" \
-    "${BACKEND_URL}/relays" \
+    "${ADMIN_BACKEND_URL}/relays" \
     "online" \
     3
 
-# 5. GET /cost_matrix - Response body length > 0
+# 5. GET /cost_matrix - Response body length > 0 (admin port)
 assert_body_nonempty \
     "5. GET /cost_matrix is non-empty" \
-    "${BACKEND_URL}/cost_matrix"
+    "${ADMIN_BACKEND_URL}/cost_matrix"
 
-# 6. GET /costs - At least one cost line present
+# 6. GET /costs - At least one cost line present (admin port)
 #    In RELAY_NO_BPF=1 mode, ping pongs may not be reflected by eBPF,
 #    so costs may show 255. We check that the endpoint returns data.
 assert_body_nonempty \
     "6. GET /costs returns data" \
-    "${BACKEND_URL}/costs"
+    "${ADMIN_BACKEND_URL}/costs"
 
-# 7. GET /route_matrix - Response body length > 0
+# 7. GET /route_matrix - Response body length > 0 (admin port)
 assert_body_nonempty \
     "7. GET /route_matrix is non-empty" \
-    "${BACKEND_URL}/route_matrix"
+    "${ADMIN_BACKEND_URL}/route_matrix"
 
-# 8. GET /metrics - Contains relay backend metric lines
+# 8. GET /metrics - Contains relay backend metric lines (admin port)
 assert_body_contains \
     "8. GET /metrics contains backend metrics" \
-    "${BACKEND_URL}/metrics" \
+    "${ADMIN_BACKEND_URL}/metrics" \
     "relay_backend_"
 
-# 9. GET /relay_counters/relay-a - HTTP 200
+# 9. GET /relay_counters/relay-a - HTTP 200 (admin port)
 assert_http_ok \
     "9. GET /relay_counters/relay-a returns 200" \
-    "${BACKEND_URL}/relay_counters/relay-a"
+    "${ADMIN_BACKEND_URL}/relay_counters/relay-a"
+
+# 10. P1-14 separation: admin paths must NOT be reachable on the public port.
+assert_http_status() {
+    local desc="$1"
+    local url="$2"
+    local expected="$3"
+    local status
+    status=$(curl -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null) || status="000"
+    if [ "$status" = "$expected" ]; then
+        echo -e "  ${GREEN}PASS${NC} [$status] $desc"
+        PASSED=$((PASSED + 1))
+    else
+        echo -e "  ${RED}FAIL${NC} [$status] $desc (expected $expected)"
+        FAILED=$((FAILED + 1))
+    fi
+}
+assert_http_status \
+    "10a. /metrics on public port returns 404" \
+    "${BACKEND_URL}/metrics" \
+    "404"
+assert_http_status \
+    "10b. /cost_matrix on public port returns 404" \
+    "${BACKEND_URL}/cost_matrix" \
+    "404"
+assert_http_status \
+    "10c. /relay_update on admin port returns 404" \
+    "${ADMIN_BACKEND_URL}/relay_update" \
+    "404"
 
 # 10. relay-sdk smoke test (build + run in compose network)
 echo ""

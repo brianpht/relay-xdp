@@ -1,7 +1,7 @@
 # ADR-004: Replay-Protection Window for `/relay_update`
 
 **Date:** 2026-05-04<br>
-**Status:** Proposed<br>
+**Status:** Accepted (implementation landed same day - see P1-01 in companion session)<br>
 **Deciders:** developer<br>
 **Related Tasks:** Phase 1 action P1-01 (audit v2)<br>
 **Related ADRs:** N/A<br>

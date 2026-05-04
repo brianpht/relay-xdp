@@ -53,8 +53,8 @@ pub fn generate_pittle(
     sum = sum.wrapping_add(len_bytes[0] as u16);
     sum = sum.wrapping_add(len_bytes[1] as u16);
     let [s0, s1] = sum.to_le_bytes();
-    output[0] = 1u8.wrapping_add(s0 ^ s1 ^ 193);
-    output[1] = 1u8.wrapping_add((255u8.wrapping_sub(output[0])) ^ 113);
+    output[0] = 1 | (s0 ^ s1 ^ 193);
+    output[1] = 1 | ((255u8.wrapping_sub(output[0])) ^ 113);
 }
 /// Fills the 15-byte "chonkle" (bytes 3-17 of every relay packet).
 pub fn generate_chonkle(

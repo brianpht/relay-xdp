@@ -35,6 +35,7 @@ env_logger = "0.11"
 log = "0.4"
 anyhow = "1"
 num_cpus = "1"
+lru = "0.12"  # P1-01: per-relay nonce LRU for /relay_update replay protection
 
 [dev-dependencies]
 relay-xdp = { path = "../relay-xdp" }
