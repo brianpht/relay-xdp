@@ -172,8 +172,8 @@ Architectural Decision Record capturing:
 
 ## Next Steps
 
-1. **High:** Implement `infra/stack_outputs.py` (foundation for all subsequent steps)
-2. **High:** Implement `tests/e2e-deployed.sh` using stack_outputs.py env output
+1. ~~**High:** Implement `infra/stack_outputs.py` (foundation for all subsequent steps)~~ Done
+2. ~~**High:** Implement `tests/e2e-deployed.sh` using stack_outputs.py env output~~ Done
 3. **High:** Add `ansible/playbooks/e2e-verify.yml`
 4. **High:** Add `e2e-deployed` + `e2e-teardown` targets to `Makefile`
 5. **Medium:** Extend `relay-sdk/src/bin/relay_sdk_smoke.rs` with Group 4 UDP E2E
@@ -185,8 +185,10 @@ Architectural Decision Record capturing:
 | Status | File |
 |--------|------|
 | A | `docs/sessions/2026-05-05-e2e-deployed-test-plan.md` |
-| A (planned) | `tests/e2e-deployed.sh` |
-| A (planned) | `infra/stack_outputs.py` |
+| A | `tests/e2e-deployed.sh` |
+| A | `infra/stack_outputs.py` |
+| A | `infra/test_stack_outputs.py` |
+| M | `infra/inventory_gen.py` (import from stack_outputs) |
 | A (planned) | `ansible/playbooks/e2e-verify.yml` |
 | A (planned) | `docs/decisions/ADR-004-e2e-deployed-test-flow.md` |
 | M (planned) | `Makefile` |

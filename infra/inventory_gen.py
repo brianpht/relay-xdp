@@ -23,15 +23,16 @@ Requirements:
 from __future__ import annotations
 
 import argparse
-import json
-import subprocess
 import sys
 from pathlib import Path
+
+# get_stack_outputs is the single source of truth for Pulumi JSON parsing.
+# stack_outputs.py also serves tests/e2e-deployed.sh via its CLI.
+from stack_outputs import get_stack_outputs
 
 
 # Repo root relative to this file's location (infra/ -> ../)
 REPO_ROOT = Path(__file__).resolve().parent.parent
-INFRA_DIR  = REPO_ROOT / "infra"
 INVENTORY_DIR = REPO_ROOT / "ansible" / "inventory"
 
 HEADER = """\
@@ -45,24 +46,6 @@ HEADER = """\
 #   backend_servers - hosts running relay-backend + Redis
 """
 
-
-def get_stack_outputs(stack: str) -> dict:
-    """Run `pulumi stack output --json` and return parsed dict."""
-    result = subprocess.run(
-        ["pulumi", "stack", "output", "--json", "--stack", stack],
-        cwd=str(INFRA_DIR),
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        print(f"ERROR: pulumi stack output failed:\n{result.stderr}", file=sys.stderr)
-        sys.exit(1)
-
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        print(f"ERROR: failed to parse pulumi output as JSON: {exc}", file=sys.stderr)
-        sys.exit(1)
 
 
 def build_inventory(outputs: dict, stack: str) -> dict:
