@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddrV4;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 
 use crate::constants::*;
@@ -72,6 +73,8 @@ struct RelayManagerInner {
 
 pub struct RelayManager {
     inner: RwLock<RelayManagerInner>,
+    /// Number of source entries evicted due to the MAX_RELAYS capacity cap.
+    evictions: AtomicU64,
 }
 
 // -------------------------------------------------------
@@ -112,6 +115,7 @@ impl RelayManager {
                 enable_history,
                 source_entries: HashMap::new(),
             }),
+            evictions: AtomicU64::new(0),
         }
     }
 
@@ -141,6 +145,26 @@ impl RelayManager {
         };
 
         if needs_reset {
+            // Capacity guard: evict the oldest source entry before inserting a new one
+            // so that source_entries never exceeds MAX_RELAYS. This prevents an
+            // attacker-influenced relay_id stream from growing the map without bound.
+            if inner.source_entries.len() >= MAX_RELAYS {
+                if let Some(&victim_id) = inner
+                    .source_entries
+                    .iter()
+                    .min_by_key(|(_, e)| e.last_update_time)
+                    .map(|(id, _)| id)
+                {
+                    inner.source_entries.remove(&victim_id);
+                    self.evictions.fetch_add(1, Ordering::Relaxed);
+                    log::debug!(
+                        "relay_manager: evicted relay {:016x} to stay within MAX_RELAYS={}",
+                        victim_id,
+                        MAX_RELAYS
+                    );
+                }
+            }
+
             inner.source_entries.insert(
                 relay_id,
                 SourceEntry {
@@ -411,6 +435,11 @@ impl RelayManager {
         }
     }
 
+    /// Total number of source entries evicted due to the MAX_RELAYS capacity cap.
+    pub fn get_eviction_count(&self) -> u64 {
+        self.evictions.load(Ordering::Relaxed)
+    }
+
     pub fn get_history(
         &self,
         source_relay_id: u64,
@@ -433,3 +462,66 @@ impl RelayManager {
         (rtt, jitter, packet_loss)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{Ipv4Addr, SocketAddrV4};
+
+    fn dummy_addr() -> SocketAddrV4 {
+        SocketAddrV4::new(Ipv4Addr::LOCALHOST, 5000)
+    }
+
+    fn insert_relay(mgr: &RelayManager, id: u64, time: i64) {
+        mgr.process_relay_update(
+            time,
+            id,
+            &format!("relay-{}", id),
+            dummy_addr(),
+            0,
+            "1.0.0",
+            0,
+            0,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+        );
+    }
+
+    #[test]
+    fn source_entries_capped_at_max_relays() {
+        let mgr = RelayManager::new(false);
+        // Insert MAX_RELAYS entries with ascending timestamps so the oldest is id=1
+        for i in 0..MAX_RELAYS {
+            insert_relay(&mgr, i as u64 + 1, i as i64 + 1);
+        }
+        {
+            let inner = mgr.inner.read().unwrap();
+            assert_eq!(inner.source_entries.len(), MAX_RELAYS);
+        }
+        assert_eq!(mgr.get_eviction_count(), 0);
+
+        // Insert one more - should evict id=1 (oldest, time=1)
+        insert_relay(&mgr, MAX_RELAYS as u64 + 1, MAX_RELAYS as i64 + 1);
+        {
+            let inner = mgr.inner.read().unwrap();
+            assert_eq!(inner.source_entries.len(), MAX_RELAYS);
+            assert!(!inner.source_entries.contains_key(&1u64), "oldest entry should have been evicted");
+        }
+        assert_eq!(mgr.get_eviction_count(), 1);
+    }
+
+    #[test]
+    fn no_eviction_below_max_relays() {
+        let mgr = RelayManager::new(false);
+        for i in 0..10u64 {
+            insert_relay(&mgr, i, 100 + i as i64);
+        }
+        assert_eq!(mgr.get_eviction_count(), 0);
+        let inner = mgr.inner.read().unwrap();
+        assert_eq!(inner.source_entries.len(), 10);
+    }
+}
+

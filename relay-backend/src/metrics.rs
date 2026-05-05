@@ -191,6 +191,21 @@ fn render_backend_metrics(state: &Arc<AppState>, out: &mut String) {
         "relay_backend_relay_update_clock_skew_rejected {}",
         clock_skew_rejected
     );
+    // P0-02: relay_manager eviction counter (capacity cap at MAX_RELAYS).
+    let relay_manager_evictions = state.relay_manager.get_eviction_count();
+    let _ = writeln!(
+        out,
+        "# TYPE relay_backend_relay_manager_evictions_total counter"
+    );
+    let _ = writeln!(
+        out,
+        "# HELP relay_backend_relay_manager_evictions_total Source entries evicted from relay_manager because source_entries reached MAX_RELAYS capacity."
+    );
+    let _ = writeln!(
+        out,
+        "relay_backend_relay_manager_evictions_total {}",
+        relay_manager_evictions
+    );
 }
 
 /// Escape a label value for Prometheus text format.

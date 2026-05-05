@@ -29,6 +29,29 @@ use crate::relay_manager::RelayManager;
 use crate::route_matrix::{RouteMatrix, ROUTE_MATRIX_VERSION_WRITE};
 use crate::state::AppState;
 
+/// Spawn a long-running async task that restarts itself if it panics.
+/// On panic the error is logged and the task sleeps `restart_delay` before
+/// the next attempt. Normal return (Ok(())) exits without restart.
+fn spawn_restart<F, Fut>(name: &'static str, restart_delay: Duration, make_fut: F)
+where
+    F: Fn() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(async move {
+        loop {
+            let handle = tokio::spawn(make_fut());
+            match handle.await {
+                Ok(()) => break,
+                Err(e) if e.is_panic() => {
+                    log::error!("background task '{}' panicked, restarting in {:?}: {:?}", name, restart_delay, e);
+                    tokio::time::sleep(restart_delay).await;
+                }
+                Err(_) => break, // task was cancelled
+            }
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -81,11 +104,31 @@ async fn main() -> anyhow::Result<()> {
         relay_update_clock_skew_rejected: AtomicU64::new(0),
     });
 
-    // Spawn background tasks
+    // Spawn background tasks.
+    // update_initial_delay runs once - no restart needed.
+    // The three loop tasks use spawn_restart so a panic is logged and the loop
+    // resumes after 1 second rather than killing the backend silently.
     tokio::spawn(update_initial_delay(state.clone()));
-    tokio::spawn(leader_election_loop(state.clone()));
-    tokio::spawn(update_relay_backend_instance(state.clone()));
-    tokio::spawn(update_route_matrix(state.clone()));
+    {
+        let s = state.clone();
+        spawn_restart("leader_election_loop", Duration::from_secs(1), move || {
+            leader_election_loop(s.clone())
+        });
+    }
+    {
+        let s = state.clone();
+        spawn_restart(
+            "update_relay_backend_instance",
+            Duration::from_secs(1),
+            move || update_relay_backend_instance(s.clone()),
+        );
+    }
+    {
+        let s = state.clone();
+        spawn_restart("update_route_matrix", Duration::from_secs(1), move || {
+            update_route_matrix(s.clone())
+        });
+    }
 
     // Start web servers - two routers on two ports.
     // Public: /relay_update + health checks, bound to 0.0.0.0
@@ -254,14 +297,26 @@ async fn update_route_matrix(state: Arc<AppState>) {
             num_relays.max(1)
         };
 
-        let route_entries = optimizer::optimize2(
-            num_relays,
-            num_segments,
-            &costs,
-            &relay_price,
-            &relay_data.relay_datacenter_ids,
-            &relay_data.dest_relays,
-        );
+        // Optimize. Wrap in catch_unwind so a panic in the optimizer (e.g. from
+        // a thread spawned inside optimize2) skips one iteration rather than
+        // unwinding the whole task. spawn_restart at the call site provides the
+        // outer safety net if this catch_unwind is somehow bypassed.
+        let route_entries = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            optimizer::optimize2(
+                num_relays,
+                num_segments,
+                &costs,
+                &relay_price,
+                &relay_data.relay_datacenter_ids,
+                &relay_data.dest_relays,
+            )
+        })) {
+            Ok(entries) => entries,
+            Err(_) => {
+                log::error!("optimizer::optimize2 panicked - skipping route matrix update for this iteration");
+                continue;
+            }
+        };
 
         let optimize_duration = time_start.elapsed();
 

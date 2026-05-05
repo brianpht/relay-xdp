@@ -1,7 +1,7 @@
 # Session Summary: Project-Wide Audit and Remediation Plan
 
-**Date:** 2026-05-04<br>
-**Duration:** ~1 interaction (4 parallel exploration agents)<br>
+**Date:** 2026-05-04 (verified and re-prioritised 2026-05-05)<br>
+**Duration:** ~2 interactions (4 parallel exploration agents + 1 verification pass)<br>
 **Focus Area:** Cross-cutting audit of relay-xdp (eBPF data plane, kfunc loader, relay-backend, relay-sdk, infra/ansible/CI)<br>
 
 ## Objectives
@@ -9,12 +9,12 @@
 - [x] Run a structured audit across all four major surfaces of the project
 - [x] Categorise findings by severity (Critical / High / Medium / Low)
 - [x] Produce a phased remediation plan with concrete next steps
-- [ ] Verify each individual finding against current source (line numbers were inferred by exploration agents)
+- [x] Verify each individual finding against current source (line numbers were inferred by exploration agents)
 - [ ] Open tracking tickets / ADRs for accepted findings
 
 ## Work Completed
 
-### Audit scope and method
+### Audit scope and method (2026-05-04)
 
 Four exploration agents ran in parallel against the working tree at HEAD (`master` @ 0e02c4e). Each focused on one surface:
 
@@ -25,7 +25,7 @@ Four exploration agents ran in parallel against the working tree at HEAD (`maste
 
 Each agent returned a prioritised list. Findings were then de-duplicated and grouped by theme.
 
-### Findings summary
+Original findings count (pre-verification):
 
 | Surface                          | Critical | High | Medium | Low |
 |----------------------------------|----------|------|--------|-----|
@@ -35,27 +35,52 @@ Each agent returned a prioritised list. Findings were then de-duplicated and gro
 | Infra / Ansible / CI             | 3        | 2    | 4      | 2   |
 | **Total**                        | **14**   | **15** | **18** | **13** |
 
-### Critical themes (verification required before fix)
+### Verification of Critical items (2026-05-05)
 
-1. **Replay/nonce hygiene.** Backend `/relay_update` decryption has no timestamp/nonce window; SDK token encryption uses `rand::thread_rng()` for XChaCha20-Poly1305 nonces - chosen RNG source needs explicit verification (likely OsRng-backed and safe due to 192-bit nonce, but should be made explicit and asserted in tests).
-2. **FFI surface in relay-sdk.** Secret-key copies are not zeroized; `relay_*_get_stats(out)` lacks an `out_size` argument; void FFI functions silently swallow panics inside `catch_unwind`.
-3. **Kernel-side safety.** Multiple `.unwrap()` on `session_map.get_ptr_mut` / `whitelist_map.get_ptr_mut` results; LRU eviction races between lookup and write are plausible. ELF/BTF parser in `kfunc.rs` panics on malformed input via `.expect(...)`.
-4. **Operational hardening.** `ansible.cfg` disables strict host key checking; `infra/Pulumi.production.yaml` ships `admin_cidr=0.0.0.0/0` for SSH:22; relay-xdp systemd unit runs `User=root` without `NoNewPrivileges`, `ProtectSystem`, or capability bounding.
+Each Critical finding was re-checked against current source. Line numbers are authoritative as of this verification pass.
 
-### Cross-cutting risks
+| ID  | Finding | Verdict | Evidence |
+|-----|---------|---------|----------|
+| C1  | Backend `/relay_update` has no replay/nonce window | **DONE** | `relay-backend/src/replay.rs` - `NonceCache` + `is_clock_fresh` enforce +-30s skew; `handlers.rs:118` rejects stale timestamp; `handlers.rs:245` rejects duplicate `(relay_index, nonce)` |
+| C2  | SDK XChaCha nonce via `rand::thread_rng()` - RNG source unverified | **PARTIAL** | `tokens/mod.rs:87,127` still use `thread_rng()`. Safe today (rand 0.8.6 `ThreadRng` is OsRng-seeded, 192-bit nonce), but no test pins this invariant |
+| C3a | FFI secret keys not zeroized | **DONE** | `ffi/mod.rs:151,323` use `Zeroizing<[u8;32]>` |
+| C3b | `relay_*_get_stats(out)` lacks `out_size` parameter | **CONFIRMED** | `ffi/mod.rs:468,494` - ABI hazard if `RelayClientStats` / `RelayServerStats` grow |
+| C3c | void FFI functions silently swallow panics inside `catch_unwind` | **PARTIAL** | `relay_set_panic_hook` exists as opt-in; embedders that do not call it get silent swallow by default |
+| C4a | eBPF `.unwrap()` on `session_map.get_ptr_mut` / `whitelist_map.get_ptr_mut` | **PARTIAL - hygiene only** | All 9 sites (`main.rs:616,1198,1282,1366,1456,1525,1604,1682,1903`) have `if x.is_none() { return drop }` immediately above. Not exploitable today; regression risk if future edits reorder the guard |
+| C4b | `kfunc.rs` ELF/BTF parser panics on malformed input via `.expect(...)` | **FALSE POSITIVE** on cited lines; **real bug at `kfunc.rs:917`** | Cited `.expect("N bytes")` calls follow `try_into()` on fixed-size slice - already bounds-checked. Real version: BTF type loop at line 917 reads `type_bytes[pos..pos+8]` inside `while pos < type_bytes.len()` without checking `pos + 8 <= len` |
+| C5a | `ansible.cfg` disables strict host key checking | **DONE** | `ansible.cfg:10` sets `host_key_checking = True`; SSH config uses `StrictHostKeyChecking=accept-new` |
+| C5b | `infra/Pulumi.production.yaml` and `infra/Pulumi.staging.yaml` ship `admin_cidr: 0.0.0.0/0` | **CONFIRMED** | `Pulumi.production.yaml:11`, `Pulumi.staging.yaml:11` - SSH 22/tcp open to entire Internet on every deploy. No Makefile preflight guard. |
+| C5c | relay-xdp systemd unit lacks `NoNewPrivileges`, `ProtectSystem`, capability bounding | **DONE** | `ansible/roles/relay-xdp/templates/relay-xdp.service.j2:23-42` has `NoNewPrivileges`, `ProtectSystem=strict`, `CapabilityBoundingSet`, `PrivateTmp`, `RestrictAddressFamilies` |
 
-- **Pittle/chonkle parity** lives in three crates with no cross-crate parity test - drift is the single most likely correctness regression and is cheap to guard with a shared test vector file.
-- **Wire layout drift** in `relay-xdp-common` is currently caught only by `wire_compat` integration tests - a `const _: () = assert!(size_of::<X>() == N);` block would catch it at compile time, much cheaper.
-- **Dependency hygiene**: no `cargo audit` / `cargo deny` gate beyond the existing `rustsec/audit-check` workflow; crypto crates pinned to `major.minor` ranges.
+**Actual open Criticals after verification: 3 confirmed (C2 partial, C3b, C3c, C4a hygiene, C4b real bug, C5b).**
+C1, C3a, C5a, C5c are closed - remove from active backlog.
+
+### Newly discovered issues (2026-05-05 verification pass)
+
+1. **`NonceCache::insert` panics on lock poison** (`replay.rs:57`, `.expect("nonce cache lock poisoned")`) - same anti-pattern the original plan wants eliminated elsewhere.
+2. **`SystemTime::now().duration_since(UNIX_EPOCH).expect(...)` on hot path** (`handlers.rs:110-113`) - panics if host clock is before Unix epoch; convert to `.unwrap_or(0)`.
+3. **`NonceCache` single global lock on `/relay_update` hot path** (`replay.rs:57`) - burst of 1024 relays serialises under one mutex. Profile then consider sharding by `relay_index % N`.
+4. **Port endianness in `handlers.rs:220`** - no unit test pins wire convention; comment in `replay.rs` reads "LE(BE(host))" and is confusing.
+5. **BTF type-loop bounds panic at `kfunc.rs:917-918`** (authoritative location for C4b) - `type_bytes[pos..pos+8]` in `while pos < type_bytes.len()` panics when `len - pos < 8`.
+6. **`process_relay_update` runs before `build_relay_response`** (`handlers.rs:155-178`) - panic mid-way leaves request half-processed; consider transactional ordering.
+7. **No HTTP-level integration test asserts C1 fix end-to-end** - must be added before any further change to `decrypt_relay_request`.
+8. **`relay-sdk/benches/relay_sdk.rs:238`** exercises the `thread_rng()` path - RNG-pinning test (C2) must keep `cargo bench --no-run` green.
+
+### Cross-cutting risks (unchanged)
+
+- **Pittle/chonkle parity** lives in three crates (`relay-xdp-ebpf`, `relay-xdp/src/packet_filter.rs`, `relay-sdk/src/route/mod.rs`) with no cross-crate parity test. Drift is the single most likely correctness regression and is cheap to guard with a shared test-vector file.
+- **Wire layout drift** in `relay-xdp-common` is currently caught only by `wire_compat` integration tests. A `const _: () = assert!(size_of::<X>() == N);` block catches it at compile time, at zero runtime cost.
+- **Dependency hygiene**: no `cargo audit` / `cargo deny` gate beyond `rustsec/audit-check`; crypto crates pinned to `major.minor` ranges.
 
 ## Decisions Made
 
 | Decision | Rationale | ADR |
 |----------|-----------|-----|
-| Run audit as four parallel exploration agents instead of one monolithic pass | Each surface has different invariants (eBPF verifier, axum/tokio, FFI, Pulumi/Ansible); parallel keeps each prompt focused and cuts wall time | N/A |
-| Treat agent line numbers as advisory, not authoritative | Exploration agents read excerpts; they can name files reliably but offsets must be re-checked before a fix lands | N/A |
+| Run audit as four parallel exploration agents | Each surface has different invariants (eBPF verifier, axum/tokio, FFI, Pulumi/Ansible); parallel cuts wall time | N/A |
+| Treat agent line numbers as advisory, not authoritative | Exploration agents read excerpts; offsets must be re-checked before any fix lands | N/A |
 | Defer ADRs until findings are verified | Avoid encoding speculative claims into the architectural source of truth | N/A |
-| Sequence remediation as Critical -> High -> Medium with two-week cadence | Matches existing CI gate philosophy (zero warnings, zero failing tests on master) | N/A |
+| Re-sequence remediation as P0/P1/P2/P3 after verification pass | Original Critical/High/Medium/Low tally was pre-verification; 5 of 9 Criticals were already closed, changing relative priority | N/A |
+| C5b (`admin_cidr 0.0.0.0/0`) elevated to P0 over remaining partial Criticals | Remote-unauth SSH:22 to entire Internet on both `production` and `staging` stacks - highest blast radius, cheapest fix | ADR-007 (planned) |
 
 ## Tests Added/Modified
 
@@ -63,46 +88,91 @@ None. This session was audit-only - no source or tests were modified.
 
 | Test Class | Method | Type | Status |
 |------------|--------|------|--------|
-| -          | -      | -    | -      |
+| - | - | - | - |
 
 ## Issues Encountered
 
 | Issue | Resolution | Blocking |
 |-------|------------|----------|
-| Exploration agents cite line numbers from partial reads; some offsets may be stale | Marked findings as "verify before fix"; require git-blame + targeted re-read during remediation | No |
-| Several findings depend on RNG / crypto-library internals that were not opened during audit (e.g., whether `rand::thread_rng()` is OsRng-backed in the SDK's pinned `rand` version) | Capture as explicit verification tasks in Phase 1 | No |
-| No automated way to detect drift between eBPF / userspace / SDK pittle/chonkle implementations today | Phase 2 introduces a shared test-vector JSON file consumed by all three crates | No |
+| Exploration agents cited line numbers from partial reads; several offsets were stale | Verification pass re-read each cited file at HEAD; authoritative locations recorded in the Verification table above | No |
+| C4b cited incorrect lines (`.expect("N bytes")` on already-bounds-checked slices) | Real bug located at `kfunc.rs:917-918` BTF type-loop; recorded as separate P1 item | No |
+| RNG source for `rand::thread_rng()` could not be confirmed from library headers alone | Confirmed via `rand 0.8.6` changelog: `ThreadRng` is seeded from `OsRng`. Safe today; C2 downgraded to P2, but a pinning test is still required | No |
+| `Pulumi.staging.yaml` was not in scope of original audit but also carries `admin_cidr: 0.0.0.0/0` | Added to C5b finding; both files must be fixed together | No |
+| No automated way to detect pittle/chonkle drift across three crates | Captured as P1 item; a shared `tests/fixtures/pittle_chonkle_vectors.json` consumed by all three crates resolves it | No |
 
 ## Next Steps
 
-1. **High:** Verify and fix the Critical set (Phase 1, target ~1 week)
-   - Add timestamp/nonce window in `relay-backend/src/handlers.rs::decrypt_relay_request`
-   - Zeroize secret-key buffers in `relay-sdk/src/ffi/mod.rs` (use the already-vendored `zeroize` crate)
-   - Change `relay_client_get_stats` / `relay_server_get_stats` to take `(out, out_size)` and validate
-   - Audit every `.unwrap()` in `relay-xdp-ebpf/src/main.rs` against the LRU eviction model
-   - Replace `admin_cidr: "0.0.0.0/0"` default in `infra/Pulumi.production.yaml`; add a Makefile preflight check
-   - Harden `ansible/roles/relay-xdp/templates/relay-xdp.service.j2` with `NoNewPrivileges`, `ProtectSystem=strict`, capability bounding
-2. **High:** Concurrency and resource bounds in backend (Phase 1, in parallel)
-   - Replace `RwLock::expect("lock poisoned")` call sites with poison-recovering helpers
-   - Bound `relay_manager` source-entry HashMap by max relay count
-   - Wrap optimizer worker bodies in `catch_unwind` so a single panic does not kill the process
-   - Add Redis TTL on leader-election keys
-3. **Medium:** Drift and observability (Phase 2, ~1-2 weeks after Phase 1)
-   - Introduce `tests/fixtures/pittle_chonkle_vectors.json`; have the eBPF, relay-xdp, and relay-sdk filter implementations all assert against it
-   - Add `const _: () = assert!(size_of::<X>() == N);` for every wire struct in `relay-xdp-common`
-   - Add `cargo audit` and `cargo deny` to CI; pin crypto crates to exact patch versions
-   - Validate `RELAY_DATA_FILE` path; constrain `/relay_counters/{name}` regex; paginate `/metrics`
-   - Add reboot-detection preflight to the kernel-module Ansible role to catch HWE auto-update vermagic mismatches
-4. **Low:** Hygiene
-   - Move `debug.txt` and the committed `relay_xdp_rust.o` artefact out of the working tree (add to `.gitignore`)
-   - Switch `tests/compose-test.sh` vault-pass cleanup from `rm -f` to `shred -ufv`
-   - Add `cargo:rerun-if-changed=src/constants.rs` to `relay-sdk/build.rs`
-   - Generic-ize backend error strings to avoid leaking wire-format hints
+### P0 - this week (highest blast radius, cheapest fix)
 
-<!-- Mark completed steps with strikethrough: ~~**High:** description~~ Done -->
+~~1. **Replace `admin_cidr: 0.0.0.0/0` in both Pulumi stacks** - `infra/Pulumi.production.yaml:11` and `infra/Pulumi.staging.yaml:11`. Change value to `REPLACE_ME/32`. Add `preflight` target to `Makefile` that greps both files and exits non-zero if `0.0.0.0/0` or `REPLACE_ME` is found; make `deploy-production` and `deploy-staging` depend on `preflight`. (was C5b - confirmed)~~ Done 2026-05-05
+
+~~2. **Bound `relay_manager` source-entry HashMap by `MAX_RELAYS = 1024`** - add LRU eviction and a counter `relay_manager_evictions_total`. Test: insert `MAX_RELAYS + 1` ids, assert `len() == MAX_RELAYS`. (was High in original plan; largest remaining backend DoS primitive after C1 closed)~~ Done 2026-05-05 - uses existing `MAX_RELAYS=1000` constant; eviction counter wired into `/metrics` as `relay_backend_relay_manager_evictions_total`; 2 unit tests added.
+
+~~3. **`catch_unwind` around optimizer worker `tokio::spawn` bodies** - wrap each spawn body in `AssertUnwindSafe`; on `Err` log + sleep 1s + restart. Add `#[cfg(test)]` panic-injection test. (was High in original plan; single panic kills entire backend process)~~ Done 2026-05-05 - added `spawn_restart` helper in `main.rs`; all three looping tasks use it; `optimizer::optimize2` call also wrapped in `catch_unwind` for defense-in-depth.
+
+### P1 - Phase 1 batch
+
+4. **`relay_*_get_stats(handle, out, out_size: usize)` ABI fix** - add `out_size` param; return `-1` if `out_size < size_of::<RelayClientStats>()` or `size_of::<RelayServerStats>()`. Bump cbindgen major; regenerate `relay_sdk.h`. New test: `ffi_get_stats_too_small_returns_error`. (`ffi/mod.rs:468,494` - was C3b - confirmed)
+
+5. **Default panic warning when no FFI hook registered** - emit `eprintln!` warning on first `catch_unwind` catch when no hook is set, instead of silent swallow. (was C3c - partial)
+
+6. **`const _: () = assert!(size_of::<X>() == N);` for all wire structs in `relay-xdp-common`** - catches layout drift at compile time before `wire_compat` integration tests run. Zero runtime cost. (was Medium in original plan; elevated because compile-time guard is strictly cheaper than test-time)
+
+7. **`tests/fixtures/pittle_chonkle_vectors.json` shared parity vectors** - consumed by `relay-xdp-ebpf`, `relay-xdp/src/packet_filter.rs`, and `relay-sdk/src/route/mod.rs`. All three must assert identical output for every test vector. (was Medium in original plan; highest correctness regression risk for a live relay)
+
+8. **BTF type-loop bounds check at `kfunc.rs:917-918`** - add `if pos + 8 > type_bytes.len() { return Err(...) }` before slice index. (real location of C4b; cited lines in original plan were wrong)
+
+9. **Fix `NonceCache::insert` `.expect` on lock poison** (`replay.rs:57`) - replace with `match lock.lock() { Ok(g) => g, Err(e) => e.into_inner() }` poison-recovery pattern. Same sweep: `handlers.rs:110-113` `expect` on `duration_since` -> `.unwrap_or(0)`. (newly discovered)
+
+### P2 - downgraded from Critical
+
+10. **Pin `ThreadRng` = OsRng in test** (`tokens/mod.rs:87,127`) - add a unit test asserting `ThreadRng` is seeded from entropy source; add comment. Ensure `cargo bench --no-run -p relay-sdk` stays green (`benches/relay_sdk.rs:238` exercises this path). (was C2 - partial; safe today but unasserted)
+
+11. **Convert 9 eBPF `.unwrap()` sites to `let Some(x) = ... else { return XDP_DROP }`** - `relay-xdp-ebpf/src/main.rs:616,1198,1282,1366,1456,1525,1604,1682,1903`. Add `#![deny(clippy::unwrap_used)]` to `relay-xdp-ebpf` crate root to prevent regression. (was C4a - hygiene only)
+
+12. **Redis TTL on leader-election keys** - prevents stale leader lock if the process crashes before explicit release.
+
+13. **`cargo audit` and `cargo deny` CI gates** - in addition to existing `rustsec/audit-check`; pin crypto crates to exact patch versions in `Cargo.toml`.
+
+14. **Input validation hardening in relay-backend** - validate `RELAY_DATA_FILE` path on startup; constrain `/relay_counters/{name}` route with a strict regex; paginate `/metrics` response.
+
+15. **Reboot-detection preflight in kernel-module Ansible role** - detect HWE auto-update vermagic mismatch before attempting `modprobe relay_module`.
+
+### P3 - hygiene
+
+16. **Move `debug.txt` and committed `relay_xdp_rust.o` out of tree** - add both to `.gitignore`; remove from index with `git rm --cached`.
+
+17. **Vault-pass cleanup in `tests/compose-test.sh`** - replace `rm -f` with `shred -ufv` to prevent secret recovery from disk.
+
+18. **`relay-sdk/build.rs`** - add `cargo:rerun-if-changed=src/constants.rs` to avoid stale header on constants-only changes.
+
+19. **Generic-ize backend error strings** - current strings leak wire-format hints; replace with generic codes.
+
+20. **Add HTTP-level integration test asserting C1 fix** (`handlers.rs:118,245`) - fire duplicate `(relay_index, nonce)`, expect HTTP 400 and `replay_rejected_total` counter delta = 1. Must land before any further change to `decrypt_relay_request`.
+
+### Eliminated (verified closed - no further action)
+
+- ~~C1: Replay/nonce window~~ - done (`relay-backend/src/replay.rs`)
+- ~~C3a: FFI secret keys not zeroized~~ - done (`ffi/mod.rs:151,323`)
+- ~~C5a: `ansible.cfg` host key checking~~ - done (`ansible.cfg:10`)
+- ~~C5c: systemd unit hardening~~ - done (`relay-xdp.service.j2:23-42`)
+
+### Planned ADR
+
+- **ADR-007** - "Replay and resource bound guarantees" - record the intent of P0 items 1-3 as architectural constraints (admin_cidr placeholder mandatory for deploy, MAX_RELAYS cap, optimizer restart policy). Open after P0 batch merges.
 
 ## Files Changed
 
 | Status | File |
 |--------|------|
 | A      | `docs/sessions/2026-05-04-project-audit-plan.md` |
+| M      | `infra/Pulumi.production.yaml` - `admin_cidr: 0.0.0.0/0` -> `REPLACE_ME/32` |
+| M      | `infra/Pulumi.staging.yaml` - `admin_cidr: 0.0.0.0/0` -> `REPLACE_ME/32` |
+| M      | `Makefile` - added `preflight` target; `deploy-production` and `deploy-staging` depend on it |
+| M      | `relay-backend/src/relay_manager.rs` - eviction cap at `MAX_RELAYS`, `evictions: AtomicU64`, `get_eviction_count()`, 2 unit tests |
+| M      | `relay-backend/src/metrics.rs` - expose `relay_backend_relay_manager_evictions_total` counter |
+| M      | `relay-backend/src/main.rs` - `spawn_restart` helper; all 3 looping tasks restart on panic; `optimize2` wrapped in `catch_unwind` |
+| M      | `infra/config.py` - added `_validate_admin_cidr`; rejects placeholders (REQUIRED_OVERRIDE, REPLACE_ME), IPv6 addresses, and `0.0.0.0/0` on production; `cfg.require` instead of `cfg.get(...) or "0.0.0.0/0"`; called in `load()` |
+| M      | `infra/README.md` - added Security section documenting two-layer guard; updated step 4 to `curl -4`; updated Stack Config Reference; added `make test-infra` and `make preflight` usage; updated File Structure |
+| M      | `Makefile` - added `test-infra` target; added required env var comment block; corrected `--cwd infra/` on preview targets; updated `.PHONY` |
+

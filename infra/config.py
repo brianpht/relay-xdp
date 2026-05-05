@@ -109,8 +109,9 @@ class InfraConfig:
     key_pub_path: str
 
     # CIDR block allowed to reach SSH port 22 on all nodes.
-    # Should be set to your operator IP in production, e.g. "203.0.113.5/32".
-    # Defaults to 0.0.0.0/0 (open) - override before first deploy.
+    # Must be set to your operator IP, e.g. "203.0.113.5/32".
+    # There is no default - deploy will fail at the Makefile preflight
+    # check if this is left as the REPLACE_ME placeholder.
     admin_cidr: str
 
     # Derived: preferred AZ per relay region.
@@ -148,6 +149,62 @@ class InfraConfig:
         return dict(REGION_CIDR_MAP)
 
 
+def _validate_admin_cidr(cidr: str, stack: str) -> None:
+    """Reject unsafe admin_cidr values before any AWS resource is created.
+
+    Rules:
+    - Any placeholder value (REQUIRED_OVERRIDE, REPLACE_ME) is always rejected
+      regardless of stack, to force an explicit operator choice.
+    - 0.0.0.0/0 and ::/0 are rejected on production (SSH open to the world).
+    - 0.0.0.0/0 is allowed on staging as a conscious operator choice after the
+      placeholder has been cleared; a warning is logged instead.
+    - Bare IPv6 addresses (containing ':') used as an IPv4 CIDR are always
+      rejected; EC2 security group cidr_blocks only accepts IPv4 notation.
+    """
+    import ipaddress
+
+    _PLACEHOLDERS = ("REQUIRED_OVERRIDE", "REPLACE_ME")
+    for placeholder in _PLACEHOLDERS:
+        if placeholder in cidr:
+            raise pulumi.RunError(
+                f"admin_cidr '{cidr}' still contains placeholder '{placeholder}'. "
+                "Set your operator CIDR with: "
+                "pulumi config set relay-xdp-infra:admin_cidr \"$(curl -4 -s ifconfig.me)/32\""
+            )
+
+    # Reject IPv6 addresses used where an IPv4 CIDR is expected.
+    # EC2 SecurityGroup cidr_blocks only accepts IPv4; ipv6_cidr_blocks is separate.
+    if ":" in cidr:
+        raise pulumi.RunError(
+            f"admin_cidr '{cidr}' looks like an IPv6 address. "
+            "EC2 security group cidr_blocks requires IPv4 notation. "
+            "Use: pulumi config set relay-xdp-infra:admin_cidr \"$(curl -4 -s ifconfig.me)/32\""
+        )
+
+    # Validate it is actually a parseable CIDR block.
+    try:
+        ipaddress.IPv4Network(cidr, strict=False)
+    except ValueError as exc:
+        raise pulumi.RunError(
+            f"admin_cidr '{cidr}' is not a valid IPv4 CIDR block: {exc}. "
+            "Example: \"203.0.113.5/32\""
+        ) from exc
+
+    _WIDE_OPEN = ("0.0.0.0/0", "::/0")
+    if stack == "production" and cidr in _WIDE_OPEN:
+        raise pulumi.RunError(
+            f"admin_cidr '{cidr}' opens SSH to the entire Internet on production. "
+            "Set your operator CIDR with: "
+            "pulumi config set relay-xdp-infra:admin_cidr \"$(curl -4 -s ifconfig.me)/32\" --stack production"
+        )
+
+    if cidr in _WIDE_OPEN:
+        pulumi.log.warn(
+            f"admin_cidr is '{cidr}' - SSH port 22 is open to the entire Internet. "
+            "This is allowed on staging but set a real CIDR for production."
+        )
+
+
 def load() -> InfraConfig:
     """Read Pulumi stack config and return an InfraConfig instance."""
     cfg = pulumi.Config()
@@ -158,7 +215,8 @@ def load() -> InfraConfig:
     backend_region: str = cfg.require("backend_region")
     backend_instance_type: str = cfg.require("backend_instance_type")
     key_pub_path: str = cfg.get("key_pub_path") or "~/.ssh/id_ed25519.pub"
-    admin_cidr: str = cfg.get("admin_cidr") or "0.0.0.0/0"
+    admin_cidr: str = cfg.require("admin_cidr")
+    _validate_admin_cidr(admin_cidr, pulumi.get_stack())
 
     return InfraConfig(
         relay_regions=relay_regions,

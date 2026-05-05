@@ -8,5 +8,5 @@ config:
   relay-xdp-infra:backend_region: us-east-1
   relay-xdp-infra:backend_instance_type: c5.large
   relay-xdp-infra:key_pub_path: ~/.ssh/personal-key.pub
-  relay-xdp-infra:admin_cidr: 0.0.0.0/0
+  relay-xdp-infra:admin_cidr: REPLACE_ME/32
 
