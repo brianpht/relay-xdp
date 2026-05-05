@@ -381,16 +381,33 @@ void relay_server_clear_last_send_error(struct relay_RelayServer *handle);
 /**
  * Copy a snapshot of the current client event counters into `out`.
  * Also drains pending notifications so the counters are up-to-date.
- * Returns 0 on success, -1 if `handle` or `out` is null.
+ *
+ * `out_size` must be `>= sizeof(relay_RelayClientStats)`. This guard protects
+ * against ABI drift: if the struct grows in a future SDK version and the caller
+ * was compiled against the old header, the size check catches the mismatch at
+ * runtime rather than silently writing past the end of the caller's buffer.
+ *
+ * Returns 0 on success, -1 if `handle` or `out` is null, or if
+ * `out_size < sizeof(RelayClientStats)`.
  */
-int relay_client_get_stats(struct relay_RelayClient *handle, struct relay_RelayClientStats *out);
+int relay_client_get_stats(struct relay_RelayClient *handle,
+                           struct relay_RelayClientStats *out,
+                           uintptr_t out_size);
 
 /**
  * Copy a snapshot of the current server event counters into `out`.
  * Also drains pending notifications so the counters are up-to-date.
- * Returns 0 on success, -1 if `handle` or `out` is null.
+ *
+ * `out_size` must be `>= sizeof(relay_RelayServerStats)`. Same ABI-safety
+ * contract as `relay_client_get_stats`: rejects callers compiled against a
+ * smaller version of the struct.
+ *
+ * Returns 0 on success, -1 if `handle` or `out` is null, or if
+ * `out_size < sizeof(RelayServerStats)`.
  */
-int relay_server_get_stats(struct relay_RelayServer *handle, struct relay_RelayServerStats *out);
+int relay_server_get_stats(struct relay_RelayServer *handle,
+                           struct relay_RelayServerStats *out,
+                           uintptr_t out_size);
 
 /**
  * Pop the next received game payload into `out` (caller-provided buffer of `max_bytes`).

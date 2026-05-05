@@ -109,7 +109,7 @@ async fn relay_update_handler(
 
     let current_time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock before unix epoch")
+        .unwrap_or_else(|_| std::time::Duration::from_secs(0))
         .as_secs() as i64;
 
     // Clock-skew freshness check (P1-01 / ADR-004). Combined with the nonce
@@ -293,7 +293,7 @@ fn build_relay_response(
     let relay_data = &state.relay_data;
     let current_time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock before unix epoch")
+        .unwrap_or_else(|_| std::time::Duration::from_secs(0))
         .as_secs() as i64;
 
     // Build relay list: all active relays except the requesting relay.
@@ -583,7 +583,7 @@ async fn costs_handler(State(state): State<Arc<AppState>>) -> Response {
 
     let current_time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock before unix epoch")
+        .unwrap_or_else(|_| std::time::Duration::from_secs(0))
         .as_secs() as i64;
 
     let active_relay_map = state.relay_manager.get_active_relay_map(current_time);
@@ -614,7 +614,7 @@ async fn costs_handler(State(state): State<Arc<AppState>>) -> Response {
 async fn active_relays_handler(State(state): State<Arc<AppState>>) -> Response {
     let current_time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock before unix epoch")
+        .unwrap_or_else(|_| std::time::Duration::from_secs(0))
         .as_secs() as i64;
 
     let active_relays = state.relay_manager.get_active_relays(current_time);

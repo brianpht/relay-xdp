@@ -463,14 +463,25 @@ pub struct RelayServerStats {
 
 /// Copy a snapshot of the current client event counters into `out`.
 /// Also drains pending notifications so the counters are up-to-date.
-/// Returns 0 on success, -1 if `handle` or `out` is null.
+///
+/// `out_size` must be `>= sizeof(relay_RelayClientStats)`. This guard protects
+/// against ABI drift: if the struct grows in a future SDK version and the caller
+/// was compiled against the old header, the size check catches the mismatch at
+/// runtime rather than silently writing past the end of the caller's buffer.
+///
+/// Returns 0 on success, -1 if `handle` or `out` is null, or if
+/// `out_size < sizeof(RelayClientStats)`.
 #[no_mangle]
 pub extern "C" fn relay_client_get_stats(
     handle: *mut RelayClient,
     out: *mut RelayClientStats,
+    out_size: usize,
 ) -> c_int {
     panic::ffi_catch(-1, || {
         if handle.is_null() || out.is_null() {
+            return -1i32;
+        }
+        if out_size < std::mem::size_of::<RelayClientStats>() {
             return -1i32;
         }
         let h = unsafe { &mut *handle };
@@ -489,14 +500,24 @@ pub extern "C" fn relay_client_get_stats(
 
 /// Copy a snapshot of the current server event counters into `out`.
 /// Also drains pending notifications so the counters are up-to-date.
-/// Returns 0 on success, -1 if `handle` or `out` is null.
+///
+/// `out_size` must be `>= sizeof(relay_RelayServerStats)`. Same ABI-safety
+/// contract as `relay_client_get_stats`: rejects callers compiled against a
+/// smaller version of the struct.
+///
+/// Returns 0 on success, -1 if `handle` or `out` is null, or if
+/// `out_size < sizeof(RelayServerStats)`.
 #[no_mangle]
 pub extern "C" fn relay_server_get_stats(
     handle: *mut RelayServer,
     out: *mut RelayServerStats,
+    out_size: usize,
 ) -> c_int {
     panic::ffi_catch(-1, || {
         if handle.is_null() || out.is_null() {
+            return -1i32;
+        }
+        if out_size < std::mem::size_of::<RelayServerStats>() {
             return -1i32;
         }
         let h = unsafe { &mut *handle };
@@ -800,7 +821,7 @@ mod tests {
             packets_received: 0,
             route_changes: 0,
         };
-        let rc = relay_client_get_stats(null, &mut stats);
+        let rc = relay_client_get_stats(null, &mut stats, std::mem::size_of::<RelayClientStats>());
         assert_eq!(rc, -1);
     }
 
@@ -809,8 +830,28 @@ mod tests {
         let bind = cstr("0.0.0.0:0");
         let h = relay_client_create(bind.as_ptr());
         assert!(!h.is_null());
-        let rc = relay_client_get_stats(h, std::ptr::null_mut());
+        let rc = relay_client_get_stats(
+            h,
+            std::ptr::null_mut(),
+            std::mem::size_of::<RelayClientStats>(),
+        );
         assert_eq!(rc, -1);
+        relay_client_destroy(h);
+    }
+
+    #[test]
+    fn ffi_client_get_stats_too_small_returns_error() {
+        let bind = cstr("0.0.0.0:0");
+        let h = relay_client_create(bind.as_ptr());
+        assert!(!h.is_null());
+        let mut stats = RelayClientStats {
+            packets_sent: 0,
+            packets_received: 0,
+            route_changes: 0,
+        };
+        // out_size one byte smaller than the struct - must be rejected.
+        let rc = relay_client_get_stats(h, &mut stats, std::mem::size_of::<RelayClientStats>() - 1);
+        assert_eq!(rc, -1, "out_size < sizeof(RelayClientStats) must return -1");
         relay_client_destroy(h);
     }
 
@@ -824,7 +865,7 @@ mod tests {
             packets_received: 99,
             route_changes: 99,
         };
-        let rc = relay_client_get_stats(h, &mut stats);
+        let rc = relay_client_get_stats(h, &mut stats, std::mem::size_of::<RelayClientStats>());
         assert_eq!(rc, 0);
         assert_eq!(stats.packets_sent, 0);
         assert_eq!(stats.packets_received, 0);
@@ -842,7 +883,7 @@ mod tests {
             sessions_registered: 0,
             sessions_expired: 0,
         };
-        let rc = relay_server_get_stats(null, &mut stats);
+        let rc = relay_server_get_stats(null, &mut stats, std::mem::size_of::<RelayServerStats>());
         assert_eq!(rc, -1);
     }
 
@@ -851,8 +892,30 @@ mod tests {
         let addr = cstr("0.0.0.0:9000");
         let h = relay_server_create(addr.as_ptr());
         assert!(!h.is_null());
-        let rc = relay_server_get_stats(h, std::ptr::null_mut());
+        let rc = relay_server_get_stats(
+            h,
+            std::ptr::null_mut(),
+            std::mem::size_of::<RelayServerStats>(),
+        );
         assert_eq!(rc, -1);
+        relay_server_destroy(h);
+    }
+
+    #[test]
+    fn ffi_server_get_stats_too_small_returns_error() {
+        let addr = cstr("0.0.0.0:9000");
+        let h = relay_server_create(addr.as_ptr());
+        assert!(!h.is_null());
+        let mut stats = RelayServerStats {
+            packets_received: 0,
+            packets_sent: 0,
+            send_errors: 0,
+            sessions_registered: 0,
+            sessions_expired: 0,
+        };
+        // out_size one byte smaller than the struct - must be rejected.
+        let rc = relay_server_get_stats(h, &mut stats, std::mem::size_of::<RelayServerStats>() - 1);
+        assert_eq!(rc, -1, "out_size < sizeof(RelayServerStats) must return -1");
         relay_server_destroy(h);
     }
 
@@ -868,7 +931,7 @@ mod tests {
             sessions_registered: 99,
             sessions_expired: 99,
         };
-        let rc = relay_server_get_stats(h, &mut stats);
+        let rc = relay_server_get_stats(h, &mut stats, std::mem::size_of::<RelayServerStats>());
         assert_eq!(rc, 0);
         assert_eq!(stats.packets_received, 0);
         assert_eq!(stats.packets_sent, 0);
@@ -894,7 +957,7 @@ mod tests {
             sessions_registered: 0,
             sessions_expired: 0,
         };
-        let rc = relay_server_get_stats(h, &mut stats);
+        let rc = relay_server_get_stats(h, &mut stats, std::mem::size_of::<RelayServerStats>());
         assert_eq!(rc, 0);
         assert_eq!(
             stats.sessions_registered, 1,

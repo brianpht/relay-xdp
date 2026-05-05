@@ -23,6 +23,7 @@ use std::any::Any;
 use std::ffi::CString;
 use std::os::raw::c_char;
 use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::Once;
 
 /// C-compatible callback signature: receives a null-terminated UTF-8 string
 /// describing the panic. The pointer is only valid for the duration of the
@@ -69,8 +70,27 @@ fn format_payload(payload: &(dyn Any + Send)) -> String {
 
 /// Format `payload` and invoke the registered hook, if any. No-op if no
 /// hook is registered or if the message contains an interior NUL.
+///
+/// When no hook is registered the panic is silently swallowed (the pre-ADR-006
+/// behaviour). To help embedders who forget to call `relay_set_panic_hook`,
+/// the first such swallow emits a one-time diagnostic to stderr. The warning
+/// fires at most once per process lifetime (via `Once`) and is intentionally
+/// loud: the result is a spurious `relay-sdk: ...` line on stderr rather than
+/// silent corruption.
 fn report(payload: Box<dyn Any + Send>) {
+    static WARNED: Once = Once::new();
+
     let Some(hook) = get_hook() else {
+        // No hook registered - emit a one-time stderr diagnostic so embedders
+        // are not left debugging silent failures with no signal.
+        WARNED.call_once(|| {
+            eprintln!(
+                "relay-sdk: panic caught at FFI boundary with no hook set; \
+                 call relay_set_panic_hook() to receive diagnostics. \
+                 Panic payload: {}",
+                format_payload(&*payload)
+            );
+        });
         return;
     };
     let msg = format_payload(&*payload);

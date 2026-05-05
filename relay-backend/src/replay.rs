@@ -54,7 +54,15 @@ impl NonceCache {
     /// Insert `(relay_index, nonce)`. Returns `true` if the nonce was new
     /// (insert succeeded), `false` if it was already present (replay).
     pub fn insert(&self, relay_index: usize, nonce: [u8; 24]) -> bool {
-        let mut map = self.inner.lock().expect("nonce cache lock poisoned");
+        // Poison-recovery: if a previous holder panicked while holding the
+        // lock, the data inside is still structurally valid (LruCache does not
+        // leave itself in a broken state on panic). Recovering the inner guard
+        // is safe and is strictly better than panicking here and cascading a
+        // process crash into every subsequent request.
+        let mut map = match self.inner.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
         let cache = map.entry(relay_index).or_insert_with(|| {
             LruCache::new(NonZeroUsize::new(NONCE_CACHE_PER_RELAY).expect("non-zero const"))
         });

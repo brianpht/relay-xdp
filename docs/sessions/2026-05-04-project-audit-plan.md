@@ -84,11 +84,18 @@ C1, C3a, C5a, C5c are closed - remove from active backlog.
 
 ## Tests Added/Modified
 
-None. This session was audit-only - no source or tests were modified.
-
 | Test Class | Method | Type | Status |
 |------------|--------|------|--------|
-| - | - | - | - |
+| P0 relay_manager eviction | `relay_manager_eviction_*` (x2) | unit | pass |
+| P1-04 FFI ABI | `ffi_client_get_stats_too_small_returns_error` | unit | pass |
+| P1-04 FFI ABI | `ffi_server_get_stats_too_small_returns_error` | unit | pass |
+| P1-04 FFI ABI (updated) | `ffi_client_get_stats_null_handle_returns_error` | unit | pass |
+| P1-04 FFI ABI (updated) | `ffi_client_get_stats_null_out_returns_error` | unit | pass |
+| P1-04 FFI ABI (updated) | `ffi_client_get_stats_initial_counters_are_zero` | unit | pass |
+| P1-04 FFI ABI (updated) | `ffi_server_get_stats_null_handle_returns_error` | unit | pass |
+| P1-04 FFI ABI (updated) | `ffi_server_get_stats_null_out_returns_error` | unit | pass |
+| P1-04 FFI ABI (updated) | `ffi_server_get_stats_initial_counters_are_zero` | unit | pass |
+| P1-04 FFI ABI (updated) | `ffi_server_get_stats_session_events_counted` | unit | pass |
 
 ## Issues Encountered
 
@@ -112,17 +119,17 @@ None. This session was audit-only - no source or tests were modified.
 
 ### P1 - Phase 1 batch
 
-4. **`relay_*_get_stats(handle, out, out_size: usize)` ABI fix** - add `out_size` param; return `-1` if `out_size < size_of::<RelayClientStats>()` or `size_of::<RelayServerStats>()`. Bump cbindgen major; regenerate `relay_sdk.h`. New test: `ffi_get_stats_too_small_returns_error`. (`ffi/mod.rs:468,494` - was C3b - confirmed)
+~~4. **`relay_*_get_stats(handle, out, out_size: usize)` ABI fix** - add `out_size` param; return `-1` if `out_size < size_of::<RelayClientStats>()` or `size_of::<RelayServerStats>()`. Bump cbindgen major; regenerate `relay_sdk.h`. New test: `ffi_get_stats_too_small_returns_error`. (`ffi/mod.rs:468,494` - was C3b - confirmed)~~ Done 2026-05-05 - Option A hard break; `out_size: usize` added as third param to both functions; guard `out_size < size_of::<T>()` returns -1; `>=` allowed for forward-compatibility; 2 new tests `ffi_client_get_stats_too_small_returns_error` + `ffi_server_get_stats_too_small_returns_error`; all 7 existing call sites updated; `relay_generated.h` auto-regenerates on next build via `build.rs`.
 
-5. **Default panic warning when no FFI hook registered** - emit `eprintln!` warning on first `catch_unwind` catch when no hook is set, instead of silent swallow. (was C3c - partial)
+~~5. **Default panic warning when no FFI hook registered** - emit `eprintln!` warning on first `catch_unwind` catch when no hook is set, instead of silent swallow. (was C3c - partial)~~ Done 2026-05-05 - `static WARNED: Once` in `panic::report()`; first swallow without hook prints one-time `eprintln!` with panic payload to stderr; fires at most once per process lifetime; all 3 existing panic hook tests still pass.
 
-6. **`const _: () = assert!(size_of::<X>() == N);` for all wire structs in `relay-xdp-common`** - catches layout drift at compile time before `wire_compat` integration tests run. Zero runtime cost. (was Medium in original plan; elevated because compile-time guard is strictly cheaper than test-time)
+~~6. **`const _: () = assert!(size_of::<X>() == N);` for all wire structs in `relay-xdp-common`** - catches layout drift at compile time before `wire_compat` integration tests run. Zero runtime cost. (was Medium in original plan; elevated because compile-time guard is strictly cheaper than test-time)~~ Done (verified 2026-05-05) - already present at `relay-xdp-common/src/lib.rs:398-414`; covers all 11 wire structs.
 
-7. **`tests/fixtures/pittle_chonkle_vectors.json` shared parity vectors** - consumed by `relay-xdp-ebpf`, `relay-xdp/src/packet_filter.rs`, and `relay-sdk/src/route/mod.rs`. All three must assert identical output for every test vector. (was Medium in original plan; highest correctness regression risk for a live relay)
+~~7. **`tests/fixtures/pittle_chonkle_vectors.json` shared parity vectors** - consumed by `relay-xdp-ebpf`, `relay-xdp/src/packet_filter.rs`, and `relay-sdk/src/route/mod.rs`. All three must assert identical output for every test vector. (was Medium in original plan; highest correctness regression risk for a live relay)~~ Done (verified 2026-05-05) - fixture at `tests/fixtures/pittle_chonkle_vectors.rs`; consumed by `relay-xdp/tests/pittle_chonkle_parity.rs` and `relay-sdk/tests/pittle_chonkle_parity.rs`; 8 vectors, all pass.
 
-8. **BTF type-loop bounds check at `kfunc.rs:917-918`** - add `if pos + 8 > type_bytes.len() { return Err(...) }` before slice index. (real location of C4b; cited lines in original plan were wrong)
+~~8. **BTF type-loop bounds check at `kfunc.rs:917-918`** - add `if pos + 8 > type_bytes.len() { return Err(...) }` before slice index. (real location of C4b; cited lines in original plan were wrong)~~ Closed (verified 2026-05-05) - current loop guard is `while pos + 12 <= type_bytes.len()` at `kfunc.rs:915`; all slice accesses in the body are within `pos+12`; bug path does not exist in current source; no fix needed.
 
-9. **Fix `NonceCache::insert` `.expect` on lock poison** (`replay.rs:57`) - replace with `match lock.lock() { Ok(g) => g, Err(e) => e.into_inner() }` poison-recovery pattern. Same sweep: `handlers.rs:110-113` `expect` on `duration_since` -> `.unwrap_or(0)`. (newly discovered)
+~~9. **Fix `NonceCache::insert` `.expect` on lock poison** (`replay.rs:57`) - replace with `match lock.lock() { Ok(g) => g, Err(e) => e.into_inner() }` poison-recovery pattern. Same sweep: `handlers.rs:110-113` `expect` on `duration_since` -> `.unwrap_or(0)`. (newly discovered)~~ Done 2026-05-05 - `replay.rs`: poison-recovery pattern with doc comment explaining why LruCache is safe to recover; `handlers.rs`: all 4 `SystemTime` sites converted to `.unwrap_or_else(|_| Duration::from_secs(0))`.
 
 ### P2 - downgraded from Critical
 
@@ -175,4 +182,8 @@ None. This session was audit-only - no source or tests were modified.
 | M      | `infra/config.py` - added `_validate_admin_cidr`; rejects placeholders (REQUIRED_OVERRIDE, REPLACE_ME), IPv6 addresses, and `0.0.0.0/0` on production; `cfg.require` instead of `cfg.get(...) or "0.0.0.0/0"`; called in `load()` |
 | M      | `infra/README.md` - added Security section documenting two-layer guard; updated step 4 to `curl -4`; updated Stack Config Reference; added `make test-infra` and `make preflight` usage; updated File Structure |
 | M      | `Makefile` - added `test-infra` target; added required env var comment block; corrected `--cwd infra/` on preview targets; updated `.PHONY` |
+| M      | `relay-sdk/src/ffi/mod.rs` - `relay_client_get_stats` + `relay_server_get_stats` add `out_size: usize` param; size guard returns -1; 7 existing call sites updated; 2 new `too_small` tests |
+| M      | `relay-sdk/src/ffi/panic.rs` - `static WARNED: Once`; one-time `eprintln!` when panic swallowed without hook |
+| M      | `relay-backend/src/replay.rs` - `NonceCache::insert` poison-recovery with `match lock { Ok(g) => g, Err(e) => e.into_inner() }` |
+| M      | `relay-backend/src/handlers.rs` - all 4 `SystemTime::duration_since.expect(...)` sites converted to `.unwrap_or_else(|_| Duration::from_secs(0))` |
 
