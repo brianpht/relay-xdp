@@ -102,12 +102,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          # command defaults to "check"; arguments = space-separated list of checks to run.
-          # advisories: deny unmaintained + High+ severity CVEs
-          # licenses: warn only (see deny.toml [licenses] section)
-          # bans: no duplicate major versions
-          # sources: crates.io only
-          arguments: advisories licenses bans sources
+          # command = cargo-deny subcommand (default "check")
+          # command-arguments = checks passed AFTER "check": advisories licenses bans sources
+          # arguments = global flags passed BEFORE the subcommand (leave empty)
+          command: check
+          command-arguments: "advisories licenses bans sources"
 
   bench:
     name: Bench (compile check)
