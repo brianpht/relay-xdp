@@ -5,7 +5,7 @@
 **Deciders:** developer<br>
 **Related Tasks:** Docker Compose integration test suite<br>
 **Related ADRs:** N/A<br>
-**Related Sessions:** [Session 2026-04-05](../sessions/2026-04-05-compose-integration-test-plan.md)<br>
+**Related Sessions:** -<br>
 
 ## Context
 

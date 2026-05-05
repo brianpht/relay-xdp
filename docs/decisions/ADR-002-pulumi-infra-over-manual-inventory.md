@@ -5,7 +5,7 @@
 **Deciders:** developer<br>
 **Related Tasks:** `infra/` Pulumi project - multi-region relay node provisioning<br>
 **Related ADRs:** N/A<br>
-**Related Sessions:** [Session 2026-04-30](../sessions/2026-04-30-pulumi-infra-plan.md)<br>
+**Related Sessions:** -<br>
 
 ## Context
 
