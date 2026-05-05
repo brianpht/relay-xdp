@@ -1,6 +1,7 @@
 fn main() {
     let crate_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     println!("cargo:rerun-if-changed=src/ffi/mod.rs");
+    println!("cargo:rerun-if-changed=src/constants.rs");
 
     let config = cbindgen::Config::from_file("cbindgen.toml").unwrap_or_default();
     match cbindgen::Builder::new()

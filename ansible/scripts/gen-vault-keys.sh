@@ -60,7 +60,8 @@ gen_keypair_openssl() {
   priv=$(tail -c 32 "$tmp" | base64)
   pem=$(openssl genpkey -algorithm x25519 2>/dev/null)
   pub=$(echo "$pem" | openssl pkey -pubout -outform DER 2>/dev/null | tail -c 32 | base64)
-  rm -f "$tmp"
+  # Securely erase the temp DER file; fall back to rm if shred is unavailable.
+  shred -ufv "$tmp" 2>/dev/null || rm -f "$tmp"
   # Re-generate cleanly using PEM to get consistent keypair
   pem=$(openssl genpkey -algorithm x25519 2>/dev/null)
   priv=$(echo "$pem" | openssl pkey -outform DER 2>/dev/null | tail -c 32 | base64)

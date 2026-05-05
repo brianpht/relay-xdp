@@ -195,11 +195,12 @@ fn decrypt_relay_request(state: &AppState, body: &[u8]) -> Result<Vec<u8>, Strin
     const MIN_ENCRYPTED_SIZE: usize = HEADER_SIZE + MAC_SIZE + NONCE_SIZE + 1;
 
     if body.len() < MIN_ENCRYPTED_SIZE {
-        return Err(format!(
-            "body too small for encrypted request: {} < {}",
+        log::debug!(
+            "decrypt E001: body {} < min {}",
             body.len(),
             MIN_ENCRYPTED_SIZE
-        ));
+        );
+        return Err("E001".to_string());
     }
 
     let header = &body[..HEADER_SIZE];
@@ -213,7 +214,8 @@ fn decrypt_relay_request(state: &AppState, body: &[u8]) -> Result<Vec<u8>, Strin
     // On LE machines, relay-xdp's LE(BE(host)) produces raw IP octets (network order).
     let addr_type = header[1];
     if addr_type != IP_ADDRESS_IPV4 as u8 {
-        return Err(format!("unsupported address type in header: {}", addr_type));
+        log::debug!("decrypt E002: addr_type={}", addr_type);
+        return Err("E002".to_string());
     }
 
     let ip = Ipv4Addr::new(header[2], header[3], header[4], header[5]);
@@ -222,40 +224,43 @@ fn decrypt_relay_request(state: &AppState, body: &[u8]) -> Result<Vec<u8>, Strin
     let addr_str = format!("{}", addr);
     let rid = relay_id(&addr_str);
 
-    let relay_index = state
-        .relay_data
-        .relay_id_to_index
-        .get(&rid)
-        .ok_or_else(|| format!("unknown relay for decrypt: {:016x} ({})", rid, addr_str))?;
+    let relay_index = state.relay_data.relay_id_to_index.get(&rid).ok_or_else(|| {
+        log::debug!("decrypt E003: unknown relay {:016x} ({})", rid, addr_str);
+        "E003".to_string()
+    })?;
 
     if *relay_index >= state.relay_data.relay_public_keys.len() {
-        return Err(format!(
-            "no public key for relay index {} ({})",
-            relay_index, addr_str
-        ));
+        log::debug!(
+            "decrypt E004: no public key for relay_index={} ({})",
+            relay_index,
+            addr_str
+        );
+        return Err("E004".to_string());
     }
 
     // Replay protection (P1-01 / ADR-004): reject if (relay_index, nonce)
     // has already been accepted. The nonce is part of the AEAD-protected
     // wire format, so an attacker cannot mutate it without breaking the
     // MAC - making it an unforgeable replay tag.
-    let nonce_array: [u8; 24] = nonce_bytes
-        .try_into()
-        .map_err(|_| "nonce length mismatch".to_string())?;
+    let nonce_array: [u8; 24] = nonce_bytes.try_into().map_err(|_| {
+        log::debug!("decrypt E005: nonce len {}", nonce_bytes.len());
+        "E005".to_string()
+    })?;
     if !state.nonce_cache.insert(*relay_index, nonce_array) {
         state
             .relay_update_replay_rejected
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        return Err(format!(
-            "replay rejected: relay {} nonce already seen",
-            relay_index
-        ));
+        log::debug!("decrypt E006: replay relay_index={}", relay_index);
+        return Err("E006".to_string());
     }
 
     let relay_pk_bytes = state.relay_data.relay_public_keys[*relay_index];
     let backend_sk_bytes: [u8; 32] = state.config.relay_backend_private_key[..32]
         .try_into()
-        .map_err(|_| "invalid backend private key length".to_string())?;
+        .map_err(|_| {
+            log::debug!("decrypt E007: backend key length mismatch");
+            "E007".to_string()
+        })?;
 
     // Build SalsaBox: server (backend) decrypts using client (relay) public key
     let relay_pk = crypto_box::PublicKey::from(relay_pk_bytes);
@@ -270,7 +275,10 @@ fn decrypt_relay_request(state: &AppState, body: &[u8]) -> Result<Vec<u8>, Strin
     use crypto_box::aead::AeadInPlace;
     salsa_box
         .decrypt_in_place_detached(nonce, b"", &mut plaintext_body, tag)
-        .map_err(|_| "crypto_box decrypt failed - invalid key or corrupted data".to_string())?;
+        .map_err(|_| {
+            log::debug!("decrypt E008: AEAD verify failed relay_index={}", relay_index);
+            "E008".to_string()
+        })?;
 
     // Reconstruct full plaintext: header + decrypted body
     let mut full = Vec::with_capacity(HEADER_SIZE + plaintext_body.len());

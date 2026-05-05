@@ -149,15 +149,15 @@ C1, C3a, C5a, C5c are closed - remove from active backlog.
 
 ### P3 - hygiene
 
-16. **Move `debug.txt` and committed `relay_xdp_rust.o` out of tree** - add both to `.gitignore`; remove from index with `git rm --cached`.
+~~16. **Move `debug.txt` and committed `relay_xdp_rust.o` out of tree** - add both to `.gitignore`; remove from index with `git rm --cached`.~~ Done (verified 2026-05-05) - both entries already in `.gitignore` (`/relay_xdp_rust.o`, `/debug.txt`); `git ls-files` confirms neither is tracked in the index; no action needed.
 
-17. **Vault-pass cleanup in `tests/compose-test.sh`** - replace `rm -f` with `shred -ufv` to prevent secret recovery from disk.
+~~17. **Vault-pass cleanup in `tests/compose-test.sh`** - replace `rm -f` with `shred -ufv` to prevent secret recovery from disk.~~ Done 2026-05-05 - `rm -f "$tmp"` in `ansible/scripts/gen-vault-keys.sh:63` (the only `rm -f` on a secret-adjacent temp file in the project) replaced with `shred -ufv "$tmp" 2>/dev/null || rm -f "$tmp"`; `compose-test.sh` has no `rm -f` calls; no other files affected.
 
-18. **`relay-sdk/build.rs`** - add `cargo:rerun-if-changed=src/constants.rs` to avoid stale header on constants-only changes.
+~~18. **`relay-sdk/build.rs`** - add `cargo:rerun-if-changed=src/constants.rs` to avoid stale header on constants-only changes.~~ Done 2026-05-05 - `println!("cargo:rerun-if-changed=src/constants.rs");` added after the existing `src/ffi/mod.rs` line in `relay-sdk/build.rs`.
 
-19. **Generic-ize backend error strings** - current strings leak wire-format hints; replace with generic codes.
+~~19. **Generic-ize backend error strings** - current strings leak wire-format hints; replace with generic codes.~~ Done 2026-05-05 - all 8 `Err(...)` returns in `decrypt_relay_request` replaced with codes `E001`-`E008`; detail (sizes, relay IDs, indices) moved to `log::debug!` calls at the same sites; ERROR log now emits only the generic code; 14 e2e_encrypted tests pass.
 
-20. **Add HTTP-level integration test asserting C1 fix** (`handlers.rs:118,245`) - fire duplicate `(relay_index, nonce)`, expect HTTP 400 and `replay_rejected_total` counter delta = 1. Must land before any further change to `decrypt_relay_request`.
+~~20. **Add HTTP-level integration test asserting C1 fix** (`handlers.rs:118,245`) - fire duplicate `(relay_index, nonce)`, expect HTTP 400 and `replay_rejected_total` counter delta = 1. Must land before any further change to `decrypt_relay_request`.~~ Done (verified 2026-05-05) - `relay-backend/tests/e2e_encrypted.rs` already contains `test_p1_01_replay_rejected_on_second_attempt` (asserts second identical body -> 400 + counter=1), `test_p1_01_stale_current_time_rejected` (clock skew path), and `test_p1_01_same_nonce_different_relay_not_replay`; all 14 e2e tests pass.
 
 ### Eliminated (verified closed - no further action)
 
@@ -195,4 +195,7 @@ C1, C3a, C5a, C5c are closed - remove from active backlog.
 | M      | `.github/workflows/rust.yml` - added `deny` job using `EmbarkStudios/cargo-deny-action@v2` |
 | A      | `deny.toml` - workspace root; advisory/license/sources policy |
 | M      | `ansible/roles/kernel-module/tasks/main.yml` - reboot preflight: compare `uname -r` vs latest `/boot/vmlinuz-*`; warn-only |
+| M      | `ansible/scripts/gen-vault-keys.sh` - `rm -f "$tmp"` -> `shred -ufv "$tmp" 2>/dev/null \|\| rm -f "$tmp"` (P3-17) |
+| M      | `relay-sdk/build.rs` - add `cargo:rerun-if-changed=src/constants.rs` (P3-18) |
+| M      | `relay-backend/src/handlers.rs` - `decrypt_relay_request`: all 8 `Err(...)` strings replaced with codes E001-E008; detail moved to `log::debug!` (P3-19) |
 
