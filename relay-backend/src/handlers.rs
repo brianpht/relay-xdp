@@ -224,10 +224,14 @@ fn decrypt_relay_request(state: &AppState, body: &[u8]) -> Result<Vec<u8>, Strin
     let addr_str = format!("{}", addr);
     let rid = relay_id(&addr_str);
 
-    let relay_index = state.relay_data.relay_id_to_index.get(&rid).ok_or_else(|| {
-        log::debug!("decrypt E003: unknown relay {:016x} ({})", rid, addr_str);
-        "E003".to_string()
-    })?;
+    let relay_index = state
+        .relay_data
+        .relay_id_to_index
+        .get(&rid)
+        .ok_or_else(|| {
+            log::debug!("decrypt E003: unknown relay {:016x} ({})", rid, addr_str);
+            "E003".to_string()
+        })?;
 
     if *relay_index >= state.relay_data.relay_public_keys.len() {
         log::debug!(
@@ -276,7 +280,10 @@ fn decrypt_relay_request(state: &AppState, body: &[u8]) -> Result<Vec<u8>, Strin
     salsa_box
         .decrypt_in_place_detached(nonce, b"", &mut plaintext_body, tag)
         .map_err(|_| {
-            log::debug!("decrypt E008: AEAD verify failed relay_index={}", relay_index);
+            log::debug!(
+                "decrypt E008: AEAD verify failed relay_index={}",
+                relay_index
+            );
             "E008".to_string()
         })?;
 
