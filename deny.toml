@@ -17,7 +17,7 @@
 # "none"       - suppress entirely
 unmaintained = "all"
 unsound = "all"
-yanked = "all"
+yanked = "warn"
 
 # Add reviewed advisory IDs here to suppress specific known false-positives:
 # ignore = ["RUSTSEC-2021-0001"]
