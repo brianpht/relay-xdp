@@ -23,9 +23,11 @@ yanked = "warn"
 # ignore = ["RUSTSEC-2021-0001"]
 
 [licenses]
-# warn (not fail) for unapproved licenses so CI does not hard-block on a new
-# acceptable-but-unlisted license in a transitive dependency.
-unlicensed = "warn"
+# default = "warn": warn (not fail) for any license not in the allow list below,
+# including unlicensed crates and copyleft licenses. This prevents CI from
+# hard-blocking when a new acceptable-but-unlisted license appears in a
+# transitive dependency. Change to "deny" when the allow list is considered complete.
+default = "warn"
 allow = [
     "MIT",
     "Apache-2.0",
@@ -39,7 +41,6 @@ allow = [
     "Zlib",
     "OpenSSL",
 ]
-copyleft = "warn"
 
 [bans]
 # Warn on multiple major versions of the same crate (common in transitive deps).
