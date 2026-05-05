@@ -9,6 +9,7 @@
 #![no_main]
 #![feature(asm_experimental_arch)]
 #![allow(non_upper_case_globals)]
+#![deny(clippy::unwrap_used)]
 
 use aya_ebpf::{
     bindings::xdp_action,
@@ -610,10 +611,9 @@ unsafe fn relay_redirect_packet(
     };
 
     let wl_value = whitelist_map.get_ptr(&wl_key);
-    if wl_value.is_none() {
+    let Some(wl_value) = wl_value else {
         return xdp_action::XDP_DROP;
-    }
-    let wl_value = wl_value.unwrap();
+    };
 
     copy_bytes(
         (*wl_value).dest_address.as_ptr(),
@@ -1191,11 +1191,10 @@ unsafe fn handle_route_response(
     let (session_id, session_version) = read_session_key(header);
     let key = SessionKey { session_id, session_version: session_version as u64 };
     let session = session_map.get_ptr_mut(&key);
-    if session.is_none() {
+    let Some(session) = session else {
         increment_counter(stats, RELAY_COUNTER_ROUTE_RESPONSE_PACKET_COULD_NOT_FIND_SESSION);
         return count_drop(stats, data_end - data);
-    }
-    let session = session.unwrap();
+    };
 
     if (*session).expire_timestamp < (*state).current_timestamp {
         increment_counter(stats, RELAY_COUNTER_ROUTE_RESPONSE_PACKET_SESSION_EXPIRED);
@@ -1275,11 +1274,10 @@ unsafe fn handle_client_to_server(
     let (session_id, session_version) = read_session_key(header);
     let key = SessionKey { session_id, session_version: session_version as u64 };
     let session = session_map.get_ptr_mut(&key);
-    if session.is_none() {
+    let Some(session) = session else {
         increment_counter(stats, RELAY_COUNTER_CLIENT_TO_SERVER_PACKET_COULD_NOT_FIND_SESSION);
         return count_drop(stats, data_end - data);
-    }
-    let session = session.unwrap();
+    };
 
     if (*session).expire_timestamp < (*state).current_timestamp {
         increment_counter(stats, RELAY_COUNTER_CLIENT_TO_SERVER_PACKET_SESSION_EXPIRED);
@@ -1359,11 +1357,10 @@ unsafe fn handle_server_to_client(
     let (session_id, session_version) = read_session_key(header);
     let key = SessionKey { session_id, session_version: session_version as u64 };
     let session = session_map.get_ptr_mut(&key);
-    if session.is_none() {
+    let Some(session) = session else {
         increment_counter(stats, RELAY_COUNTER_SERVER_TO_CLIENT_PACKET_COULD_NOT_FIND_SESSION);
         return count_drop(stats, data_end - data);
-    }
-    let session = session.unwrap();
+    };
 
     if (*session).expire_timestamp < (*state).current_timestamp {
         increment_counter(stats, RELAY_COUNTER_SERVER_TO_CLIENT_PACKET_SESSION_EXPIRED);
@@ -1449,11 +1446,10 @@ unsafe fn handle_continue_request(
         session_version: (*token).session_version as u64,
     };
     let session = session_map.get_ptr_mut(&key);
-    if session.is_none() {
+    let Some(session) = session else {
         increment_counter(stats, RELAY_COUNTER_CONTINUE_REQUEST_PACKET_COULD_NOT_FIND_SESSION);
         return count_drop(stats, data_end - data);
-    }
-    let session = session.unwrap();
+    };
 
     if (*session).expire_timestamp < (*state).current_timestamp {
         increment_counter(stats, RELAY_COUNTER_CONTINUE_REQUEST_PACKET_SESSION_EXPIRED);
@@ -1518,11 +1514,10 @@ unsafe fn handle_continue_response(
     let (session_id, session_version) = read_session_key(header);
     let key = SessionKey { session_id, session_version: session_version as u64 };
     let session = session_map.get_ptr_mut(&key);
-    if session.is_none() {
+    let Some(session) = session else {
         increment_counter(stats, RELAY_COUNTER_CONTINUE_RESPONSE_PACKET_COULD_NOT_FIND_SESSION);
         return count_drop(stats, data_end - data);
-    }
-    let session = session.unwrap();
+    };
 
     if (*session).expire_timestamp < (*state).current_timestamp {
         increment_counter(stats, RELAY_COUNTER_CONTINUE_RESPONSE_PACKET_SESSION_EXPIRED);
@@ -1597,11 +1592,10 @@ unsafe fn handle_session_ping(
     let (session_id, session_version) = read_session_key(header);
     let key = SessionKey { session_id, session_version: session_version as u64 };
     let session = session_map.get_ptr_mut(&key);
-    if session.is_none() {
+    let Some(session) = session else {
         increment_counter(stats, RELAY_COUNTER_SESSION_PING_PACKET_COULD_NOT_FIND_SESSION);
         return count_drop(stats, data_end - data);
-    }
-    let session = session.unwrap();
+    };
 
     if (*session).expire_timestamp < (*state).current_timestamp {
         increment_counter(stats, RELAY_COUNTER_SESSION_PING_PACKET_SESSION_EXPIRED);
@@ -1675,11 +1669,10 @@ unsafe fn handle_session_pong(
     let (session_id, session_version) = read_session_key(header);
     let key = SessionKey { session_id, session_version: session_version as u64 };
     let session = session_map.get_ptr_mut(&key);
-    if session.is_none() {
+    let Some(session) = session else {
         increment_counter(stats, RELAY_COUNTER_SESSION_PONG_PACKET_COULD_NOT_FIND_SESSION);
         return count_drop(stats, data_end - data);
-    }
-    let session = session.unwrap();
+    };
 
     if (*session).expire_timestamp < (*state).current_timestamp {
         increment_counter(stats, RELAY_COUNTER_SESSION_PONG_PACKET_SESSION_EXPIRED);
@@ -1896,11 +1889,10 @@ unsafe fn try_relay_xdp_filter(ctx: &XdpContext) -> Result<u32, ()> {
             port: (*udp).source as u32,
         };
         let whitelist = whitelist_map.get_ptr_mut(&wl_key);
-        if whitelist.is_none() {
+        let Some(whitelist) = whitelist else {
             increment_counter(stats, RELAY_COUNTER_NOT_IN_WHITELIST);
             return Ok(count_drop(stats, data_end - data));
-        }
-        let whitelist = whitelist.unwrap();
+        };
 
         let t4 = profile_now(); // D2: profiling - after map lookup
         profile_record(stats, RELAY_COUNTER_PROFILE_MAP_LOOKUP_NS, t3, t4);

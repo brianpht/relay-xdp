@@ -84,6 +84,27 @@ pub fn read_config() -> Result<Config> {
         .ok()
         .filter(|v| !v.is_empty());
 
+    // Validate relay_data_file path: reject relative path traversal components.
+    // An absolute path with ".." can still escape the intended directory, so we
+    // reject any path that contains a ".." component. Starting with "/" is not
+    // required - relative paths are accepted as long as they contain no "..".
+    if let Some(ref path) = relay_data_file {
+        let p = std::path::Path::new(path);
+        let has_dotdot = p.components().any(|c| c == std::path::Component::ParentDir);
+        if has_dotdot {
+            bail!(
+                "RELAY_DATA_FILE contains '..' component (path traversal rejected): {}",
+                path
+            );
+        }
+        if !p.exists() {
+            log::warn!(
+                "RELAY_DATA_FILE '{}' does not exist at startup - starting with empty relay data",
+                path
+            );
+        }
+    }
+
     if relay_backend_public_key.is_empty() {
         log::warn!("RELAY_BACKEND_PUBLIC_KEY not set - relay update crypto disabled");
     }

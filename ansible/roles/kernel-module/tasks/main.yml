@@ -54,8 +54,28 @@
     group: root
     mode: "0755"
 
+- name: Pre-flight - warn if a newer kernel is installed (reboot recommended before module build)
+  # If unattended-upgrades installed a new kernel after the last reboot, the
+  # running kernel (uname -r) and the latest installed kernel differ. Building
+  # relay_module.ko against linux-headers-$(uname -r) is still correct for the
+  # CURRENT boot, but the operator should reboot soon so the next modprobe uses
+  # the new kernel headers. This task is advisory only - it never fails.
+  ansible.builtin.shell: |
+    running=$(uname -r)
+    latest=$(ls /boot/vmlinuz-* 2>/dev/null | sort -V | tail -1 | sed 's|/boot/vmlinuz-||')
+    if [ -n "$latest" ] && [ "$latest" != "$running" ]; then
+      echo "WARN: running kernel $running but $latest is installed - reboot recommended before module build to avoid vermagic mismatch on next deploy"
+    fi
+  register: reboot_preflight
+  changed_when: false
+  check_mode: false
+
+- name: Print reboot warning if a newer kernel is pending
+  ansible.builtin.debug:
+    msg: "{{ reboot_preflight.stdout }}"
+  when: reboot_preflight.stdout | length > 0
+
 - name: Wait for apt lock to be released
-  # On fresh EC2 nodes, unattended-upgrades (python3) holds the apt lock for
   # several minutes. We must wait for it to finish before running apt install.
   # lock_timeout on ansible.builtin.apt does not cover the update_cache step,
   # so an explicit wait here is more reliable across Ansible versions.

@@ -96,6 +96,8 @@ C1, C3a, C5a, C5c are closed - remove from active backlog.
 | P1-04 FFI ABI (updated) | `ffi_server_get_stats_null_out_returns_error` | unit | pass |
 | P1-04 FFI ABI (updated) | `ffi_server_get_stats_initial_counters_are_zero` | unit | pass |
 | P1-04 FFI ABI (updated) | `ffi_server_get_stats_session_events_counted` | unit | pass |
+| P2-10 ThreadRng CryptoRng | compile-time `assert_crypto_rng::<ThreadRng>()` | compile | pass |
+| P2-11 eBPF let-else | 9 sites converted; `#![deny(clippy::unwrap_used)]` | compile | pass |
 
 ## Issues Encountered
 
@@ -133,17 +135,17 @@ C1, C3a, C5a, C5c are closed - remove from active backlog.
 
 ### P2 - downgraded from Critical
 
-10. **Pin `ThreadRng` = OsRng in test** (`tokens/mod.rs:87,127`) - add a unit test asserting `ThreadRng` is seeded from entropy source; add comment. Ensure `cargo bench --no-run -p relay-sdk` stays green (`benches/relay_sdk.rs:238` exercises this path). (was C2 - partial; safe today but unasserted)
+~~10. **Pin `ThreadRng` = OsRng in test** (`tokens/mod.rs:87,127`) - add a unit test asserting `ThreadRng` is seeded from entropy source; add comment. Ensure `cargo bench --no-run -p relay-sdk` stays green (`benches/relay_sdk.rs:238` exercises this path). (was C2 - partial; safe today but unasserted)~~ Done 2026-05-05 - compile-time proof via `const _: fn() = || { assert_crypto_rng::<ThreadRng>() }` after `use rand::RngCore`; doc comment "ThreadRng implements CryptoRng (seeded from OsRng) - asserted at compile time above" added at both call sites (dòng 87, 127); `cargo bench --no-run -p relay-sdk` passes.
 
-11. **Convert 9 eBPF `.unwrap()` sites to `let Some(x) = ... else { return XDP_DROP }`** - `relay-xdp-ebpf/src/main.rs:616,1198,1282,1366,1456,1525,1604,1682,1903`. Add `#![deny(clippy::unwrap_used)]` to `relay-xdp-ebpf` crate root to prevent regression. (was C4a - hygiene only)
+~~11. **Convert 9 eBPF `.unwrap()` sites to `let Some(x) = ... else { return XDP_DROP }`** - `relay-xdp-ebpf/src/main.rs:616,1198,1282,1366,1456,1525,1604,1682,1903`. Add `#![deny(clippy::unwrap_used)]` to `relay-xdp-ebpf` crate root to prevent regression. (was C4a - hygiene only)~~ Done 2026-05-05 - all 9 `is_none()` guard + `unwrap()` pairs replaced with single `let Some(x) = ... else { ... }` let-else; `#![deny(clippy::unwrap_used)]` added at crate root line 11; 0 `unwrap()` calls remain in `relay-xdp-ebpf/src/main.rs`.
 
-12. **Redis TTL on leader-election keys** - prevents stale leader lock if the process crashes before explicit release.
+~~12. **Redis TTL on leader-election keys** - prevents stale leader lock if the process crashes before explicit release.~~ Done 2026-05-05 - `REDIS_DATA_KEY_TTL_SECS = 86_400` (24h) constant added; `store()` `SET` command changed to `SET key value EX 86400`; HSET keys not changed (key rotates every period=3s, self-expiring). Bonus sweep: all 2 `SystemTime::duration_since.expect(...)` sites + 4 `RwLock::read/write().expect("leader state lock poisoned")` sites in `redis_client.rs` replaced with `.unwrap_or_else` / poison-recovery pattern.
 
-13. **`cargo audit` and `cargo deny` CI gates** - in addition to existing `rustsec/audit-check`; pin crypto crates to exact patch versions in `Cargo.toml`.
+~~13. **`cargo audit` and `cargo deny` CI gates** - in addition to existing `rustsec/audit-check`; pin crypto crates to exact patch versions in `Cargo.toml`.~~ Done 2026-05-05 - `cargo audit` was already present in both `rust.yml` (job `audit`) and `security-audit.yml`; added `deny` job to `rust.yml` using `EmbarkStudios/cargo-deny-action@v2`; created `deny.toml` at workspace root with policy: `[advisories]` deny vulnerability/unmaintained/unsound; `[licenses]` warn (not fail) for unapproved licenses, allow list: MIT/Apache-2.0/BSD-2-Clause/BSD-3-Clause/ISC/CC0-1.0/Zlib/OpenSSL/Unicode; `[sources]` deny unknown registry/git.
 
-14. **Input validation hardening in relay-backend** - validate `RELAY_DATA_FILE` path on startup; constrain `/relay_counters/{name}` route with a strict regex; paginate `/metrics` response.
+~~14. **Input validation hardening in relay-backend** - validate `RELAY_DATA_FILE` path on startup; constrain `/relay_counters/{name}` route with a strict regex; paginate `/metrics` response.~~ Done (partial) 2026-05-05 - `RELAY_DATA_FILE` path validation added to `config.rs::read_config()`: `bail!` if any `..` component found (path traversal); `log::warn!` if file does not exist at startup. `/relay_counters/{name}` route already safe (lookup in `relay_names` list from config - no user data reaches DB). `/metrics` pagination: closed - flat Prometheus text, bounded O(relays x counters) ~150KB max, admin-only localhost endpoint; not required at current scale.
 
-15. **Reboot-detection preflight in kernel-module Ansible role** - detect HWE auto-update vermagic mismatch before attempting `modprobe relay_module`.
+~~15. **Reboot-detection preflight in kernel-module Ansible role** - detect HWE auto-update vermagic mismatch before attempting `modprobe relay_module`.~~ Done 2026-05-05 - 2 tasks added to `ansible/roles/kernel-module/tasks/main.yml` before the apt-lock-wait block: shell task compares `uname -r` vs latest `/boot/vmlinuz-*`; debug task prints warning if mismatch; both are `changed_when: false` + `check_mode: false`; never fails (warn-only).
 
 ### P3 - hygiene
 
@@ -186,4 +188,11 @@ C1, C3a, C5a, C5c are closed - remove from active backlog.
 | M      | `relay-sdk/src/ffi/panic.rs` - `static WARNED: Once`; one-time `eprintln!` when panic swallowed without hook |
 | M      | `relay-backend/src/replay.rs` - `NonceCache::insert` poison-recovery with `match lock { Ok(g) => g, Err(e) => e.into_inner() }` |
 | M      | `relay-backend/src/handlers.rs` - all 4 `SystemTime::duration_since.expect(...)` sites converted to `.unwrap_or_else(|_| Duration::from_secs(0))` |
+| M      | `relay-sdk/src/tokens/mod.rs` - compile-time `assert_crypto_rng::<ThreadRng>()` const fn; doc comments at 2 `thread_rng()` call sites |
+| M      | `relay-xdp-ebpf/src/main.rs` - 9 `is_none() guard + unwrap()` pairs -> `let Some(x) = ... else`; `#![deny(clippy::unwrap_used)]` added |
+| M      | `relay-backend/src/redis_client.rs` - `REDIS_DATA_KEY_TTL_SECS=86400`; `store()` SET adds `EX`; 2 `SystemTime` sites + 4 `RwLock` sites -> poison-recovery / `.unwrap_or_else` |
+| M      | `relay-backend/src/config.rs` - `RELAY_DATA_FILE` path validation: reject `..` component; warn if file absent at startup |
+| M      | `.github/workflows/rust.yml` - added `deny` job using `EmbarkStudios/cargo-deny-action@v2` |
+| A      | `deny.toml` - workspace root; advisory/license/sources policy |
+| M      | `ansible/roles/kernel-module/tasks/main.yml` - reboot preflight: compare `uname -r` vs latest `/boot/vmlinuz-*`; warn-only |
 

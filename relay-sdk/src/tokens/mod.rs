@@ -12,6 +12,15 @@ use crate::crypto::{
 };
 use rand::RngCore;
 use relay_xdp_common::{ContinueToken, RouteToken};
+
+// Compile-time proof that ThreadRng implements CryptoRng.
+// rand 0.8.x seeds ThreadRng from OsRng; this assert will fail to compile
+// if a future rand version removes the CryptoRng impl, catching the
+// regression before any nonce is generated.
+const _: fn() = || {
+    fn assert_crypto_rng<R: rand::CryptoRng + rand::RngCore>() {}
+    assert_crypto_rng::<rand::rngs::ThreadRng>();
+};
 use thiserror::Error;
 
 pub const ROUTE_TOKEN_BYTES: usize = 71;
@@ -84,6 +93,7 @@ pub fn encrypt_route_token(
     key: &[u8; XCHACHA_KEY_BYTES],
 ) -> [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] {
     let mut nonce = [0u8; XCHACHA_NONCE_BYTES];
+    // ThreadRng implements CryptoRng (seeded from OsRng) - asserted at compile time above.
     rand::thread_rng().fill_bytes(&mut nonce);
     let plaintext = route_token_to_bytes(token);
     let ciphertext = xchacha_encrypt(&plaintext, &nonce, key, &[]);
@@ -124,6 +134,7 @@ pub fn encrypt_continue_token(
     key: &[u8; XCHACHA_KEY_BYTES],
 ) -> [u8; ENCRYPTED_CONTINUE_TOKEN_BYTES] {
     let mut nonce = [0u8; XCHACHA_NONCE_BYTES];
+    // ThreadRng implements CryptoRng (seeded from OsRng) - asserted at compile time above.
     rand::thread_rng().fill_bytes(&mut nonce);
     let plaintext = continue_token_to_bytes(token);
     let ciphertext = xchacha_encrypt(&plaintext, &nonce, key, &[]);

@@ -8,6 +8,12 @@ use anyhow::Result;
 
 const REDIS_LEADER_ELECTION_VERSION: u32 = 1;
 
+// TTL for instance-data keys written by store(). These keys are overwritten on
+// every 1 Hz update cycle; the TTL is a safety net so that a crashed process
+// does not leave stale data in Redis indefinitely. 24 hours >> any expected
+// restart window, short enough to avoid unbounded Redis growth.
+const REDIS_DATA_KEY_TTL_SECS: u64 = 86_400;
+
 struct LeaderState {
     is_leader: bool,
     is_ready: bool,
@@ -28,7 +34,7 @@ impl RedisLeaderElection {
         let instance_id = uuid::Uuid::new_v4().to_string();
         let start_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("system clock before unix epoch")
+            .unwrap_or_else(|_| std::time::Duration::from_secs(0))
             .as_nanos() as u64;
 
         log::debug!("redis leader election instance id: {}", instance_id);
@@ -50,7 +56,7 @@ impl RedisLeaderElection {
     pub async fn update(&self) {
         let seconds = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("system clock before unix epoch")
+            .unwrap_or_else(|_| std::time::Duration::from_secs(0))
             .as_secs();
         let period = seconds / 3;
 
@@ -144,7 +150,12 @@ impl RedisLeaderElection {
 
         let leader_id = entries[0].0.clone();
 
-        let mut state = self.inner.write().expect("leader state lock poisoned");
+        let mut state = match self.inner.write() {
+            Ok(g) => g,
+            // Poison recovery: the previous holder panicked, but LeaderState
+            // contains only plain bool/String - no invariants were left broken.
+            Err(e) => e.into_inner(),
+        };
         let prev = state.is_leader;
         let curr = leader_id == self.instance_id;
         state.is_leader = curr;
@@ -182,13 +193,18 @@ impl RedisLeaderElection {
         let _: Result<(), _> = redis::cmd("SET")
             .arg(&key)
             .arg(data)
+            .arg("EX")
+            .arg(REDIS_DATA_KEY_TTL_SECS)
             .query_async(&mut con)
             .await;
     }
 
     pub async fn load(&self, name: &str) -> Option<Vec<u8>> {
         let leader_id = {
-            let state = self.inner.read().expect("leader state lock poisoned");
+            let state = match self.inner.read() {
+                Ok(g) => g,
+                Err(e) => e.into_inner(),
+            };
             state.leader_instance_id.clone()
         };
 
@@ -215,16 +231,16 @@ impl RedisLeaderElection {
 
     #[allow(dead_code)]
     pub fn is_leader(&self) -> bool {
-        self.inner
-            .read()
-            .expect("leader state lock poisoned")
-            .is_leader
+        match self.inner.read() {
+            Ok(g) => g.is_leader,
+            Err(e) => e.into_inner().is_leader,
+        }
     }
 
     pub fn is_ready(&self) -> bool {
-        self.inner
-            .read()
-            .expect("leader state lock poisoned")
-            .is_ready
+        match self.inner.read() {
+            Ok(g) => g.is_ready,
+            Err(e) => e.into_inner().is_ready,
+        }
     }
 }

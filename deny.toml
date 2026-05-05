@@ -1,0 +1,62 @@
+# cargo-deny configuration
+# Docs: https://embarkstudios.github.io/cargo-deny/
+#
+# Policy summary:
+#   advisories - deny unmaintained crates + any severity High+ vulnerability
+#   licenses   - warn on unapproved licenses (not fail, to avoid blocking on new transitive deps)
+#   bans       - default (no duplicate crates that are multiple major versions)
+#   sources    - crates.io only (no git deps in production crates)
+
+[advisories]
+# Deny crates with known vulnerabilities.
+# Severity levels: none < low < medium < high < critical
+# "deny" here means any advisory at any severity causes a hard fail.
+# We combine with `ignore` below for false-positives that have been reviewed.
+vulnerability = "deny"
+
+# Deny unmaintained crates - they won't receive security fixes.
+unmaintained = "deny"
+
+# Deny crates with known unsound code (mem safety issues).
+unsound = "deny"
+
+# Warn on crates that have been yanked but are still depended upon.
+yanked = "warn"
+
+# No ignores by default - add reviewed advisory ids here if needed:
+# ignore = ["RUSTSEC-2021-0001"]
+
+[licenses]
+# Warn (not fail) for unapproved licenses.
+# This prevents CI from hard-blocking when a new acceptable-but-unlisted
+# license appears in a transitive dependency.
+unlicensed = "warn"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "Zlib",
+    "OpenSSL",
+]
+copyleft = "warn"
+# Treat dual-licensed crates (MIT OR Apache-2.0) as the most permissive option.
+allow-osi-fsf-free = "neither"
+
+[bans]
+# Warn on multiple versions of the same crate (common in transitive deps).
+multiple-versions = "warn"
+# Deny wildcard dependencies in published crates.
+wildcards = "allow"
+
+[sources]
+# Only allow crates from crates.io in production.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+

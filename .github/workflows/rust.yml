@@ -95,6 +95,18 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+  deny:
+    name: Dependency Policy (cargo deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # advisories: deny unmaintained + High+ severity CVEs
+          # licenses: warn only (avoids CI break on new transitive crate)
+          # bans/sources: default allow
+          arguments: --all-features check advisories licenses bans sources
+
   bench:
     name: Bench (compile check)
     runs-on: ubuntu-latest
