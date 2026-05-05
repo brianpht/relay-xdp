@@ -189,11 +189,13 @@ impl MainThread {
                         break;
                     }
                 }
-                println!("Shutting down in {} seconds", drain_secs.saturating_sub(seconds));
+                println!(
+                    "Shutting down in {} seconds",
+                    drain_secs.saturating_sub(seconds)
+                );
                 platform::sleep(1.0);
                 seconds += 1;
             }
-
 
             println!("Clean shutdown completed");
         } else {

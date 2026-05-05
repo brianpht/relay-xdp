@@ -508,7 +508,10 @@ mod tests {
         {
             let inner = mgr.inner.read().unwrap();
             assert_eq!(inner.source_entries.len(), MAX_RELAYS);
-            assert!(!inner.source_entries.contains_key(&1u64), "oldest entry should have been evicted");
+            assert!(
+                !inner.source_entries.contains_key(&1u64),
+                "oldest entry should have been evicted"
+            );
         }
         assert_eq!(mgr.get_eviction_count(), 1);
     }
@@ -524,4 +527,3 @@ mod tests {
         assert_eq!(inner.source_entries.len(), 10);
     }
 }
-

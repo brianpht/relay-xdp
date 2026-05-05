@@ -43,7 +43,12 @@ where
             match handle.await {
                 Ok(()) => break,
                 Err(e) if e.is_panic() => {
-                    log::error!("background task '{}' panicked, restarting in {:?}: {:?}", name, restart_delay, e);
+                    log::error!(
+                        "background task '{}' panicked, restarting in {:?}: {:?}",
+                        name,
+                        restart_delay,
+                        e
+                    );
                     tokio::time::sleep(restart_delay).await;
                 }
                 Err(_) => break, // task was cancelled
