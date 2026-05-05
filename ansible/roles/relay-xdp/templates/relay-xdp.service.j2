@@ -14,7 +14,7 @@ ExecStart={{ relay_data_dir }}/relay-xdp
 Restart=on-failure
 RestartSec=10s
 TimeoutStartSec=60s
-TimeoutStopSec=30s
+TimeoutStopSec=75s
 
 # Grant only the capabilities required for XDP and BPF map management.
 # CAP_NET_ADMIN  - attach XDP to interface, set socket options

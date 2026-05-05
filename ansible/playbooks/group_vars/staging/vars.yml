@@ -3,4 +3,7 @@ rust_log:           info
 relay_dedicated:    false
 redis_maxmemory:    256mb
 relay_update_interval_ms: 1000
+# Staging has no live traffic, so skip the 60s drain on rolling deploy.
+# Production keeps the default 60s from group_vars/all.yml.
+relay_shutdown_drain_secs: 5
 

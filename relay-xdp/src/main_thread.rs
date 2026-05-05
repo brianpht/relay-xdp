@@ -171,8 +171,17 @@ impl MainThread {
             println!("\nClean shutdown...");
             self.shutting_down = true;
 
+            // Drain time is configurable via RELAY_SHUTDOWN_DRAIN_SECS so that
+            // staging / dev environments can deploy faster (default 60s gives
+            // backend a full update cycle to mark this relay offline; staging
+            // sets it to 0-5s because there is no live traffic).
+            let drain_secs: u32 = std::env::var("RELAY_SHUTDOWN_DRAIN_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60);
+
             let mut seconds = 0u32;
-            while seconds <= 60 {
+            while seconds <= drain_secs {
                 match self.update() {
                     Ok(()) => {}
                     Err(e) => {
@@ -180,15 +189,11 @@ impl MainThread {
                         break;
                     }
                 }
-                println!("Shutting down in {} seconds", 60 - seconds);
+                println!("Shutting down in {} seconds", drain_secs.saturating_sub(seconds));
                 platform::sleep(1.0);
                 seconds += 1;
             }
 
-            if seconds < 60 {
-                println!("Sleeping for extra 30 seconds for safety...");
-                platform::sleep(30.0);
-            }
 
             println!("Clean shutdown completed");
         } else {

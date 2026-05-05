@@ -32,6 +32,9 @@ rust_backtrace: 1
 relay_ping_interval_ms: 100
 relay_update_interval_ms: 1000
 relay_session_timeout_s: 60
+# Graceful shutdown drain (seconds). Production must be 60 to give the backend
+# a full update cycle to mark this relay offline. Staging overrides to 5s.
+relay_shutdown_drain_secs: 60
 
 # ---- Rolling deploy verification ---------------------------------------
 relay_startup_wait_s: 5

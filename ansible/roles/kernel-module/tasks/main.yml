@@ -54,6 +54,25 @@
     group: root
     mode: "0755"
 
+- name: Wait for apt lock to be released
+  # On fresh EC2 nodes, unattended-upgrades (python3) holds the apt lock for
+  # several minutes. We must wait for it to finish before running apt install.
+  # lock_timeout on ansible.builtin.apt does not cover the update_cache step,
+  # so an explicit wait here is more reliable across Ansible versions.
+  ansible.builtin.shell: |
+    count=0
+    while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock \
+                /var/cache/apt/archives/lock >/dev/null 2>&1; do
+      sleep 5
+      count=$((count + 1))
+      if [ "$count" -ge 60 ]; then
+        echo "Timed out waiting for apt lock after 300s" >&2
+        exit 1
+      fi
+    done
+  changed_when: false
+  when: not ansible_check_mode
+
 - name: Install kernel headers and build toolchain
   ansible.builtin.apt:
     name:
@@ -74,6 +93,10 @@
     owner: root
     group: root
     force: true
+  retries: 3
+  delay: 10
+  register: download_module_src
+  until: download_module_src is succeeded
   ignore_errors: "{{ ansible_check_mode }}"
 
 - name: Copy vmlinux BTF for running kernel (required for kfunc BTF section)
@@ -132,6 +155,36 @@
   community.general.modprobe:
     name: poly1305
     state: present
+  when: not ansible_check_mode
+
+- name: Stop relay-xdp service before reloading module (releases kfunc references)
+  # relay-xdp holds a reference to relay_module via kfunc calls. If it is
+  # running during rmmod, the kernel refuses with EBUSY and the subsequent
+  # insmod fails with "File exists". Stop the service here; the relay-xdp
+  # role (which runs after this role) will bring it back up.
+  #
+  # We do NOT use ansible.builtin.systemd module because it inherits the
+  # on-disk unit's TimeoutStopSec, which on a first deploy may still be the
+  # old default (30s) and SIGKILL the daemon mid-shutdown. Instead, send
+  # SIGTERM directly with a generous wait, then escalate to SIGKILL if the
+  # process is genuinely stuck.
+  ansible.builtin.shell: |
+    set -e
+    if ! systemctl is-active --quiet relay-xdp; then
+      exit 0
+    fi
+    systemctl kill --signal=SIGTERM relay-xdp || true
+    # Wait up to 90s for clean shutdown (covers production drain of 60s + buffer).
+    for i in $(seq 1 90); do
+      if ! systemctl is-active --quiet relay-xdp; then
+        exit 0
+      fi
+      sleep 1
+    done
+    # Stuck - escalate.
+    systemctl kill --signal=SIGKILL relay-xdp || true
+    sleep 2
+  changed_when: false
   when: not ansible_check_mode
 
 - name: Unload existing relay_module if loaded
