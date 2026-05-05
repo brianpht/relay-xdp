@@ -1,35 +1,30 @@
 # cargo-deny configuration
 # Docs: https://embarkstudios.github.io/cargo-deny/
+# Schema: cargo-deny 0.16+ (v2 action)
 #
 # Policy summary:
-#   advisories - deny unmaintained crates + any severity High+ vulnerability
+#   advisories - deny vulnerabilities; warn on unmaintained/unsound for all deps
 #   licenses   - warn on unapproved licenses (not fail, to avoid blocking on new transitive deps)
-#   bans       - default (no duplicate crates that are multiple major versions)
+#   bans       - warn on duplicate major versions
 #   sources    - crates.io only (no git deps in production crates)
 
 [advisories]
-# Deny crates with known vulnerabilities.
-# Severity levels: none < low < medium < high < critical
-# "deny" here means any advisory at any severity causes a hard fail.
-# We combine with `ignore` below for false-positives that have been reviewed.
-vulnerability = "deny"
+# vulnerability is always an error in cargo-deny v2 (no config needed).
 
-# Deny unmaintained crates - they won't receive security fixes.
-unmaintained = "deny"
+# "all"        - report for all dependencies (direct + transitive)
+# "workspace"  - only report for workspace members
+# "transitive" - only report for transitive deps
+# "none"       - suppress entirely
+unmaintained = "all"
+unsound = "all"
+yanked = "all"
 
-# Deny crates with known unsound code (mem safety issues).
-unsound = "deny"
-
-# Warn on crates that have been yanked but are still depended upon.
-yanked = "warn"
-
-# No ignores by default - add reviewed advisory ids here if needed:
+# Add reviewed advisory IDs here to suppress specific known false-positives:
 # ignore = ["RUSTSEC-2021-0001"]
 
 [licenses]
-# Warn (not fail) for unapproved licenses.
-# This prevents CI from hard-blocking when a new acceptable-but-unlisted
-# license appears in a transitive dependency.
+# warn (not fail) for unapproved licenses so CI does not hard-block on a new
+# acceptable-but-unlisted license in a transitive dependency.
 unlicensed = "warn"
 allow = [
     "MIT",
@@ -45,13 +40,10 @@ allow = [
     "OpenSSL",
 ]
 copyleft = "warn"
-# Treat dual-licensed crates (MIT OR Apache-2.0) as the most permissive option.
-allow-osi-fsf-free = "neither"
 
 [bans]
-# Warn on multiple versions of the same crate (common in transitive deps).
+# Warn on multiple major versions of the same crate (common in transitive deps).
 multiple-versions = "warn"
-# Deny wildcard dependencies in published crates.
 wildcards = "allow"
 
 [sources]
