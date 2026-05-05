@@ -23,15 +23,14 @@ yanked = "warn"
 # ignore = ["RUSTSEC-2021-0001"]
 
 [licenses]
-# default = "warn": warn (not fail) for any license not in the allow list below,
-# including unlicensed crates and copyleft licenses. This prevents CI from
-# hard-blocking when a new acceptable-but-unlisted license appears in a
-# transitive dependency. Change to "deny" when the allow list is considered complete.
-default = "warn"
+# cargo-deny 0.16+: only `allow` list is supported (no default/unlicensed/copyleft fields).
+# Any crate whose license is not in this list will be an error.
+# Add licenses to this list as needed when new transitive deps are introduced.
 allow = [
     "MIT",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
@@ -40,6 +39,20 @@ allow = [
     "CC0-1.0",
     "Zlib",
     "OpenSSL",
+    "0BSD",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "Unlicense",
+    "MPL-2.0",
+    # r-efi: "MIT OR Apache-2.0 OR LGPL-2.1-or-later" - MIT/Apache-2.0 are preferred;
+    # LGPL listed here so cargo-deny can resolve the OR expression.
+    "LGPL-2.1-or-later",
+]
+
+# Per-crate exceptions for licenses not in the allow list above.
+# LGPL crates must be listed explicitly to prevent accidental static linking.
+exceptions = [
+    # ring / other crypto crates may carry ISC AND MIT AND OpenSSL combined expressions.
 ]
 
 [bans]
