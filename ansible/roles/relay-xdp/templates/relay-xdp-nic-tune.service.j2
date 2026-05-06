@@ -1,0 +1,17 @@
+[Unit]
+Description=relay-xdp NIC tuning (MTU + combined queues for native XDP)
+Documentation=https://github.com/{{ github_repo }}
+# Run after the kernel has brought up networking but before relay-xdp tries to
+# attach its XDP program. relay-xdp.service has `After=` + `Wants=` on us.
+After=network-online.target
+Wants=network-online.target
+Before=relay-xdp.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/relay-nic-tune.sh
+
+[Install]
+WantedBy=multi-user.target
+

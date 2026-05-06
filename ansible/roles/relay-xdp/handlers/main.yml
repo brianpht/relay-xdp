@@ -11,3 +11,12 @@
     name: relay-xdp
     state: restarted
   ignore_errors: "{{ ansible_check_mode }}"
+
+# `Type=oneshot RemainAfterExit=yes` units must be `restarted` (not just
+# `started`) to re-run ExecStart when the script or unit changes.
+- name: restart relay-xdp-nic-tune
+  ansible.builtin.systemd:
+    name: relay-xdp-nic-tune
+    state: restarted
+  ignore_errors: "{{ ansible_check_mode }}"
+

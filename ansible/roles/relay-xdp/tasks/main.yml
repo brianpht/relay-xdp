@@ -3,6 +3,41 @@
 # Deploy relay-xdp binary, eBPF object, environment file, and systemd unit.
 # Backs up the current install before overwriting so rollback.yml can restore.
 
+- name: Ensure ethtool is installed (required for NIC queue tuning)
+  ansible.builtin.package:
+    name: ethtool
+    state: present
+
+- name: Deploy relay-nic-tune.sh (MTU + queue tuning script)
+  ansible.builtin.template:
+    src: relay-nic-tune.sh.j2
+    dest: /usr/local/sbin/relay-nic-tune.sh
+    owner: root
+    group: root
+    mode: "0755"
+  notify:
+    - reload systemd
+    - restart relay-xdp-nic-tune
+
+- name: Deploy relay-xdp-nic-tune.service
+  ansible.builtin.template:
+    src: relay-xdp-nic-tune.service.j2
+    dest: /etc/systemd/system/relay-xdp-nic-tune.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - reload systemd
+    - restart relay-xdp-nic-tune
+
+- name: Enable and start relay-xdp-nic-tune (apply MTU + queue tuning now)
+  ansible.builtin.systemd:
+    name: relay-xdp-nic-tune
+    enabled: true
+    state: started
+    daemon_reload: true
+  ignore_errors: "{{ ansible_check_mode }}"
+
 - name: Check if relay-xdp is currently deployed
   ansible.builtin.stat:
     path: "{{ relay_data_dir }}/relay-xdp"
@@ -116,6 +151,31 @@
         that:
           - "'xdp' in bpftool_output.stdout"
         fail_msg: "XDP program not found in bpftool prog list. relay-xdp may have failed to attach."
+
+    - name: Resolve primary egress interface
+      ansible.builtin.shell: |
+        set -o pipefail
+        ip -o route get 1.1.1.1 | awk '{for (i=1; i<=NF; i++) if ($i=="dev") {print $(i+1); exit}}'
+      args:
+        executable: /bin/bash
+      register: primary_iface
+      changed_when: false
+
+    - name: Read XDP attach mode on primary interface
+      ansible.builtin.command:
+        cmd: "ip -details link show {{ primary_iface.stdout }}"
+      register: xdp_link
+      changed_when: false
+
+    - name: Assert XDP is attached in native mode (not xdpgeneric/SKB)
+      ansible.builtin.assert:
+        that:
+          - "'xdpgeneric' not in xdp_link.stdout"
+          - "'xdp' in xdp_link.stdout"
+        fail_msg: |
+          XDP attached in SKB (generic) mode on {{ primary_iface.stdout }}.
+          Native mode failed - check `journalctl -u relay-xdp-nic-tune` and verify
+          MTU={{ relay_xdp_mtu }} + combined={{ relay_xdp_combined_queues }} were applied.
 
     - name: Verify relay_module kernel module is present
       ansible.builtin.command:

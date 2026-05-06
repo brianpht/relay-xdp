@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# relay-nic-tune.sh - prepare primary NIC for native XDP attach.
+#
+# Managed by Ansible (roles/relay-xdp). Do not edit on the host.
+#
+# Background:
+#   AWS ENA (c5n / c6in / m6i / etc.) supports native XDP only when:
+#     1. MTU <= 3498 bytes  (ENA hardware limit for XDP_PACKET_HEADROOM).
+#     2. combined queue count <= max/2  (driver allocates a parallel set of
+#        XDP TX queues, total cannot exceed device max).
+#   Cloud-init defaults to MTU 9001 and combined = vCPU count, which violates
+#   both rules and forces relay-xdp to fall back to xdpgeneric (SKB) mode.
+#
+# This script is idempotent: re-applying the same MTU / queue count is a
+# no-op at the driver level and will not bounce the link.
+
+set -euo pipefail
+
+TARGET_MTU="{{ relay_xdp_mtu }}"
+TARGET_COMBINED="{{ relay_xdp_combined_queues }}"
+
+# Resolve primary egress interface from the default route. Avoid hardcoding
+# ens5 because future instance types (e.g. c6in with ENA Express) may name it
+# differently.
+IFACE="$(ip -o route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i=="dev") {print $(i+1); exit}}')"
+if [[ -z "${IFACE}" ]]; then
+    echo "relay-nic-tune: cannot determine primary interface" >&2
+    exit 1
+fi
+
+CUR_MTU="$(cat "/sys/class/net/${IFACE}/mtu")"
+CUR_COMBINED="$(ethtool -l "${IFACE}" 2>/dev/null | awk '/^Current hardware settings:/{flag=1; next} flag && /Combined:/{print $2; exit}')"
+
+echo "relay-nic-tune: iface=${IFACE} mtu=${CUR_MTU}->${TARGET_MTU} combined=${CUR_COMBINED}->${TARGET_COMBINED}"
+
+if [[ "${CUR_MTU}" != "${TARGET_MTU}" ]]; then
+    ip link set dev "${IFACE}" mtu "${TARGET_MTU}"
+fi
+
+if [[ "${CUR_COMBINED}" != "${TARGET_COMBINED}" ]]; then
+    # `ethtool -L combined N` triggers a brief link reset on ENA.
+    ethtool -L "${IFACE}" combined "${TARGET_COMBINED}"
+fi
+
+echo "relay-nic-tune: done"
+

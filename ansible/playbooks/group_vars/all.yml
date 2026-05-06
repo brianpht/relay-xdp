@@ -20,6 +20,17 @@ relay_http_port:   8080
 backend_http_port: 8090
 redis_port:        6379
 
+# ---- NIC tuning for native XDP on AWS ENA ------------------------------
+# ENA native XDP requires:
+#   - MTU <= 3498 bytes (ENA hardware limit; default cloud-init MTU is 9001).
+#   - combined queue count <= max/2 (driver allocates parallel XDP TX queues;
+#     total RX+TX+XDP must not exceed device max). c5n.2xlarge / c6in.2xlarge
+#     have max=8 combined queues, so 4 is the highest safe value.
+# Without these settings the kernel returns EINVAL on BPF_LINK_CREATE for
+# native XDP and relay-xdp falls back to xdpgeneric (SKB) mode (much slower).
+relay_xdp_mtu: 3498
+relay_xdp_combined_queues: 4
+
 # ---- Kernel ------------------------------------------------------------
 min_kernel_major: 6
 min_kernel_minor: 5

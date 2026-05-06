@@ -1,8 +1,12 @@
 [Unit]
 Description=relay-xdp - UDP game relay with XDP packet processing
 Documentation=https://github.com/{{ github_repo }}
-After=network.target relay-module.service
-Wants=relay-module.service
+After=network.target relay-module.service relay-xdp-nic-tune.service
+Wants=relay-module.service relay-xdp-nic-tune.service
+# relay-xdp-nic-tune.service applies MTU + ethtool combined-queue tuning
+# required for native XDP attach on AWS ENA. Without it, the driver returns
+# EINVAL and we silently fall back to xdpgeneric (SKB) mode.
+Requires=relay-xdp-nic-tune.service
 
 [Service]
 Type=simple
