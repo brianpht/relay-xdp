@@ -34,7 +34,7 @@
 #include <crypto/hash.h>        /* crypto_shash */
 #include <crypto/poly1305.h>    /* poly1305_{init,update,final} */
 #include <crypto/sha2.h>        /* SHA256_DIGEST_SIZE */
-#include <asm/unaligned.h>      /* get_unaligned_le32 */
+#include <linux/unaligned.h>    /* get_unaligned_le32 */
 
 MODULE_VERSION("1.0.0");
 MODULE_LICENSE("GPL");
