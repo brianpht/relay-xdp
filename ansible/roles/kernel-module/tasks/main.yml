@@ -166,16 +166,39 @@
     - not ansible_check_mode
     - module_build_result.rc is defined and module_build_result.rc != 0
 
-- name: Ensure chacha20 kernel module is loaded
-  community.general.modprobe:
-    name: chacha20
-    state: present
+- name: Ensure chacha20 crypto algorithm is available
+  # On Ubuntu 24.04 / kernel 6.17, chacha20 and poly1305 live in lib/crypto and
+  # are statically linked into the kernel image (CONFIG_CRYPTO_LIB_CHACHA /
+  # CONFIG_CRYPTO_LIB_POLY1305). They are NOT loadable modules and may not
+  # appear in /proc/crypto by name (they are exposed as direct kernel symbols
+  # used by relay_module.c, not via the crypto_alloc_* API).
+  #
+  # We attempt modprobe as a best-effort fallback for older kernels where they
+  # exist as separate modules; failure is informational. If the symbols are
+  # genuinely missing, `insmod relay_module.ko` further down will fail with
+  # "Unknown symbol" and that error is the authoritative signal.
+  ansible.builtin.command:
+    cmd: modprobe chacha20
+  register: modprobe_chacha
+  changed_when: false
+  failed_when: false
   when: not ansible_check_mode
 
-- name: Ensure poly1305 kernel module is loaded
-  community.general.modprobe:
-    name: poly1305
-    state: present
+- name: Ensure poly1305 crypto algorithm is available
+  ansible.builtin.command:
+    cmd: modprobe poly1305
+  register: modprobe_poly1305
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Note when chacha20/poly1305 are kernel built-ins (no loadable module)
+  ansible.builtin.debug:
+    msg: >-
+      chacha20 modprobe rc={{ modprobe_chacha.rc | default('skipped') }},
+      poly1305 modprobe rc={{ modprobe_poly1305.rc | default('skipped') }}.
+      Non-zero is expected on kernels where these are built-in (lib/crypto).
+      relay_module insmod will fail later if symbols are actually missing.
   when: not ansible_check_mode
 
 - name: Stop relay-xdp service before reloading module (releases kfunc references)

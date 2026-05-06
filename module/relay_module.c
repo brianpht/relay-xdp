@@ -160,10 +160,10 @@ __bpf_kfunc int bpf_relay_xchacha20poly1305_decrypt( void * data, int data__sz, 
     return xchacha20poly1305_decrypt( data, data, data__sz, NULL, 0, crypto->nonce, crypto->key ) == true;
 }
 
-BTF_SET8_START( bpf_task_set )
+BTF_KFUNCS_START( bpf_task_set )
 BTF_ID_FLAGS( func, bpf_relay_sha256 )
 BTF_ID_FLAGS( func, bpf_relay_xchacha20poly1305_decrypt )
-BTF_SET8_END( bpf_task_set )
+BTF_KFUNCS_END( bpf_task_set )
 
 static const struct btf_kfunc_id_set bpf_task_kfunc_set = {
     .owner = THIS_MODULE,
@@ -225,8 +225,8 @@ static int __init relay_init( void )
     int result = register_btf_kfunc_id_set( BPF_PROG_TYPE_XDP, &bpf_task_kfunc_set );
     if ( result != 0 )
     {
-        pr_err( "failed to register relay module kfuncs\n" );
-        return -1;
+        pr_err( "failed to register relay module kfuncs: %d\n", result );
+        return result;
     }
 
     pr_info( "Network Next relay module initialized successfully\n" );
