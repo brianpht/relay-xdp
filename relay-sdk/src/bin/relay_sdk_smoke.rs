@@ -353,9 +353,18 @@ fn run_udp_loopback(t: &mut Runner) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("[group=4] failed to bind server UDP socket: {}", e);
-            t.check("4.2  client.stats.packets_sent > 0 (UDP loopback C->S)", false);
-            t.check("4.3  server.stats.packets_received > 0 (UDP loopback C->S)", false);
-            t.check("4.4  echo payload equality (server echoes client payload)", false);
+            t.check(
+                "4.2  client.stats.packets_sent > 0 (UDP loopback C->S)",
+                false,
+            );
+            t.check(
+                "4.3  server.stats.packets_received > 0 (UDP loopback C->S)",
+                false,
+            );
+            t.check(
+                "4.4  echo payload equality (server echoes client payload)",
+                false,
+            );
             return;
         }
     };
@@ -363,9 +372,18 @@ fn run_udp_loopback(t: &mut Runner) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("[group=4] failed to bind client UDP socket: {}", e);
-            t.check("4.2  client.stats.packets_sent > 0 (UDP loopback C->S)", false);
-            t.check("4.3  server.stats.packets_received > 0 (UDP loopback C->S)", false);
-            t.check("4.4  echo payload equality (server echoes client payload)", false);
+            t.check(
+                "4.2  client.stats.packets_sent > 0 (UDP loopback C->S)",
+                false,
+            );
+            t.check(
+                "4.3  server.stats.packets_received > 0 (UDP loopback C->S)",
+                false,
+            );
+            t.check(
+                "4.4  echo payload equality (server echoes client payload)",
+                false,
+            );
             return;
         }
     };
@@ -437,13 +455,7 @@ fn run_udp_loopback(t: &mut Runner) {
     inner.pump_commands();
 
     // Client external address used to stamp pittle/chonkle source field.
-    client.route_update(
-        UPDATE_TYPE_ROUTE,
-        2,
-        tokens,
-        MAGIC,
-        client_sdk_addr,
-    );
+    client.route_update(UPDATE_TYPE_ROUTE, 2, tokens, MAGIC, client_sdk_addr);
     inner.pump_commands();
 
     // Drain the ROUTE_REQUEST that try_send_pending emitted (discard it - we
@@ -463,7 +475,7 @@ fn run_udp_loopback(t: &mut Runner) {
     let mut relay_hdr = [0u8; 25]; // HEADER_BYTES
     write_header(
         PACKET_TYPE_ROUTE_RESPONSE,
-        0,               // sequence
+        0, // sequence
         SESSION_ID,
         SESSION_VERSION,
         &SESSION_KEY,
@@ -471,7 +483,9 @@ fn run_udp_loopback(t: &mut Runner) {
     );
     rr_buf[18..43].copy_from_slice(&relay_hdr);
 
-    let rr_pkt = RouteResponsePacket { relay_header: relay_hdr };
+    let rr_pkt = RouteResponsePacket {
+        relay_header: relay_hdr,
+    };
     let mut rr_encoded = [0u8; ROUTE_RESPONSE_BYTES];
     let _ = rr_pkt.encode(&mut rr_encoded);
 
@@ -483,18 +497,23 @@ fn run_udp_loopback(t: &mut Runner) {
     // Route must now be established.
     if !inner.route_manager.has_network_next_route() {
         eprintln!("[group=4] route not established after ROUTE_RESPONSE - aborting UDP test");
-        t.check("4.2  client.stats.packets_sent > 0 (UDP loopback C->S)", false);
-        t.check("4.3  server.stats.packets_received > 0 (UDP loopback C->S)", false);
-        t.check("4.4  echo payload equality (server echoes client payload)", false);
+        t.check(
+            "4.2  client.stats.packets_sent > 0 (UDP loopback C->S)",
+            false,
+        );
+        t.check(
+            "4.3  server.stats.packets_received > 0 (UDP loopback C->S)",
+            false,
+        );
+        t.check(
+            "4.4  echo payload equality (server echoes client payload)",
+            false,
+        );
         return;
     }
 
     // ── Exchange 3 game packets: client -> server -> client (echo) ────────────
-    let test_payloads: &[&[u8]] = &[
-        b"e2e-ping-1",
-        b"e2e-ping-2",
-        b"e2e-ping-3",
-    ];
+    let test_payloads: &[&[u8]] = &[b"e2e-ping-1", b"e2e-ping-2", b"e2e-ping-3"];
     let mut echo_ok = true;
 
     for payload in test_payloads {
@@ -512,10 +531,7 @@ fn run_udp_loopback(t: &mut Runner) {
         };
 
         // Actual UDP send: client socket -> server socket.
-        if client_sock
-            .send_to(&raw.1, server_local_addr)
-            .is_err()
-        {
+        if client_sock.send_to(&raw.1, server_local_addr).is_err() {
             echo_ok = false;
             continue;
         }
@@ -568,10 +584,7 @@ fn run_udp_loopback(t: &mut Runner) {
         let _ = s2c_to;
 
         // Actual UDP send: server socket -> client socket.
-        if server_sock
-            .send_to(&s2c_data, client_local_addr)
-            .is_err()
-        {
+        if server_sock.send_to(&s2c_data, client_local_addr).is_err() {
             echo_ok = false;
             continue;
         }
@@ -595,10 +608,7 @@ fn run_udp_loopback(t: &mut Runner) {
                 // echo matches - good
             }
             Some(ep) => {
-                eprintln!(
-                    "[group=4] echo mismatch: sent {:?} got {:?}",
-                    payload, ep
-                );
+                eprintln!("[group=4] echo mismatch: sent {:?} got {:?}", payload, ep);
                 echo_ok = false;
             }
             None => {
@@ -621,4 +631,3 @@ fn run_udp_loopback(t: &mut Runner) {
         echo_ok,
     );
 }
-
