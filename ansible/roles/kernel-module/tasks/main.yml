@@ -98,7 +98,7 @@
     name:
       - "linux-headers-{{ ansible_kernel }}"
       - build-essential
-      - gcc-12
+      - gcc-13
       - kmod
       - dwarves
     state: present
@@ -143,14 +143,15 @@
   # make is invoked against the running kernel's build tree so the compiled
   # .ko carries the correct vermagic. PAHOLE and CC are passed explicitly:
   # - PAHOLE: kernel build system may not find it via PATH from make's environment
-  # - CC=gcc-12: AWS kernel was compiled with gcc-12; build-essential installs
-  #   gcc-11 by default on Ubuntu 22.04, causing "gcc-12: not found" errors
+  # - CC=gcc-13: Ubuntu 24.04 (Noble) AWS kernel 6.17 was compiled with gcc-13;
+  #   using a different gcc major triggers "compiler differs from the one used to
+  #   build the kernel" warnings and may fail with -Werror in newer kernels.
   ansible.builtin.command:
     cmd: >-
       make -C /lib/modules/{{ ansible_kernel }}/build
       M={{ ko_build_dir }}
       PAHOLE=/usr/bin/pahole
-      CC=gcc-12
+      CC=gcc-13
       modules
   args:
     chdir: "{{ ko_build_dir }}"

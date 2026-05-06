@@ -48,9 +48,11 @@ __bpf_kfunc int bpf_relay_xchacha20poly1305_decrypt( void * data, int data__sz, 
 
 // ----------------------------------------------------------------------------------------------------------------------
 
+#ifndef CHACHA_KEY_WORDS
 #define CHACHA_KEY_WORDS ( CHACHA_KEY_SIZE / sizeof(u32) )
+#endif
 
-static bool __chacha20poly1305_decrypt( u8 * dst, const u8 * src, const size_t src_len, const u8 * ad, const size_t ad_len, u32 * chacha_state )
+static bool __chacha20poly1305_decrypt( u8 * dst, const u8 * src, const size_t src_len, const u8 * ad, const size_t ad_len, struct chacha_state * chacha_state )
 {
     const u8 *pad0 = page_address(ZERO_PAGE(0));
     struct poly1305_desc_ctx poly1305_state;
@@ -104,7 +106,7 @@ static void chacha_load_key(u32 *k, const u8 *in)
     k[7] = get_unaligned_le32(in + 28);
 }
 
-static void xchacha_init( u32 * chacha_state, const u8 * key, const u8 * nonce )
+static void xchacha_init( struct chacha_state * chacha_state, const u8 * key, const u8 * nonce )
 {
     u32 k[CHACHA_KEY_WORDS];
     u8 iv[CHACHA_IV_SIZE];
@@ -128,9 +130,9 @@ static bool xchacha20poly1305_decrypt( u8 * dst, const u8 * src, const size_t sr
                                        const u8 nonce[XCHACHA20POLY1305_NONCE_SIZE],
                                        const u8 key[CHACHA20POLY1305_KEY_SIZE] )
 {
-    u32 chacha_state[CHACHA_STATE_WORDS];
-    xchacha_init( chacha_state, key, nonce );
-    return __chacha20poly1305_decrypt( dst, src, src_len, ad, ad_len, chacha_state );
+    struct chacha_state chacha_state;
+    xchacha_init( &chacha_state, key, nonce );
+    return __chacha20poly1305_decrypt( dst, src, src_len, ad, ad_len, &chacha_state );
 }
 
 // ----------------------------------------------------------------------------------------------------------------------
