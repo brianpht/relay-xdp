@@ -9,7 +9,7 @@
 - [x] Analyse codebase: existing test layers (compose-test, relay_sdk_smoke, Ansible verify)
 - [x] Identify gaps between local Docker Compose tests and a live deployed stack
 - [x] Produce a concrete, file-level implementation plan for post-provisioning E2E
-- [ ] Implement and merge the plan (follow-on work)
+- [x] Implement and merge the plan (follow-on work)
 
 ## Work Completed
 
@@ -176,21 +176,21 @@ Architectural Decision Record capturing:
 2. ~~**High:** Implement `tests/e2e-deployed.sh` using stack_outputs.py env output~~ Done
 3. ~~**High:** Add `ansible/playbooks/e2e-verify.yml`~~ Done
 4. ~~**High:** Add `e2e-deployed` + `e2e-teardown` targets to `Makefile`~~ Done
-5. **Medium:** Extend `relay-sdk/src/bin/relay_sdk_smoke.rs` with Group 4 UDP E2E
-6. **Medium:** Write `docs/decisions/ADR-004-e2e-deployed-test-flow.md`
+5. ~~**Medium:** Extend `relay-sdk/src/bin/relay_sdk_smoke.rs` with Group 4 UDP E2E~~ Done
+6. ~~**Medium:** Write `docs/decisions/ADR-004-e2e-deployed-test-flow.md`~~ Done
 7. **Low:** Evaluate nightly CI escalation path (GitHub Actions runner + stored AWS/vault creds)
 
 ## Files Changed
 
 | Status | File |
-|--------|------|
+|---|------|
 | A | `docs/sessions/2026-05-05-e2e-deployed-test-plan.md` |
 | A | `tests/e2e-deployed.sh` |
 | A | `infra/stack_outputs.py` |
 | A | `infra/test_stack_outputs.py` |
 | M | `infra/inventory_gen.py` (import from stack_outputs) |
 | A | `ansible/playbooks/e2e-verify.yml` |
-| A (planned) | `docs/decisions/ADR-004-e2e-deployed-test-flow.md` |
+| A | `docs/decisions/ADR-004-e2e-deployed-test-flow.md` |
 | M | `Makefile` (`e2e-deployed` + `e2e-teardown` targets) |
-| M (planned) | `relay-sdk/src/bin/relay_sdk_smoke.rs` |
+| M | `relay-sdk/src/bin/relay_sdk_smoke.rs` (Group 4 + group tags + JSON summary) |
 
