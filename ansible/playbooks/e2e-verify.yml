@@ -1,0 +1,200 @@
+---
+# playbooks/e2e-verify.yml
+# Post-deploy E2E verification. Run after site.yml completes.
+# Checks: systemd service, eBPF program, kernel module, UDP socket,
+# recent journal (no ERRORs) on relay_servers; service + HTTP liveness on
+# backend_servers.
+#
+# Usage:
+#   ansible-playbook -i inventory/staging.yml playbooks/e2e-verify.yml
+#   ansible-playbook -i inventory/production.yml playbooks/e2e-verify.yml --ask-vault-pass
+#
+# Failure behaviour: no ignore_errors - any failed assertion aborts the play
+# immediately so the stack is left alive for forensic inspection.
+# Use `make e2e-teardown STACK=<stack>` only after investigation is complete.
+
+# ---------------------------------------------------------------------------
+# Play 1: relay server verification
+# ---------------------------------------------------------------------------
+- name: E2E relay node verification
+  hosts: relay_servers
+  gather_facts: false
+
+  tasks:
+    # -- 1. systemd service active -------------------------------------------
+    - name: Verify relay-xdp systemd service is active
+      ansible.builtin.command:
+        cmd: systemctl is-active relay-xdp
+      register: svc_active
+      changed_when: false
+      failed_when: svc_active.stdout != "active"
+
+    - name: Report relay-xdp service state
+      ansible.builtin.debug:
+        msg: "relay-xdp on {{ inventory_hostname }}: {{ svc_active.stdout }}"
+
+    # -- 2. XDP BPF program loaded -------------------------------------------
+    - name: List loaded BPF programs
+      ansible.builtin.command:
+        cmd: bpftool prog list
+      register: bpftool_output
+      changed_when: false
+
+    - name: Assert XDP program is present
+      ansible.builtin.assert:
+        that:
+          - "'xdp' in bpftool_output.stdout"
+        fail_msg: >
+          XDP program not found in bpftool prog list on {{ inventory_hostname }}.
+          relay-xdp may have failed to attach to the NIC.
+          Run: bpftool prog list
+
+    # -- 3. relay_module kernel module loaded --------------------------------
+    - name: List loaded kernel modules
+      ansible.builtin.command:
+        cmd: lsmod
+      register: lsmod_output
+      changed_when: false
+
+    - name: Assert relay_module is present
+      ansible.builtin.assert:
+        that:
+          - "'relay_module' in lsmod_output.stdout"
+        fail_msg: >
+          relay_module not found in lsmod on {{ inventory_hostname }}.
+          Kernel module may have failed to load or was removed.
+          Run: modprobe relay_module && journalctl -k --since "5 minutes ago"
+
+    # -- 4. UDP socket bound on relay port -----------------------------------
+    - name: Check UDP socket bound on relay port {{ relay_udp_port }}
+      ansible.builtin.command:
+        cmd: ss -lun sport = :{{ relay_udp_port }}
+      register: ss_output
+      changed_when: false
+
+    - name: Assert UDP socket is listening
+      ansible.builtin.assert:
+        that:
+          - ss_output.stdout_lines | length > 1
+        fail_msg: >
+          No UDP socket bound on port {{ relay_udp_port }} on {{ inventory_hostname }}.
+          relay-xdp may not have opened its data-plane socket.
+          Run: ss -lun sport = :{{ relay_udp_port }}
+
+    # -- 5. No ERROR lines in recent journal ---------------------------------
+    - name: Count ERROR lines in relay-xdp journal (last 5 minutes)
+      ansible.builtin.shell:
+        cmd: >
+          journalctl -u relay-xdp --since "5 minutes ago" --no-pager
+          | grep -c 'ERROR' || true
+      register: journal_error_count
+      changed_when: false
+
+    - name: Assert no ERROR lines in journal
+      ansible.builtin.assert:
+        that:
+          - journal_error_count.stdout | int == 0
+        fail_msg: >
+          Found {{ journal_error_count.stdout }} ERROR line(s) in the relay-xdp
+          journal on {{ inventory_hostname }} in the last 5 minutes.
+          Run: journalctl -u relay-xdp --since "5 minutes ago" | grep ERROR
+
+    # -- Diagnostic: always print last 30 journal lines ----------------------
+    - name: Capture relay-xdp journal (last 30 lines, always printed)
+      ansible.builtin.command:
+        cmd: journalctl -u relay-xdp -n 30 --no-pager
+      register: journal_tail
+      changed_when: false
+      failed_when: false
+
+    - name: Print relay-xdp journal tail
+      ansible.builtin.debug:
+        msg: "{{ journal_tail.stdout_lines }}"
+
+    - name: Report relay node PASS
+      ansible.builtin.debug:
+        msg: >
+          [e2e-verify] {{ inventory_hostname }} PASS:
+          service=active xdp=loaded module=loaded udp={{ relay_udp_port }}=bound errors=0
+
+# ---------------------------------------------------------------------------
+# Play 2: backend server verification
+# ---------------------------------------------------------------------------
+- name: E2E backend node verification
+  hosts: backend_servers
+  gather_facts: false
+
+  tasks:
+    # -- 1. relay-backend systemd service active -----------------------------
+    - name: Verify relay-backend systemd service is active
+      ansible.builtin.command:
+        cmd: systemctl is-active relay-backend
+      register: backend_svc
+      changed_when: false
+      failed_when: backend_svc.stdout != "active"
+
+    - name: Report relay-backend service state
+      ansible.builtin.debug:
+        msg: "relay-backend on {{ inventory_hostname }}: {{ backend_svc.stdout }}"
+
+    # -- 2. Redis running ----------------------------------------------------
+    - name: Verify redis systemd service is active
+      ansible.builtin.command:
+        cmd: systemctl is-active redis
+      register: redis_svc
+      changed_when: false
+      failed_when: redis_svc.stdout != "active"
+
+    # -- 3. Backend public HTTP liveness (port 8090 /health) -----------------
+    - name: Check backend /health on public port {{ backend_http_port }}
+      ansible.builtin.uri:
+        url: "http://localhost:{{ backend_http_port }}/health"
+        method: GET
+        status_code: 200
+        timeout: 5
+      register: health_result
+
+    - name: Assert backend /health returns 200
+      ansible.builtin.assert:
+        that:
+          - health_result.status == 200
+        fail_msg: >
+          Backend /health returned {{ health_result.status }} on
+          {{ inventory_hostname }}:{{ backend_http_port }}.
+
+    # -- 4. No ERROR lines in recent backend journal -------------------------
+    - name: Count ERROR lines in relay-backend journal (last 5 minutes)
+      ansible.builtin.shell:
+        cmd: >
+          journalctl -u relay-backend --since "5 minutes ago" --no-pager
+          | grep -c 'ERROR' || true
+      register: backend_error_count
+      changed_when: false
+
+    - name: Assert no ERROR lines in backend journal
+      ansible.builtin.assert:
+        that:
+          - backend_error_count.stdout | int == 0
+        fail_msg: >
+          Found {{ backend_error_count.stdout }} ERROR line(s) in the
+          relay-backend journal on {{ inventory_hostname }} in the last 5 minutes.
+          Run: journalctl -u relay-backend --since "5 minutes ago" | grep ERROR
+
+    # -- Diagnostic: always print last 20 backend journal lines --------------
+    - name: Capture relay-backend journal (last 20 lines, always printed)
+      ansible.builtin.command:
+        cmd: journalctl -u relay-backend -n 20 --no-pager
+      register: backend_journal_tail
+      changed_when: false
+      failed_when: false
+
+    - name: Print relay-backend journal tail
+      ansible.builtin.debug:
+        msg: "{{ backend_journal_tail.stdout_lines }}"
+
+    - name: Report backend node PASS
+      ansible.builtin.debug:
+        msg: >
+          [e2e-verify] {{ inventory_hostname }} PASS:
+          relay-backend=active redis=active http={{ backend_http_port }}=200 errors=0
+

@@ -157,7 +157,7 @@ Architectural Decision Record capturing:
 |------|--------------------|------|--------|
 | `tests/e2e-deployed.sh` | 10+ HTTP assertions against live backend (8090/8091) | Integration | Planned |
 | `tests/e2e-deployed.sh` | TCP preflight check on 8091 (admin_cidr gate) | Integration | Planned |
-| `ansible/playbooks/e2e-verify.yml` | systemctl / bpftool / lsmod / ss / journalctl checks per relay | Operational | Planned |
+| `ansible/playbooks/e2e-verify.yml` | systemctl / bpftool / lsmod / ss / journalctl checks per relay + backend service + /health liveness | Operational | Done |
 | `relay_sdk_smoke` Group 4 | UDP route E2E: ClientInner -> 3 relays -> ServerInner, stats + echo | E2E | Planned |
 | `relay_sdk_smoke` Group 4 | `route_matrix` convergence poll before UDP test | E2E | Planned |
 
@@ -174,7 +174,7 @@ Architectural Decision Record capturing:
 
 1. ~~**High:** Implement `infra/stack_outputs.py` (foundation for all subsequent steps)~~ Done
 2. ~~**High:** Implement `tests/e2e-deployed.sh` using stack_outputs.py env output~~ Done
-3. **High:** Add `ansible/playbooks/e2e-verify.yml`
+3. ~~**High:** Add `ansible/playbooks/e2e-verify.yml`~~ Done
 4. **High:** Add `e2e-deployed` + `e2e-teardown` targets to `Makefile`
 5. **Medium:** Extend `relay-sdk/src/bin/relay_sdk_smoke.rs` with Group 4 UDP E2E
 6. **Medium:** Write `docs/decisions/ADR-004-e2e-deployed-test-flow.md`
@@ -189,7 +189,7 @@ Architectural Decision Record capturing:
 | A | `infra/stack_outputs.py` |
 | A | `infra/test_stack_outputs.py` |
 | M | `infra/inventory_gen.py` (import from stack_outputs) |
-| A (planned) | `ansible/playbooks/e2e-verify.yml` |
+| A | `ansible/playbooks/e2e-verify.yml` |
 | A (planned) | `docs/decisions/ADR-004-e2e-deployed-test-flow.md` |
 | M (planned) | `Makefile` |
 | M (planned) | `relay-sdk/src/bin/relay_sdk_smoke.rs` |
