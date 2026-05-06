@@ -148,7 +148,7 @@ aws configure --profile relay-xdp-infra
 |-----|-----------|---------|-------------|
 | `relay_regions` | `[us-east-1, eu-west-1, ap-southeast-1]` | `[us-east-1, eu-west-1, ap-southeast-1]` | AWS regions for relay nodes |
 | `relay_count` | `3` | `3` | Number of relay nodes |
-| `relay_instance_type` | `c5n.xlarge` | `t3.medium` | EC2 type for relay nodes |
+| `relay_instance_type` | `c6in.8xlarge` | `c5n.2xlarge` | EC2 type for relay nodes |
 | `backend_region` | `us-east-1` | `us-east-1` | Region for backend node |
 | `backend_instance_type` | `c5.large` | `t3.medium` | EC2 type for backend |
 | `key_pub_path` | `~/.ssh/personal-key.pub` | same | Local SSH public key path |
@@ -156,11 +156,13 @@ aws configure --profile relay-xdp-infra
 
 ## Instance Type Rationale
 
-- `c5n.xlarge` - ena (Elastic Network Adapter) driver supports XDP native mode
-  (driver-level packet processing). Required for the sub-microsecond packet
-  forwarding budget. Not available in all AZs - see `config.py:C5N_AZ_MAP`.
-- `t3.medium` - XDP generic mode only (acceptable for staging/testing).
-  Also usable with `RELAY_NO_BPF=1` for pure userspace testing.
+- `c6in.8xlarge` (production) - 6th-gen Intel network-optimised. ENA driver
+  supports XDP native mode (driver-level packet processing). Higher network
+  bandwidth ceiling vs c5n.xlarge. Required for the sub-microsecond packet
+  forwarding budget. Not available in all AZs - see `config.py:RELAY_AZ_MAP`.
+- `c5n.2xlarge` (staging) - Same ENA driver family as c6in; supports XDP native
+  mode. Staging now validates the same XDP code path as production.
+  Not available in all AZs - see `config.py:RELAY_AZ_MAP`.
 
 ## WARNING: EIP Cost
 

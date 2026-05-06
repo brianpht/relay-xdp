@@ -9,8 +9,8 @@ Provisions one relay-xdp EC2 instance in a given AWS region:
     clients and inter-relay ping to reference a fixed endpoint)
 
 Instance type:
-  Production: c5n.xlarge - ena driver supports XDP native mode (driver-level).
-  Staging:    t3.medium  - XDP generic mode, acceptable for testing.
+  Production: c6in.8xlarge - ena driver supports XDP native mode (driver-level).
+  Staging:    c5n.2xlarge  - same ena driver family; XDP native mode supported.
 """
 
 from __future__ import annotations
@@ -93,7 +93,7 @@ class RelayNode(pulumi.ComponentResource):
         node_name:        Logical name, e.g. "relay-production-1".
         region:           AWS region string.
         az:               Availability zone (must support the instance type).
-        instance_type:    EC2 instance type, e.g. "c5n.xlarge".
+        instance_type:    EC2 instance type, e.g. "c6in.8xlarge".
         public_key_text:  Contents of ~/.ssh/id_ed25519.pub.
         stack_name:       Pulumi stack name.
         net:              NetworkResult from create_regional_network().

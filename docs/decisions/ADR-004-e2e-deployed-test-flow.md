@@ -21,8 +21,8 @@ No automated test harness runs against a live Pulumi-provisioned stack. Once `pu
 completes and Ansible deploys software, the only verification is manual: `systemctl status`,
 `bpftool prog list`, `lsmod`, `journalctl`. This leaves the following gaps uncovered:
 
-- XDP program loading and kfunc resolution on real hardware (c5n.xlarge native mode,
-  t3.medium SKB fallback).
+- XDP program loading and kfunc resolution on real hardware (c6in.8xlarge and c5n.2xlarge,
+  both ENA native mode).
 - Real UDP relay path: client -> relay-a -> relay-b -> relay-c -> server, with live RTT
   measurements and session key validation.
 - Backend HTTP endpoints at production ports (8090 public, 8091 admin) vs Compose ports

@@ -20,11 +20,14 @@ import pulumi
 # Canonical (Ubuntu) AWS owner ID - stable, does not change.
 CANONICAL_OWNER_ID = "099720109477"
 
-# Ubuntu 22.04 LTS (Jammy) x86_64 HWE kernel on EBS SSD.
+# Ubuntu 24.04 LTS (Noble Numbat) x86_64 HWE kernel on EBS gp3 SSD.
 #
-# Ubuntu 22.04 LTS support: Until April 2032 (5-year baseline + 5-year extended).
-# HWE (Hardware Enablement) kernel: auto-updates to latest stable (currently 6.17.0-*).
+# Ubuntu 24.04 LTS support: Until April 2034 (5-year baseline + 5-year extended).
+# HWE (Hardware Enablement) kernel: auto-updates to latest stable (currently 6.11+).
 # Kernel requirement: >=6.5 for BTF and kfunc support (XDP kernel module).
+#
+# Path change from Jammy: Canonical switched Noble images to the hvm-ssd-gp3 path.
+# Do NOT use the old hvm-ssd path for Noble - it will return no results.
 #
 # Key guarantee: Every new AMI image boots the latest HWE kernel for that week.
 # This means host kernel can CHANGE between deploys, even if no Pulumi stack changes.
@@ -37,9 +40,9 @@ CANONICAL_OWNER_ID = "099720109477"
 #    and provide guidance for next steps
 #
 # To pin a specific kernel version: modify the AMI filter to include a date
-# constraint (e.g. "ubuntu-jammy-22.04-amd64-server-20240101-*"), but this requires
+# constraint (e.g. "ubuntu-noble-24.04-amd64-server-20240101-*"), but this requires
 # monthly maintenance as Canonical publishes new snapshots.
-AMI_NAME_FILTER = "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-*"
+AMI_NAME_FILTER = "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-*"
 
 # ---------------------------------------------------------------------------
 # Network constants
@@ -56,25 +59,26 @@ REGION_CIDR_MAP: dict[str, str] = {
 BACKEND_CIDR = "10.10.0.0/16"
 
 # ---------------------------------------------------------------------------
-# AZ constraints for c5n instances
-# c5n is not available in all AZs. These are known-good AZs per region.
+# AZ constraints for relay instance types (c5n.2xlarge, c6in.8xlarge).
+# Neither c5n nor c6in is available in all AZs within a region.
+# These are known-good AZs verified for both instance families.
 # Subnets are pinned to these AZs.
 # ---------------------------------------------------------------------------
-C5N_AZ_MAP: dict[str, str] = {
+RELAY_AZ_MAP: dict[str, str] = {
     "us-east-1":       "us-east-1a",
     "eu-west-1":       "eu-west-1b",
     "ap-southeast-1":  "ap-southeast-1a",
 }
 
-# Fallback AZ for regions not in C5N_AZ_MAP (e.g. backend region when
-# backend_region == us-east-1 and instance is not c5n).
+# Fallback AZ for regions not in RELAY_AZ_MAP (e.g. backend region when
+# backend_region == us-east-1 and instance is not a relay node).
 DEFAULT_AZ_SUFFIX = "a"
 
 
 def _az_for_region(region: str) -> str:
     """Return the preferred AZ for a given region."""
-    if region in C5N_AZ_MAP:
-        return C5N_AZ_MAP[region]
+    if region in RELAY_AZ_MAP:
+        return RELAY_AZ_MAP[region]
     return region + DEFAULT_AZ_SUFFIX
 
 
@@ -93,8 +97,8 @@ class InfraConfig:
     relay_count: int
 
     # EC2 instance type for relay nodes.
-    # Production: c5n.xlarge (ena driver, XDP native).
-    # Staging:    t3.medium  (XDP generic, acceptable for testing).
+    # Production: c6in.8xlarge (ena driver, XDP native, high network bandwidth).
+    # Staging:    c5n.2xlarge  (ena driver, XDP native - same code path as production).
     relay_instance_type: str
 
     # AWS region for the backend node.

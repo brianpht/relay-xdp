@@ -92,8 +92,8 @@ all when `relay_module.ko` is loaded and kfuncs are required.
   9. `BPF_PROG_LOAD` via raw `libc::syscall` with `fd_array=[0, module_btf_fd]`
      and a 256 KB verifier log buffer.
   10. Close `module_btf_fd` (no longer needed after load).
-  11. `BPF_LINK_CREATE` with native XDP mode; fallback to SKB (generic) mode on
-      `EOPNOTSUPP`/`EINVAL` (e.g., ENA driver on t3.medium).
+   11. `BPF_LINK_CREATE` with native XDP mode; fallback to SKB (generic) mode on
+       `EOPNOTSUPP`/`EINVAL` (driver does not support XDP native mode).
 - **Pros:** Zero Aya fork. Self-contained, auditable, fully tested in-tree
   (unit tests in `kfunc.rs`, integration via `relay_xdp_rust.o`). Pinned
   to our exact requirements - no churn from unrelated Aya changes. The raw
@@ -134,8 +134,10 @@ low once the implementation is correct and tested.
 ## Consequences
 
 - **Positive:** No Aya fork to maintain. Load path is fully auditable in-tree.
-  Native + SKB XDP mode auto-fallback works correctly for both production
-  (native, c5n.xlarge) and staging (SKB, t3.medium) instances. Unit tests
+  Native + SKB XDP mode auto-fallback works correctly for any ENA driver instance.
+  Both production (c6in.8xlarge, native) and staging (c5n.2xlarge, native) run
+  XDP native mode; SKB fallback remains available for non-ENA instance types.
+  Unit tests
   exercise the ELF patching logic against the real `relay_xdp_rust.o` object.
   The 256 KB verifier log buffer in `raw_load_xdp` ensures that any verifier
   rejection produces actionable diagnostics with the exact failing instruction
@@ -177,9 +179,9 @@ low once the implementation is correct and tested.
 1. `kfunc.rs` implemented and unit-tested (complete 2026-05-01).
 2. `bpf.rs` updated to call `kfunc.rs` instead of `Ebpf::load_file` +
    `Xdp::attach` (complete 2026-05-01).
-3. Staging deploy (t3.medium, SKB mode) validated via Ansible (complete
+3. Staging deploy (c5n.2xlarge, XDP native mode) validated via Ansible (complete
    2026-05-02: all 3 staging nodes, kfunc matched 2/2).
 4. Architecture documentation updated (this ADR + ARCHITECTURE.md update,
    2026-05-02).
 5. Production deploy to follow using same Ansible playbook, native XDP mode
-   expected on c5n.xlarge (ENA driver supports native XDP).
+   expected on c6in.8xlarge (ENA driver supports native XDP).

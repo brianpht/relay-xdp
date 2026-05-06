@@ -46,8 +46,8 @@ def create_regional_network(
     stack_name:  Pulumi stack name (e.g. "production"), used in resource names.
     region:      AWS region string (e.g. "us-east-1").
     az:          Availability zone to pin the subnet to (e.g. "us-east-1a").
-                 Must support the intended instance type. c5n requires specific
-                 AZs - see config.py:C5N_AZ_MAP.
+                  Must support the intended instance type. c5n and c6in require
+                  specific AZs - see config.py:RELAY_AZ_MAP.
     vpc_cidr:    VPC IPv4 CIDR block (e.g. "10.1.0.0/16").
     admin_cidr:  CIDR allowed to reach SSH port 22 (e.g. "203.0.113.5/32").
     provider:    Regional aws.Provider instance.

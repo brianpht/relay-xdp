@@ -94,8 +94,8 @@ unchanged.
   independently (`pulumi preview` + `python3 infra/test_inventory_gen.py`).
 
 Key deciding factors:
-- `c5n.xlarge` must be pinned to specific AZs per region - a Python dict constant
-  (`C5N_AZ_MAP`) is cleaner than HCL locals.
+- `c6in.8xlarge` must be pinned to specific AZs per region - a Python dict constant
+  (`RELAY_AZ_MAP`) is cleaner than HCL locals.
 - Same SSH public key must be imported into 3 regions - a Python loop over
   `pulumi_aws.Provider` instances is idiomatic; HCL `for_each` on providers is awkward.
 - S3 state backend avoids Pulumi Cloud vendor lock-in, consistent with self-hosted
@@ -124,8 +124,8 @@ Key deciding factors:
 - **Neutral:** `ansible/inventory/production.yml` and `staging.yml` become generated
   files - do not edit manually, source of truth is Pulumi state. As of 2026-05-02,
   staging mirrors production topology (3 relay nodes across 3 regions + 1 backend),
-  differing only in instance type: `t3.medium` (staging, XDP generic mode) vs
-  `c5n.xlarge` (production, XDP native mode via ENA driver).
+  differing only in instance type: `c5n.2xlarge` (staging, XDP native mode via ENA driver)
+  vs `c6in.8xlarge` (production, XDP native mode via ENA driver, higher bandwidth ceiling).
 
 ## Affected Components
 

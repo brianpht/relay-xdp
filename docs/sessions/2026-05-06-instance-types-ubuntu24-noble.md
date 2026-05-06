@@ -12,7 +12,7 @@
 - [x] Plan CI runner update (ubuntu-22.04 -> ubuntu-24.04)
 - [x] Capture ENA Express follow-up as a new ADR
 - [x] Produce final implementation-ready file list with per-file change descriptions
-- [ ] Implement all file changes (follow-on work)
+- [x] Implement all file changes (follow-on work)
 
 ## Work Completed
 
@@ -70,32 +70,32 @@ No test code changes in this session. All changes are infrastructure config, doc
 
 ## Next Steps
 
-1. **High:** Edit `infra/config.py` - fix `AMI_NAME_FILTER`, rename `C5N_AZ_MAP` -> `RELAY_AZ_MAP`, update all comments
-2. **High:** Edit `infra/Pulumi.staging.yaml` - `relay_instance_type: t3.medium` -> `c5n.2xlarge`
-3. **High:** Edit `infra/Pulumi.production.yaml` - `relay_instance_type: c5n.xlarge` -> `c6in.8xlarge`
-4. **High:** Edit `infra/relay_node.py` - update module docstring and `instance_type` param example
-5. **High:** Edit `infra/network.py` - update AZ comment (`C5N_AZ_MAP` -> `RELAY_AZ_MAP`)
-6. **High:** Edit `infra/README.md` - Stack Config Reference table + Instance Type Rationale section
-7. **High:** Edit `.github/workflows/build-release.yml` - `ubuntu-22.04` -> `ubuntu-24.04` (3 jobs)
-8. **Medium:** Edit `docs/decisions/ADR-002` - Consequences/Neutral sentence: update instance type comparison
-9. **Medium:** Edit `docs/decisions/ADR-003` - Consequences/Positive + Migration Plan: update c5n.xlarge/t3.medium refs
-10. **Medium:** Edit `docs/decisions/ADR-004` - Context + Consequences: update instance type refs
-11. **Medium:** Write `docs/decisions/ADR-005-c6in-ena-express.md` - new ADR capturing deferred ENA Express decision
+1. ~~**High:** Edit `infra/config.py` - fix `AMI_NAME_FILTER`, rename `C5N_AZ_MAP` -> `RELAY_AZ_MAP`, update all comments~~ Done
+2. ~~**High:** Edit `infra/Pulumi.staging.yaml` - `relay_instance_type: t3.medium` -> `c5n.2xlarge`~~ Done
+3. ~~**High:** Edit `infra/Pulumi.production.yaml` - `relay_instance_type: c5n.xlarge` -> `c6in.8xlarge`~~ Done
+4. ~~**High:** Edit `infra/relay_node.py` - update module docstring and `instance_type` param example~~ Done
+5. ~~**High:** Edit `infra/network.py` - update AZ comment (`C5N_AZ_MAP` -> `RELAY_AZ_MAP`)~~ Done
+6. ~~**High:** Edit `infra/README.md` - Stack Config Reference table + Instance Type Rationale section~~ Done
+7. ~~**High:** Edit `.github/workflows/build-release.yml` - `ubuntu-22.04` -> `ubuntu-24.04` (3 jobs)~~ Done
+8. ~~**Medium:** Edit `docs/decisions/ADR-002` - Consequences/Neutral sentence: update instance type comparison~~ Done
+9. ~~**Medium:** Edit `docs/decisions/ADR-003` - Consequences/Positive + Migration Plan: update c5n.xlarge/t3.medium refs~~ Done
+10. ~~**Medium:** Edit `docs/decisions/ADR-004` - Context + Consequences: update instance type refs~~ Done
+11. ~~**Medium:** Write `docs/decisions/ADR-005-c6in-ena-express.md` - new ADR capturing deferred ENA Express decision~~ Done
 
 ## Files Changed
 
 | Status | File |
 |--------|------|
 | A | `docs/sessions/2026-05-06-instance-types-ubuntu24-noble.md` |
-| M (planned) | `infra/config.py` |
-| M (planned) | `infra/Pulumi.staging.yaml` |
-| M (planned) | `infra/Pulumi.production.yaml` |
-| M (planned) | `infra/relay_node.py` |
-| M (planned) | `infra/network.py` |
-| M (planned) | `infra/README.md` |
-| M (planned) | `.github/workflows/build-release.yml` |
-| M (planned) | `docs/decisions/ADR-002-pulumi-infra-over-manual-inventory.md` |
-| M (planned) | `docs/decisions/ADR-003-custom-kfunc-elf-loader.md` |
-| M (planned) | `docs/decisions/ADR-004-e2e-deployed-test-flow.md` |
-| A (planned) | `docs/decisions/ADR-005-c6in-ena-express.md` |
+| M | `infra/config.py` (`AMI_NAME_FILTER` Noble 24.04, `C5N_AZ_MAP` -> `RELAY_AZ_MAP`, instance type comments) |
+| M | `infra/network.py` (`C5N_AZ_MAP` -> `RELAY_AZ_MAP` in docstring; AZ comment updated for c5n + c6in) |
+| M | `infra/README.md` (Stack Config Reference table + Instance Type Rationale: c6in.8xlarge + c5n.2xlarge) |
+| M | `infra/Pulumi.staging.yaml` (`relay_instance_type: t3.medium` -> `c5n.2xlarge`) |
+| M | `infra/Pulumi.production.yaml` (`relay_instance_type: c5n.xlarge` -> `c6in.8xlarge`) |
+| M | `infra/relay_node.py` (module docstring + `instance_type` param example updated) |
+| M | `.github/workflows/build-release.yml` (`ubuntu-22.04` -> `ubuntu-24.04`, all 3 jobs) |
+| M | `docs/decisions/ADR-002-pulumi-infra-over-manual-inventory.md` (Rationale AZ map ref + Neutral instance type comparison) |
+| M | `docs/decisions/ADR-003-custom-kfunc-elf-loader.md` (Consequences/Positive + Migration Plan instance type refs) |
+| M | `docs/decisions/ADR-004-e2e-deployed-test-flow.md` (Context instance type refs) |
+| A | `docs/decisions/ADR-005-c6in-ena-express.md` (new ADR: deferred ENA Express on c6in.8xlarge) |
 
