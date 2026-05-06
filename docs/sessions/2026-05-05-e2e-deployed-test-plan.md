@@ -175,7 +175,7 @@ Architectural Decision Record capturing:
 1. ~~**High:** Implement `infra/stack_outputs.py` (foundation for all subsequent steps)~~ Done
 2. ~~**High:** Implement `tests/e2e-deployed.sh` using stack_outputs.py env output~~ Done
 3. ~~**High:** Add `ansible/playbooks/e2e-verify.yml`~~ Done
-4. **High:** Add `e2e-deployed` + `e2e-teardown` targets to `Makefile`
+4. ~~**High:** Add `e2e-deployed` + `e2e-teardown` targets to `Makefile`~~ Done
 5. **Medium:** Extend `relay-sdk/src/bin/relay_sdk_smoke.rs` with Group 4 UDP E2E
 6. **Medium:** Write `docs/decisions/ADR-004-e2e-deployed-test-flow.md`
 7. **Low:** Evaluate nightly CI escalation path (GitHub Actions runner + stored AWS/vault creds)
@@ -191,6 +191,6 @@ Architectural Decision Record capturing:
 | M | `infra/inventory_gen.py` (import from stack_outputs) |
 | A | `ansible/playbooks/e2e-verify.yml` |
 | A (planned) | `docs/decisions/ADR-004-e2e-deployed-test-flow.md` |
-| M (planned) | `Makefile` |
+| M | `Makefile` (`e2e-deployed` + `e2e-teardown` targets) |
 | M (planned) | `relay-sdk/src/bin/relay_sdk_smoke.rs` |
 

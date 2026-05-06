@@ -1,4 +1,5 @@
-.PHONY: deploy-production deploy-staging infra-preview-production infra-preview-staging preflight test-infra
+.PHONY: deploy-production deploy-staging infra-preview-production infra-preview-staging preflight test-infra \
+        e2e-deployed e2e-teardown
 
 RELAY_VERSION ?= v0.1.0
 
@@ -75,4 +76,76 @@ infra-preview-staging:
 # ---------------------------------------------------------------------------
 infra-destroy-staging:
 	pulumi destroy --stack staging --cwd infra/ --yes
+
+# ---------------------------------------------------------------------------
+# E2E deployed test - full pipeline against a live provisioned stack.
+#
+# Usage:
+#   make e2e-deployed                        # staging, full pulumi up + deploy + test
+#   make e2e-deployed REUSE_STACK=1          # skip pulumi up (infra unchanged)
+#   make e2e-deployed STACK=production       # production (requires --ask-vault-pass)
+#
+# Required env vars (same as deploy targets):
+#   export AWS_PROFILE=relay-xdp-infra
+#   export PULUMI_BACKEND_URL=s3://relay-xdp-pulumi-state?region=us-east-1
+#   export PULUMI_CONFIG_PASSPHRASE="staging"
+#
+# On failure the stack is left alive for forensic inspection.
+# When investigation is complete run: make e2e-teardown STACK=<stack>
+# ---------------------------------------------------------------------------
+
+STACK       ?= staging
+REUSE_STACK ?= 0
+
+# Vault flag: production requires --ask-vault-pass; staging uses --vault-password-file
+ifeq ($(STACK),production)
+_VAULT_FLAG := --ask-vault-pass
+else
+_VAULT_FLAG := --vault-password-file ansible/.vault-pass-staging
+endif
+
+e2e-deployed: preflight
+	@# -- Step 1: provision infra (skip with REUSE_STACK=1) ------------------
+	@if [ "$(REUSE_STACK)" != "1" ]; then \
+		echo "[e2e] pulumi up --stack $(STACK)"; \
+		pulumi up --stack $(STACK) --cwd infra/ --yes; \
+	else \
+		echo "[e2e] REUSE_STACK=1 - skipping pulumi up"; \
+	fi
+	@# -- Step 2: render Ansible inventory from Pulumi outputs ---------------
+	python infra/inventory_gen.py --stack $(STACK)
+	@# -- Step 3: deploy software --------------------------------------------
+	cd ansible && ansible-playbook \
+		-i inventory/$(STACK).yml \
+		playbooks/site.yml \
+		-e relay_version=$(RELAY_VERSION) \
+		$(_VAULT_FLAG)
+	@# -- Step 4: operational verification (systemd, bpftool, lsmod, ss, journal)
+	cd ansible && ansible-playbook \
+		-i inventory/$(STACK).yml \
+		playbooks/e2e-verify.yml \
+		$(_VAULT_FLAG)
+	@# -- Step 5: HTTP control-plane assertions against live backend ----------
+	eval $$(python infra/stack_outputs.py --stack $(STACK) --format env) && \
+		STACK=$(STACK) bash tests/e2e-deployed.sh
+	@# -- Step 6: UDP data-plane E2E (ClientInner -> relays -> ServerInner) --
+	eval $$(python infra/stack_outputs.py --stack $(STACK) --format env) && \
+		RELAY_E2E_UDP=1 cargo run -p relay-sdk --bin relay_sdk_smoke
+	@echo "[e2e] ALL CHECKS PASSED for stack=$(STACK)"
+
+# ---------------------------------------------------------------------------
+# E2E teardown - destroy the stack after investigation is complete.
+# Refuses to destroy the production stack; production must be torn down
+# manually via: pulumi destroy --stack production --cwd infra/
+# ---------------------------------------------------------------------------
+e2e-teardown:
+	@if [ "$(STACK)" = "production" ]; then \
+		echo "ERROR: e2e-teardown refuses to destroy the production stack."; \
+		echo "       Run manually: pulumi destroy --stack production --cwd infra/"; \
+		exit 1; \
+	fi
+	@echo "[e2e-teardown] destroying stack=$(STACK)"
+	pulumi destroy --stack $(STACK) --cwd infra/ --yes
+	@echo "[e2e-teardown] stack=$(STACK) destroyed"
+
 
