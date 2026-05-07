@@ -1,4 +1,7 @@
 name: relay-xdp-infra
-runtime: python
+runtime:
+  name: python
+  options:
+    virtualenv: .venv
 description: AWS infrastructure for relay-xdp multi-region node deployment
 

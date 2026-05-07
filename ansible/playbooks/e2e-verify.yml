@@ -81,11 +81,21 @@
           relay-xdp may not have opened its data-plane socket.
           Run: ss -lun sport = :{{ relay_udp_port }}
 
-    # -- 5. No ERROR lines in recent journal ---------------------------------
-    - name: Count ERROR lines in relay-xdp journal (last 5 minutes)
+    # -- 5. No ERROR lines since current service start -----------------------
+    # Use ActiveEnterTimestamp so we ignore ERRORs emitted by the previous
+    # process during SIGTERM shutdown (e.g. in-flight HTTP relay_update
+    # interrupted by EINTR), which would otherwise pollute a sliding "5
+    # minutes ago" window on fast redeploys.
+    - name: Get relay-xdp service ActiveEnterTimestamp
+      ansible.builtin.command:
+        cmd: systemctl show relay-xdp --property=ActiveEnterTimestamp --value
+      register: relay_active_ts
+      changed_when: false
+
+    - name: Count ERROR lines in relay-xdp journal (since current service start)
       ansible.builtin.shell:
         cmd: >
-          journalctl -u relay-xdp --since "5 minutes ago" --no-pager
+          journalctl -u relay-xdp --since "{{ relay_active_ts.stdout | trim }}" --no-pager
           | grep -c 'ERROR' || true
       register: journal_error_count
       changed_when: false
@@ -96,8 +106,9 @@
           - journal_error_count.stdout | int == 0
         fail_msg: >
           Found {{ journal_error_count.stdout }} ERROR line(s) in the relay-xdp
-          journal on {{ inventory_hostname }} in the last 5 minutes.
-          Run: journalctl -u relay-xdp --since "5 minutes ago" | grep ERROR
+          journal on {{ inventory_hostname }} since service start
+          ({{ relay_active_ts.stdout | trim }}).
+          Run: journalctl -u relay-xdp --since "{{ relay_active_ts.stdout | trim }}" | grep ERROR
 
     # -- Diagnostic: always print last 30 journal lines ----------------------
     - name: Capture relay-xdp journal (last 30 lines, always printed)
@@ -162,11 +173,17 @@
           Backend /health returned {{ health_result.status }} on
           {{ inventory_hostname }}:{{ backend_http_port }}.
 
-    # -- 4. No ERROR lines in recent backend journal -------------------------
-    - name: Count ERROR lines in relay-backend journal (last 5 minutes)
+    # -- 4. No ERROR lines since current service start -----------------------
+    - name: Get relay-backend service ActiveEnterTimestamp
+      ansible.builtin.command:
+        cmd: systemctl show relay-backend --property=ActiveEnterTimestamp --value
+      register: backend_active_ts
+      changed_when: false
+
+    - name: Count ERROR lines in relay-backend journal (since current service start)
       ansible.builtin.shell:
         cmd: >
-          journalctl -u relay-backend --since "5 minutes ago" --no-pager
+          journalctl -u relay-backend --since "{{ backend_active_ts.stdout | trim }}" --no-pager
           | grep -c 'ERROR' || true
       register: backend_error_count
       changed_when: false
@@ -177,8 +194,9 @@
           - backend_error_count.stdout | int == 0
         fail_msg: >
           Found {{ backend_error_count.stdout }} ERROR line(s) in the
-          relay-backend journal on {{ inventory_hostname }} in the last 5 minutes.
-          Run: journalctl -u relay-backend --since "5 minutes ago" | grep ERROR
+          relay-backend journal on {{ inventory_hostname }} since service start
+          ({{ backend_active_ts.stdout | trim }}).
+          Run: journalctl -u relay-backend --since "{{ backend_active_ts.stdout | trim }}" | grep ERROR
 
     # -- Diagnostic: always print last 20 backend journal lines --------------
     - name: Capture relay-backend journal (last 20 lines, always printed)

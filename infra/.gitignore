@@ -3,4 +3,6 @@ __pycache__/
 .pulumi/
 venv/
 .venv/
-
+# Operator-local Pulumi env files - contain AWS credentials and passphrases.
+.pulumi-env-staging
+.pulumi-env-production

@@ -175,10 +175,14 @@ assert_body_contains() {
 assert_body_nonempty() {
     local desc="$1"
     local url="$2"
-    local body
-    body=$(curl -sf "${url}" 2>/dev/null) || body=""
-    if [ -n "${body}" ]; then
-        local len=${#body}
+    # Use wc -c on the raw byte stream to avoid bash command substitution
+    # stripping null bytes from binary (octet-stream) responses such as
+    # /cost_matrix and /route_matrix, which would produce a spurious warning:
+    # "command substitution: ignored null byte in input".
+    local len
+    len=$(curl -sf "${url}" 2>/dev/null | wc -c) || len=0
+    len=$((len + 0))  # ensure numeric
+    if [ "${len}" -gt 0 ]; then
         echo -e "  ${GREEN}PASS${NC} ${desc} (${len} bytes)"
         PASSED=$((PASSED + 1))
     else
