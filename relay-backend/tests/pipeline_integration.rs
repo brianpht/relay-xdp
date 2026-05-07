@@ -20,6 +20,7 @@ use relay_xdp_common::RELAY_NUM_COUNTERS;
 // relay-xdp's Writer, exactly matching main_thread.rs
 // -------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn build_xdp_relay_update(
     relay_public_address: u32,
     relay_port: u16,
@@ -345,15 +346,15 @@ fn test_shutting_down_relay_excluded_from_costs() {
     let current_time: i64 = 1700000000;
 
     // All relays see each other at 10ms
-    for src in 0..3 {
+    for (src, relay) in relays.iter().enumerate() {
         let mut sample_ids = Vec::new();
         let mut sample_rtts = Vec::new();
 
-        for dst in 0..3 {
+        for (dst, &relay_id) in relay_ids.iter().enumerate() {
             if src == dst {
                 continue;
             }
-            sample_ids.push(relay_ids[dst]);
+            sample_ids.push(relay_id);
             sample_rtts.push(10u8);
         }
 
@@ -368,8 +369,8 @@ fn test_shutting_down_relay_excluded_from_costs() {
         };
 
         let buf = build_xdp_relay_update(
-            relays[src].host_addr,
-            relays[src].port,
+            relay.host_addr,
+            relay.port,
             current_time as u64,
             (current_time - 1000) as u64,
             &sample_ids,

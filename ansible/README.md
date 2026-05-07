@@ -23,6 +23,7 @@ ansible/
     relay-only.yml          - Redeploy relays only (rolling)
     module-only.yml         - Update kernel module only
     rollback.yml            - Manual rollback to previous version
+    e2e-verify.yml          - Post-deploy E2E verification (systemd, bpftool, lsmod, ss, journal)
     group_vars/             - Adjacent to playbooks for auto-discovery
       all.yml               - Shared defaults
       staging/
@@ -162,3 +163,47 @@ the role automatically builds for whatever kernel is running.
 3. `lsmod | grep relay_module` - kernel module present (built on host from source)
 4. Journal check for startup log entry
 
+These steps are automated by `playbooks/e2e-verify.yml`. Run it after `site.yml`:
+
+```bash
+ansible-playbook -i inventory/staging.yml playbooks/e2e-verify.yml
+ansible-playbook -i inventory/production.yml playbooks/e2e-verify.yml --ask-vault-pass
+```
+
+`e2e-verify.yml` covers both relay nodes (`relay_servers` group) and the backend
+node (`backend_servers` group). Checks per relay node:
+
+- `systemctl is-active relay-xdp` - relay service running
+- `bpftool prog list | grep xdp` - XDP program attached to NIC
+- `lsmod | grep relay_module` - kernel module loaded
+- `ss -lun sport = :{{ relay_udp_port }}` - UDP socket bound
+- `journalctl -u relay-xdp --since "5 minutes ago" | grep ERROR` - zero ERROR lines
+
+Checks per backend node:
+
+- `systemctl is-active relay-backend` - backend service running
+- `systemctl is-active redis` - Redis running
+- `GET localhost:8090/health` returns 200
+- `journalctl -u relay-backend --since "5 minutes ago" | grep ERROR` - zero ERROR lines
+
+No `ignore_errors` - any failure aborts the play and leaves the stack alive for
+forensic inspection.
+
+## E2E Deployed Test Flow
+
+Full E2E test (provision + deploy + verify + HTTP/UDP assertions) is driven by the
+top-level `Makefile`:
+
+```bash
+# Full pipeline: pulumi up -> inventory_gen -> site.yml -> e2e-verify.yml -> e2e-deployed.sh -> relay_sdk_smoke
+make e2e-deployed STACK=staging RELAY_VERSION=v1.0.0
+
+# Fast iteration: skip pulumi up, redeploy + test only
+make e2e-deployed STACK=staging RELAY_VERSION=v1.0.0 REUSE_STACK=1
+
+# Teardown after investigation complete
+make e2e-teardown STACK=staging
+```
+
+See `docs/decisions/ADR-004-e2e-deployed-test-flow.md` for architectural rationale
+and the forensic leave-up-on-failure policy.

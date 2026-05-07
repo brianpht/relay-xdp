@@ -239,9 +239,9 @@ async fn test_json_loaded_relay_encrypted_request_returns_ok() {
     let (_relay_sk_2, relay_pk_2) = generate_keypair();
 
     let relay_keys = [
-        relay_pk_0.as_bytes().clone(),
-        relay_pk_1.as_bytes().clone(),
-        relay_pk_2.as_bytes().clone(),
+        *relay_pk_0.as_bytes(),
+        *relay_pk_1.as_bytes(),
+        *relay_pk_2.as_bytes(),
     ];
 
     let json = json_fixture(&relay_keys);
@@ -286,9 +286,9 @@ async fn test_json_loaded_relay_encrypted_request_updates_relay_manager() {
     let (_relay_sk_2, relay_pk_2) = generate_keypair();
 
     let relay_keys = [
-        relay_pk_0.as_bytes().clone(),
-        relay_pk_1.as_bytes().clone(),
-        relay_pk_2.as_bytes().clone(),
+        *relay_pk_0.as_bytes(),
+        *relay_pk_1.as_bytes(),
+        *relay_pk_2.as_bytes(),
     ];
 
     let json = json_fixture(&relay_keys);
@@ -326,14 +326,10 @@ async fn test_json_loaded_relay_response_echoes_correct_public_key() {
     let (relay_sk_1, relay_pk_1) = generate_keypair();
     let (_relay_sk_2, relay_pk_2) = generate_keypair();
 
-    let relay_pk_0_bytes = relay_pk_0.as_bytes().clone();
-    let relay_pk_1_bytes = relay_pk_1.as_bytes().clone();
+    let relay_pk_0_bytes = *relay_pk_0.as_bytes();
+    let relay_pk_1_bytes = *relay_pk_1.as_bytes();
 
-    let relay_keys = [
-        relay_pk_0_bytes,
-        relay_pk_1_bytes,
-        relay_pk_2.as_bytes().clone(),
-    ];
+    let relay_keys = [relay_pk_0_bytes, relay_pk_1_bytes, *relay_pk_2.as_bytes()];
 
     let json = json_fixture(&relay_keys);
     let relay_data = RelayData::from_json(&json).unwrap();
@@ -426,9 +422,9 @@ async fn test_json_loaded_two_relays_see_each_other_as_peers() {
     let (_relay_sk_2, relay_pk_2) = generate_keypair();
 
     let relay_keys = [
-        relay_pk_0.as_bytes().clone(),
-        relay_pk_1.as_bytes().clone(),
-        relay_pk_2.as_bytes().clone(),
+        *relay_pk_0.as_bytes(),
+        *relay_pk_1.as_bytes(),
+        *relay_pk_2.as_bytes(),
     ];
 
     let json = json_fixture(&relay_keys);
@@ -486,9 +482,9 @@ async fn test_json_loaded_relay_wrong_key_returns_bad_request() {
     let (wrong_sk, _wrong_pk) = generate_keypair();
 
     let relay_keys = [
-        relay_pk_0.as_bytes().clone(),
-        relay_pk_1.as_bytes().clone(),
-        relay_pk_2.as_bytes().clone(),
+        *relay_pk_0.as_bytes(),
+        *relay_pk_1.as_bytes(),
+        *relay_pk_2.as_bytes(),
     ];
 
     let json = json_fixture(&relay_keys);
@@ -523,7 +519,7 @@ async fn test_json_file_load_then_encrypted_request() {
     let path = dir.join("test_relays.json");
 
     // Single relay, no need for all 3
-    let relay_pk_bytes = relay_pk.as_bytes().clone();
+    let relay_pk_bytes = *relay_pk.as_bytes();
     let relay_keys = [relay_pk_bytes, [0u8; 32], [0u8; 32]];
     let json = json_fixture(&relay_keys);
     std::fs::write(&path, &json).unwrap();

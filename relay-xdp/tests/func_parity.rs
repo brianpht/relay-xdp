@@ -651,7 +651,7 @@ fn test_full_update_cycle_with_mock_backend() {
     std::env::set_var("RELAY_BACKEND_PUBLIC_KEY", TEST_RELAY_BACKEND_PUBLIC_KEY);
     std::env::set_var(
         "RELAY_BACKEND_URL",
-        &format!("http://127.0.0.1:{backend_port}"),
+        format!("http://127.0.0.1:{backend_port}"),
     );
 
     let config = Arc::new(relay_xdp::config::read_config().unwrap());

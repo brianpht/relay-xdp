@@ -113,18 +113,15 @@ fn print_golden_vec(name: &str, b: &[u8]) {
 #[test]
 fn constants_match_relay_xdp_common() {
     use relay_xdp_common::*;
-    assert_eq!(HEADER_BYTES, RELAY_HEADER_BYTES as usize);
-    assert_eq!(
-        SESSION_PRIVATE_KEY_BYTES,
-        RELAY_SESSION_PRIVATE_KEY_BYTES as usize
-    );
+    assert_eq!(HEADER_BYTES, RELAY_HEADER_BYTES);
+    assert_eq!(SESSION_PRIVATE_KEY_BYTES, RELAY_SESSION_PRIVATE_KEY_BYTES);
     assert_eq!(
         ENCRYPTED_ROUTE_TOKEN_BYTES,
-        RELAY_ENCRYPTED_ROUTE_TOKEN_BYTES as usize
+        RELAY_ENCRYPTED_ROUTE_TOKEN_BYTES
     );
     assert_eq!(
         ENCRYPTED_CONTINUE_TOKEN_BYTES,
-        RELAY_ENCRYPTED_CONTINUE_TOKEN_BYTES as usize
+        RELAY_ENCRYPTED_CONTINUE_TOKEN_BYTES
     );
     assert_eq!(PACKET_TYPE_ROUTE_REQUEST, RELAY_ROUTE_REQUEST_PACKET);
     assert_eq!(PACKET_TYPE_ROUTE_RESPONSE, RELAY_ROUTE_RESPONSE_PACKET);
@@ -143,8 +140,8 @@ fn constants_match_relay_xdp_common() {
     assert_eq!(PACKET_TYPE_RELAY_PONG, RELAY_PONG_PACKET);
     assert_eq!(PACKET_TYPE_SERVER_PING, RELAY_SERVER_PING_PACKET);
     assert_eq!(PACKET_TYPE_SERVER_PONG, RELAY_SERVER_PONG_PACKET);
-    assert_eq!(MTU, RELAY_MTU as usize);
-    assert_eq!(MAX_PACKET_BYTES, RELAY_MAX_PACKET_BYTES as usize);
+    assert_eq!(MTU, RELAY_MTU);
+    assert_eq!(MAX_PACKET_BYTES, RELAY_MAX_PACKET_BYTES);
     assert_eq!(RELAY_PING_TOKEN_BYTES, RELAY_PING_TOKEN_BYTES);
 }
 

@@ -434,7 +434,7 @@ mod tests {
             ]
         }"#;
 
-        let err = RelayData::from_json(&json).unwrap_err();
+        let err = RelayData::from_json(json).unwrap_err();
         assert!(err.to_string().contains("invalid base64"));
     }
 

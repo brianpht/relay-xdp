@@ -1,7 +1,24 @@
 .PHONY: deploy-production deploy-staging infra-preview-production infra-preview-staging preflight test-infra \
-        e2e-deployed e2e-teardown
+        e2e-deployed e2e-teardown venv
 
 RELAY_VERSION ?= v0.1.0
+
+# ---------------------------------------------------------------------------
+# Python interpreter: prefer infra/.venv if it exists, fall back to python3.
+# Run `make venv` once to create the virtualenv and install dependencies.
+# ---------------------------------------------------------------------------
+INFRA_VENV  := infra/.venv
+INFRA_PYTHON := $(shell [ -x "$(CURDIR)/$(INFRA_VENV)/bin/python" ] && echo "$(CURDIR)/$(INFRA_VENV)/bin/python" || echo "python3")
+
+# ---------------------------------------------------------------------------
+# venv: create infra/.venv and install dependencies (run once per machine)
+# ---------------------------------------------------------------------------
+venv:
+	python3 -m venv $(INFRA_VENV)
+	$(INFRA_VENV)/bin/pip install -q --upgrade pip
+	$(INFRA_VENV)/bin/pip install -q -r infra/requirements.txt
+	@echo "venv ready: $(INFRA_VENV)"
+	@echo "To activate manually: source $(INFRA_VENV)/bin/activate"
 
 # ---------------------------------------------------------------------------
 # Required environment variables for any infra target:
@@ -32,8 +49,9 @@ preflight:
 # Infra unit tests (no AWS credentials required)
 # ---------------------------------------------------------------------------
 test-infra:
-	cd infra && python test_admin_cidr_validation.py
-	cd infra && python test_inventory_gen.py
+	$(INFRA_PYTHON) infra/test_admin_cidr_validation.py
+	$(INFRA_PYTHON) infra/test_inventory_gen.py
+	$(INFRA_PYTHON) infra/test_stack_outputs.py
 
 # ---------------------------------------------------------------------------
 # Production deploy - full 3-step pipeline:
@@ -43,7 +61,7 @@ test-infra:
 # ---------------------------------------------------------------------------
 deploy-production: preflight
 	pulumi up --stack production --cwd infra/ --yes
-	python infra/inventory_gen.py --stack production
+	$(INFRA_PYTHON) infra/inventory_gen.py --stack production
 	cd ansible && ansible-playbook \
 		-i inventory/production.yml \
 		playbooks/site.yml \
@@ -55,7 +73,7 @@ deploy-production: preflight
 # ---------------------------------------------------------------------------
 deploy-staging: preflight
 	pulumi up --stack staging --cwd infra/ --yes
-	python infra/inventory_gen.py --stack staging
+	$(INFRA_PYTHON) infra/inventory_gen.py --stack staging
 	cd ansible && ansible-playbook \
 		-i inventory/staging.yml \
 		playbooks/site.yml \
@@ -113,7 +131,7 @@ e2e-deployed: preflight
 		echo "[e2e] REUSE_STACK=1 - skipping pulumi up"; \
 	fi
 	@# -- Step 2: render Ansible inventory from Pulumi outputs ---------------
-	python infra/inventory_gen.py --stack $(STACK)
+	$(INFRA_PYTHON) infra/inventory_gen.py --stack $(STACK)
 	@# -- Step 3: deploy software --------------------------------------------
 	cd ansible && ansible-playbook \
 		-i inventory/$(STACK).yml \
@@ -126,10 +144,10 @@ e2e-deployed: preflight
 		playbooks/e2e-verify.yml \
 		$(_VAULT_FLAG)
 	@# -- Step 5: HTTP control-plane assertions against live backend ----------
-	eval $$(python infra/stack_outputs.py --stack $(STACK) --format env) && \
+	eval $$($(INFRA_PYTHON) infra/stack_outputs.py --stack $(STACK) --format env) && \
 		STACK=$(STACK) bash tests/e2e-deployed.sh
 	@# -- Step 6: UDP data-plane E2E (ClientInner -> relays -> ServerInner) --
-	eval $$(python infra/stack_outputs.py --stack $(STACK) --format env) && \
+	eval $$($(INFRA_PYTHON) infra/stack_outputs.py --stack $(STACK) --format env) && \
 		RELAY_E2E_UDP=1 cargo run -p relay-sdk --bin relay_sdk_smoke
 	@echo "[e2e] ALL CHECKS PASSED for stack=$(STACK)"
 

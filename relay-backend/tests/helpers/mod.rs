@@ -39,6 +39,7 @@ pub fn parse_relay_update_request(buf: &[u8]) -> RelayUpdateRequest {
 }
 
 /// Build raw bytes for a relay update request matching relay-xdp's wire format.
+#[allow(clippy::too_many_arguments)]
 pub fn build_relay_update_request_bytes(
     ip: Ipv4Addr,
     port: u16,
@@ -138,6 +139,7 @@ pub struct ParsedRelayUpdateResponse {
 }
 
 /// Build relay update response bytes using SimpleWriter (relay-backend's wire format).
+#[allow(clippy::too_many_arguments)]
 pub fn build_relay_update_response(
     version: u8,
     timestamp: u64,
@@ -273,6 +275,7 @@ pub struct ParsedCostMatrix {
     pub relay_price: Vec<u8>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn write_cost_matrix(
     version: u32,
     relay_ids: &[u64],
@@ -338,9 +341,11 @@ pub struct ParsedRouteMatrix {
 pub fn make_simple_route_entries(count: usize) -> Vec<RouteEntry> {
     let mut entries = Vec::with_capacity(count);
     for _ in 0..count {
-        let mut entry = RouteEntry::default();
-        entry.direct_cost = 50;
-        entry.num_routes = 1;
+        let mut entry = RouteEntry {
+            direct_cost: 50,
+            num_routes: 1,
+            ..Default::default()
+        };
         entry.route_cost[0] = 50;
         entry.route_num_relays[0] = 2;
         entry.route_relays[0][0] = 0;
@@ -355,6 +360,7 @@ pub fn default_route_entry() -> RouteEntry {
     RouteEntry::default()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn write_route_matrix(
     version: u32,
     created_at: u64,
@@ -504,7 +510,7 @@ pub fn write_bitpacked_test_data() -> Vec<u8> {
     let mut ws = WriteStream::new(1024);
     ws.serialize_uint32(42);
     ws.serialize_uint64(0xDEADBEEFCAFEBABE);
-    ws.serialize_float32(3.14);
+    ws.serialize_float32(3.15_f32);
     ws.serialize_bool(true);
     ws.serialize_bool(false);
     ws.serialize_integer(100, 0, 255);

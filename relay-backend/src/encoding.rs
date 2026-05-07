@@ -841,7 +841,7 @@ mod tests {
         let mut ws = WriteStream::new(1024);
         ws.serialize_uint32(42);
         ws.serialize_uint64(0xDEADBEEFCAFEBABE);
-        ws.serialize_float32(3.14);
+        ws.serialize_float32(3.15_f32);
         ws.serialize_bool(true);
         ws.serialize_bool(false);
         ws.serialize_integer(100, 0, 255);
@@ -855,7 +855,7 @@ mod tests {
         let mut rs = ReadStream::new(data);
         assert_eq!(rs.serialize_uint32(), 42);
         assert_eq!(rs.serialize_uint64(), 0xDEADBEEFCAFEBABE);
-        assert!((rs.serialize_float32() - 3.14).abs() < 0.001);
+        assert!((rs.serialize_float32() - 3.15_f32).abs() < 0.001);
         assert!(rs.serialize_bool());
         assert!(!rs.serialize_bool());
         assert_eq!(rs.serialize_integer(0, 255), 100);

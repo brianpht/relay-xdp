@@ -26,6 +26,7 @@ use relay_xdp_common::{
 // (matches main_thread.rs::update() exactly)
 // ===================================================================
 
+#[allow(clippy::too_many_arguments)]
 fn build_request_with_xdp_writer(
     relay_public_address: u32, // host byte order
     relay_port: u16,
@@ -83,6 +84,7 @@ fn build_request_with_xdp_writer(
 // Helper: build relay update response using relay-backend's writer
 // ===================================================================
 
+#[allow(clippy::too_many_arguments)]
 fn build_response_with_backend(
     relay_ids: &[u64],
     relay_addresses: &[SocketAddrV4],

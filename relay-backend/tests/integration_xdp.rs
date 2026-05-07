@@ -297,7 +297,7 @@ fn test_relay_update_response_with_internal_address() {
 
     let parsed = helpers::parse_relay_update_response(&response_bytes);
     assert_eq!(parsed.version, 1);
-    assert_eq!(parsed.has_internal, true);
+    assert!(parsed.has_internal);
     assert_eq!(
         parsed.internal_address,
         SocketAddrV4::new(Ipv4Addr::new(172, 16, 0, 1), 40000)
@@ -874,9 +874,9 @@ fn test_bitpacked_stream_roundtrip() {
 
     assert_eq!(parsed.uint32_val, 42);
     assert_eq!(parsed.uint64_val, 0xDEADBEEFCAFEBABE);
-    assert!((parsed.float32_val - 3.14).abs() < 0.01);
-    assert_eq!(parsed.bool_true, true);
-    assert_eq!(parsed.bool_false, false);
+    assert!((parsed.float32_val - 3.15_f32).abs() < 0.01);
+    assert!(parsed.bool_true);
+    assert!(!parsed.bool_false);
     assert_eq!(parsed.integer_val, 100);
     assert_eq!(parsed.string_val, "hello");
     assert_eq!(
@@ -966,7 +966,7 @@ fn test_end_to_end_relay_update_to_cost_pipeline() {
         SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 3), 40002),
         SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 4), 40003),
     ];
-    let names = vec!["relay-0", "relay-1", "relay-2", "relay-3"];
+    let names = ["relay-0", "relay-1", "relay-2", "relay-3"];
 
     // Define RTTs between relay pairs (asymmetric)
     // RTT matrix (source -> dest):

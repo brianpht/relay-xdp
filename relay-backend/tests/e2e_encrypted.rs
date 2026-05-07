@@ -227,7 +227,7 @@ async fn test_e2e_encrypted_request_decrypts_and_returns_ok() {
     let (backend_sk, backend_pk) = generate_keypair();
     let (relay_sk, relay_pk) = generate_keypair();
 
-    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, relay_pk.as_bytes().clone());
+    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, *relay_pk.as_bytes());
 
     let host_addr = u32::from_be_bytes([10, 0, 0, 1]);
     let plaintext = build_plaintext_request(host_addr, 40000);
@@ -267,7 +267,7 @@ async fn test_e2e_encrypted_request_updates_relay_manager() {
     let (backend_sk, backend_pk) = generate_keypair();
     let (relay_sk, relay_pk) = generate_keypair();
 
-    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, relay_pk.as_bytes().clone());
+    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, *relay_pk.as_bytes());
 
     let host_addr = u32::from_be_bytes([10, 0, 0, 1]);
     let plaintext = build_plaintext_request(host_addr, 40000);
@@ -303,7 +303,7 @@ async fn test_e2e_wrong_relay_key_returns_bad_request() {
     let (wrong_sk, _wrong_pk) = generate_keypair();
 
     // Backend has the real relay public key registered
-    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, relay_pk.as_bytes().clone());
+    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, *relay_pk.as_bytes());
 
     let host_addr = u32::from_be_bytes([10, 0, 0, 1]);
     let plaintext = build_plaintext_request(host_addr, 40000);
@@ -329,15 +329,15 @@ async fn test_e2e_tampered_mac_returns_bad_request() {
     let (backend_sk, backend_pk) = generate_keypair();
     let (relay_sk, relay_pk) = generate_keypair();
 
-    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, relay_pk.as_bytes().clone());
+    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, *relay_pk.as_bytes());
 
     let host_addr = u32::from_be_bytes([10, 0, 0, 1]);
     let plaintext = build_plaintext_request(host_addr, 40000);
     let mut encrypted = encrypt_request(&plaintext, &relay_sk, &backend_pk);
 
     // Flip bits in the MAC (bytes 8..24)
-    for i in HEADER_SIZE..HEADER_SIZE + 16 {
-        encrypted[i] ^= 0xFF;
+    for byte in encrypted[HEADER_SIZE..HEADER_SIZE + 16].iter_mut() {
+        *byte ^= 0xFF;
     }
 
     let (status, _) = post_relay_update(state, encrypted).await;
@@ -357,7 +357,7 @@ async fn test_e2e_tampered_ciphertext_returns_bad_request() {
     let (backend_sk, backend_pk) = generate_keypair();
     let (relay_sk, relay_pk) = generate_keypair();
 
-    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, relay_pk.as_bytes().clone());
+    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, *relay_pk.as_bytes());
 
     let host_addr = u32::from_be_bytes([10, 0, 0, 1]);
     let plaintext = build_plaintext_request(host_addr, 40000);
@@ -388,7 +388,7 @@ async fn test_e2e_tampered_nonce_returns_bad_request() {
     let (backend_sk, backend_pk) = generate_keypair();
     let (relay_sk, relay_pk) = generate_keypair();
 
-    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, relay_pk.as_bytes().clone());
+    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, *relay_pk.as_bytes());
 
     let host_addr = u32::from_be_bytes([10, 0, 0, 1]);
     let plaintext = build_plaintext_request(host_addr, 40000);
@@ -396,8 +396,8 @@ async fn test_e2e_tampered_nonce_returns_bad_request() {
 
     // Flip bits in the nonce (last 24 bytes)
     let nonce_start = encrypted.len() - NONCE_SIZE;
-    for i in nonce_start..encrypted.len() {
-        encrypted[i] ^= 0xFF;
+    for byte in encrypted[nonce_start..].iter_mut() {
+        *byte ^= 0xFF;
     }
 
     let (status, _) = post_relay_update(state, encrypted).await;
@@ -417,7 +417,7 @@ async fn test_e2e_truncated_encrypted_body_returns_bad_request() {
     let (backend_sk, backend_pk) = generate_keypair();
     let (relay_sk, relay_pk) = generate_keypair();
 
-    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, relay_pk.as_bytes().clone());
+    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, *relay_pk.as_bytes());
 
     let host_addr = u32::from_be_bytes([10, 0, 0, 1]);
     let plaintext = build_plaintext_request(host_addr, 40000);
@@ -442,7 +442,7 @@ async fn test_e2e_unknown_relay_in_encrypted_header_returns_error() {
     let (backend_sk, backend_pk) = generate_keypair();
     let (relay_sk, relay_pk) = generate_keypair();
 
-    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, relay_pk.as_bytes().clone());
+    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, *relay_pk.as_bytes());
 
     // Build request with an address NOT in the relay database
     let unknown_addr = u32::from_be_bytes([99, 99, 99, 99]);
@@ -465,7 +465,7 @@ async fn test_e2e_unknown_relay_in_encrypted_header_returns_error() {
 async fn test_e2e_encrypted_response_contains_expected_keys() {
     let (backend_sk, backend_pk) = generate_keypair();
     let (relay_sk, relay_pk) = generate_keypair();
-    let relay_pk_bytes = relay_pk.as_bytes().clone();
+    let relay_pk_bytes = *relay_pk.as_bytes();
 
     let state = test_app_state_with_crypto(&backend_sk, &backend_pk, relay_pk_bytes);
 
@@ -596,7 +596,7 @@ async fn test_e2e_multiple_encrypted_requests_succeed() {
     let (backend_sk, backend_pk) = generate_keypair();
     let (relay_sk, relay_pk) = generate_keypair();
 
-    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, relay_pk.as_bytes().clone());
+    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, *relay_pk.as_bytes());
 
     let host_addr = u32::from_be_bytes([10, 0, 0, 1]);
 
@@ -646,7 +646,7 @@ async fn test_e2e_multiple_encrypted_requests_succeed() {
 async fn test_p1_01_replay_rejected_on_second_attempt() {
     let (backend_sk, backend_pk) = generate_keypair();
     let (relay_sk, relay_pk) = generate_keypair();
-    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, relay_pk.as_bytes().clone());
+    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, *relay_pk.as_bytes());
 
     let host_addr = u32::from_be_bytes([10, 0, 0, 1]);
     let plaintext = build_plaintext_request(host_addr, 40000);
@@ -672,7 +672,7 @@ async fn test_p1_01_replay_rejected_on_second_attempt() {
 async fn test_p1_01_stale_current_time_rejected() {
     let (backend_sk, backend_pk) = generate_keypair();
     let (relay_sk, relay_pk) = generate_keypair();
-    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, relay_pk.as_bytes().clone());
+    let state = test_app_state_with_crypto(&backend_sk, &backend_pk, *relay_pk.as_bytes());
 
     let host_addr = u32::from_be_bytes([10, 0, 0, 1]);
 

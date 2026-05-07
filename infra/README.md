@@ -54,7 +54,12 @@ across sessions. Never commit `PULUMI_CONFIG_PASSPHRASE` to source control.
 ## First-Time Setup
 
 ```bash
-# 1 - Install Python dependencies (run once per machine)
+# 1 - Create virtualenv and install Python dependencies (run once per machine)
+#     This creates infra/.venv and installs pulumi + pulumi-aws + PyYAML.
+#     All subsequent `make` targets auto-detect infra/.venv and use it.
+make venv
+
+# Alternatively, set up manually:
 cd infra/
 python3 -m venv .venv
 source .venv/bin/activate
@@ -79,6 +84,11 @@ pulumi config set relay-xdp-infra:admin_cidr "$(curl -4 -s ifconfig.me)/32" --st
 export PULUMI_CONFIG_PASSPHRASE="<production-passphrase>"
 pulumi config set relay-xdp-infra:admin_cidr "$(curl -4 -s ifconfig.me)/32" --stack production
 ```
+
+> **Note:** All `make` targets use `$(INFRA_PYTHON)` which resolves to
+> `infra/.venv/bin/python` when the venv exists, falling back to the system
+> `python3`. Run `make venv` once before any `make test-infra`, `make deploy-*`,
+> or `make e2e-deployed` call to ensure the correct interpreter and packages are used.
 
 ## Deploy
 
@@ -191,6 +201,74 @@ infra/
 ├── relay_node.py                    # RelayNode ComponentResource
 ├── backend_node.py                  # BackendNode ComponentResource
 ├── inventory_gen.py                 # CLI: pulumi output -> ansible/inventory/<stack>.yml
+├── stack_outputs.py                 # CLI + library: pulumi output -> StackEnv (env or JSON)
 ├── test_admin_cidr_validation.py    # unit tests for _validate_admin_cidr
-└── test_inventory_gen.py            # unit tests for inventory_gen
+├── test_inventory_gen.py            # unit tests for inventory_gen
+└── test_stack_outputs.py            # unit tests for stack_outputs.py parser
+```
+
+## stack_outputs.py
+
+Shared Pulumi JSON output parser used by both `inventory_gen.py` and
+`tests/e2e-deployed.sh`. Emits shell `export` statements or structured JSON.
+
+```bash
+# Shell eval - consumed by tests/e2e-deployed.sh and Makefile e2e-deployed target
+python infra/stack_outputs.py --stack staging --format env
+# export BACKEND_HOST=1.2.3.4
+# export BACKEND_PORT=8090
+# export ADMIN_BACKEND_PORT=8091
+# export RELAY_PUBLIC_IPS="10.x.x.x 10.y.y.y 10.z.z.z"
+# export RELAY_IDS="relay-staging-1 relay-staging-2 relay-staging-3"
+
+# JSON output for machine parsing
+python infra/stack_outputs.py --stack production --format json
+```
+
+Constants: `BACKEND_PUBLIC_PORT=8090` (open to 0.0.0.0/0), `BACKEND_ADMIN_PORT=8091`
+(restricted to `admin_cidr`). Must stay in sync with `network.py` SG definitions.
+
+## E2E Deployed Tests
+
+Post-provisioning E2E tests run from the developer laptop (within `admin_cidr`):
+
+```bash
+# Full pipeline: pulumi up -> inventory_gen -> Ansible site.yml ->
+#                e2e-verify.yml -> e2e-deployed.sh -> relay_sdk_smoke Group 4
+make e2e-deployed STACK=staging RELAY_VERSION=v1.0.0
+
+# Fast iteration when infra is already provisioned
+make e2e-deployed STACK=staging RELAY_VERSION=v1.0.0 REUSE_STACK=1
+
+# Teardown after investigation is complete (refuses to destroy production)
+make e2e-teardown STACK=staging
+```
+
+Test harness files:
+
+| File | Purpose |
+|------|---------|
+| `tests/e2e-deployed.sh` | 10+ HTTP assertions on live backend (8090/8091); TCP preflight on 8091; loops over `${RELAY_IDS}` from `stack_outputs.py` |
+| `ansible/playbooks/e2e-verify.yml` | Per-node liveness: `systemctl`, `bpftool`, `lsmod`, `ss`, `journalctl` (zero ERROR lines) |
+
+On assertion failure the stack is left alive for forensic inspection.
+See `docs/decisions/ADR-004-e2e-deployed-test-flow.md` for full rationale.
+
+## Infra Unit Tests
+
+Run without AWS credentials. Requires `make venv` to have been run first.
+
+```bash
+make test-infra
+# Uses infra/.venv/bin/python when available, falls back to python3.
+# Runs: test_admin_cidr_validation.py + test_inventory_gen.py + test_stack_outputs.py
+```
+
+Or individually (activate venv first):
+
+```bash
+source infra/.venv/bin/activate
+python infra/test_admin_cidr_validation.py
+python infra/test_inventory_gen.py
+python infra/test_stack_outputs.py
 ```

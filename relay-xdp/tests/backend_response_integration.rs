@@ -70,6 +70,7 @@ fn test_main_thread(
 }
 
 /// Build a RelayUpdateResponse using relay-backend's real writer.
+#[allow(clippy::too_many_arguments)]
 fn build_backend_response(
     relay_ids: &[u64],
     relay_addresses: &[SocketAddrV4],
