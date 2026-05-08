@@ -58,15 +58,19 @@ COPY relay-xdp-common/ relay-xdp-common/
 COPY relay-xdp/ relay-xdp/
 
 # Stub crates for workspace resolution
-RUN mkdir -p relay-backend/src xtask/src relay-sdk/src relay-sdk/benches && \
+RUN mkdir -p relay-backend/src xtask/src relay-sdk/src relay-sdk/benches \
+             relay-bench/src/bin && \
     echo 'fn main() {}' > relay-backend/src/main.rs && \
     echo '' > relay-backend/src/lib.rs && \
     echo '' > relay-sdk/src/lib.rs && \
     echo 'fn main() {}' > relay-sdk/benches/relay_sdk.rs && \
-    echo 'fn main() {}' > xtask/src/main.rs
+    echo 'fn main() {}' > xtask/src/main.rs && \
+    echo 'fn main() {}' > relay-bench/src/bin/bench_server.rs && \
+    echo 'fn main() {}' > relay-bench/src/bin/bench_client.rs
 COPY relay-backend/Cargo.toml relay-backend/Cargo.toml
 COPY xtask/Cargo.toml xtask/Cargo.toml
 COPY relay-sdk/Cargo.toml relay-sdk/Cargo.toml
+COPY relay-bench/Cargo.toml relay-bench/Cargo.toml
 
 # Copy compiled eBPF binary from stage 1
 COPY --from=ebpf-builder \

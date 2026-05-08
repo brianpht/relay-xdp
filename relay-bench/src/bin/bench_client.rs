@@ -206,8 +206,7 @@ fn fetch_bench_token(admin_url: &str, relay_addr: &str) -> Result<BenchTokenResp
     let path = format!("/bench_token?relay_addr={}", relay_addr);
     let body = http_get_body(host_port, &path)
         .with_context(|| format!("GET /bench_token from {}", admin_url))?;
-    serde_json::from_str(&body)
-        .with_context(|| format!("parse /bench_token response: {}", body))
+    serde_json::from_str(&body).with_context(|| format!("parse /bench_token response: {}", body))
 }
 
 // ── RTT stats ─────────────────────────────────────────────────────────────────
