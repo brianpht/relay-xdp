@@ -14,6 +14,7 @@
 - [x] Define env vars, metrics format, and Makefile targets
 - [x] Resolve session_map provisioning for relay mode
 - [x] Implementation: steps 1-4 complete (2026-05-08)
+- [x] Implementation: step 5 complete (2026-05-08)
 
 ## Work Completed
 
@@ -234,7 +235,7 @@ bench-relay:
 2. ~~**High:** Write `relay-backend/src/handlers.rs`: add `bench_token_handler` to `create_admin_router` - generate session materials, return JSON~~ - done 2026-05-08
 3. ~~**High:** Write `relay-bench/src/bin/bench_server.rs` - axum `/register_session` + ServerInner network thread + echo + stats~~ - done 2026-05-08
 4. ~~**High:** Write `relay-bench/src/bin/bench_client.rs` - orchestrator + ClientInner network thread + direct mode with simulated ROUTE_RESPONSE~~ - done 2026-05-08
-5. **Medium:** Add relay mode to `bench_client` - GET /bench_token, encrypt RouteToken, wait for real ROUTE_RESPONSE from relay-xdp
+5. ~~**Medium:** Add relay mode to `bench_client` - GET /bench_token, encrypt RouteToken, wait for real ROUTE_RESPONSE from relay-xdp~~ - done 2026-05-08
 6. **Medium:** Add `bench-local` + `bench-relay` targets to `Makefile`
 7. **Medium:** Write `relay-bench/README.md` with full Mermaid diagrams (direct mode + relay mode sequences)
 8. **Low:** Add integration test for `GET /bench_token` endpoint in `relay-backend/tests/`

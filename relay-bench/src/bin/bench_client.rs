@@ -37,6 +37,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
+use serde::Deserialize;
 
 use relay_sdk::address::Address;
 use relay_sdk::client::{Client, ClientInner};
@@ -64,8 +65,6 @@ struct Config {
 
 enum BenchMode {
     Direct,
-    // relay_addr and backend_admin are used in step 5 (relay mode implementation).
-    #[allow(dead_code)]
     Relay {
         relay_addr: String,
         backend_admin: String,
@@ -141,6 +140,74 @@ fn http_post_json(host_port: &str, path: &str, body: &str) -> Result<u16> {
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(0);
     Ok(status)
+}
+
+// Extract the response body from a raw HTTP/1.0 response (after \r\n\r\n).
+fn extract_http_body(raw: &str) -> &str {
+    match raw.find("\r\n\r\n") {
+        Some(pos) => &raw[pos + 4..],
+        None => raw,
+    }
+}
+
+fn http_get_body(host_port: &str, path: &str) -> Result<String> {
+    let req = format!(
+        "GET {} HTTP/1.0\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        path, host_port
+    );
+    let mut stream =
+        TcpStream::connect(host_port).with_context(|| format!("connect {}", host_port))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+    stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+    stream.write_all(req.as_bytes()).context("http GET write")?;
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).context("http GET read")?;
+    Ok(extract_http_body(&raw).to_string())
+}
+
+// Parse the host:port from a URL like "http://1.2.3.4:81" or "1.2.3.4:81".
+fn url_host_port(url: &str) -> &str {
+    let stripped = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    match stripped.find('/') {
+        Some(pos) => &stripped[..pos],
+        None => stripped,
+    }
+}
+
+// ── bench_token response from relay-backend GET /bench_token ─────────────────
+
+// JSON response from relay-backend admin GET /bench_token?relay_addr=...
+//
+// Fields:
+//   session_id               - u64 session identifier
+//   session_version          - u8 monotonic version
+//   session_private_key      - hex-encoded 32B; packed inside RouteToken and used
+//                              to HMAC relay packet headers (CLIENT_TO_SERVER etc.)
+//   relay_backend_public_key - hex-encoded 32B XChaCha20-Poly1305 key;
+//                              used by bench_client to encrypt the RouteToken
+//                              (relay eBPF decrypts with the same symmetric key)
+//   relay_address            - "IP:PORT" echoed back (first-hop relay)
+//   current_magic            - hex-encoded 8B DDoS filter epoch token
+#[derive(Debug, Deserialize)]
+struct BenchTokenResponse {
+    session_id: u64,
+    session_version: u8,
+    session_private_key: String,
+    relay_backend_public_key: String,
+    relay_address: String,
+    current_magic: String,
+}
+
+fn fetch_bench_token(admin_url: &str, relay_addr: &str) -> Result<BenchTokenResponse> {
+    let host_port = url_host_port(admin_url);
+    // IP:PORT in relay_addr contains only digits, dots, and colons - no encoding needed.
+    let path = format!("/bench_token?relay_addr={}", relay_addr);
+    let body = http_get_body(host_port, &path)
+        .with_context(|| format!("GET /bench_token from {}", admin_url))?;
+    serde_json::from_str(&body)
+        .with_context(|| format!("parse /bench_token response: {}", body))
 }
 
 // ── RTT stats ─────────────────────────────────────────────────────────────────
@@ -266,8 +333,116 @@ fn setup_direct_route(
     Ok(())
 }
 
+// ── Relay-mode setup: build RouteToken + push route_update command ────────────
+
+struct RelaySetup {
+    session_id: u64,
+    session_version: u8,
+    // session_private_key goes inside the RouteToken; bench_server uses it to
+    // verify CLIENT_TO_SERVER packet headers.
+    session_private_key: [u8; SESSION_PRIVATE_KEY_BYTES],
+    // relay_backend_pk is the symmetric XChaCha20-Poly1305 key shared between
+    // relay-backend and relay-xdp. bench_client uses it to:
+    //   (a) encrypt the RouteToken so relay eBPF can decrypt it via
+    //       bpf_relay_xchacha20poly1305_decrypt
+    //   (b) pass as client_secret_key to open_session so RouteManager can
+    //       decrypt Token[0] client-side to read session_id/next_address
+    relay_backend_pk: [u8; XCHACHA_KEY_BYTES],
+    magic: [u8; 8],
+}
+
+/// Push open_session + route_update commands and pump once.
+///
+/// The RouteManager builds the ROUTE_REQUEST packet during begin_next_route
+/// (triggered by pump_commands on the RouteUpdate command). The network thread
+/// sends it to the relay on the first Tick cycle (~16 ms after start).
+/// relay-xdp eBPF decrypts the RouteToken, creates a session_map entry, and
+/// sends ROUTE_RESPONSE back. The network thread receives it and sets
+/// route_active = true.
+fn setup_relay_route(
+    inner: &mut ClientInner,
+    client: &mut Client,
+    rs: &RelaySetup,
+    relay_addr: &str,
+    server_udp_addr: &str,
+    client_udp_addr: &str,
+) -> Result<()> {
+    // Parse relay addr for RouteToken next_address + next_port.
+    let relay_sa: std::net::SocketAddr = relay_addr
+        .parse()
+        .with_context(|| format!("parse relay addr: {}", relay_addr))?;
+    let relay_ip = match relay_sa.ip() {
+        std::net::IpAddr::V4(v4) => v4.octets(),
+        _ => bail!("bench only supports IPv4 relay addresses"),
+    };
+    let relay_port = relay_sa.port();
+
+    // Server SDK address used as fallback direct destination if relay fails.
+    let server_sa: std::net::SocketAddr = server_udp_addr
+        .parse()
+        .with_context(|| format!("parse bench_server UDP addr: {}", server_udp_addr))?;
+    let server_sdk = Address::from(server_sa);
+
+    // Client external address for pittle/chonkle source field in ROUTE_REQUEST.
+    let client_ext_sa: std::net::SocketAddr = client_udp_addr
+        .parse()
+        .unwrap_or_else(|_| "127.0.0.1:17778".parse().unwrap());
+    let client_ext = Address::from(client_ext_sa);
+
+    // Build RouteToken: next_address/next_port point at the relay (first hop).
+    // next_address stored in network byte order (big-endian u32).
+    let route_token = RouteToken {
+        session_private_key: rs.session_private_key,
+        expire_timestamp: 9_999_999_999u64,
+        session_id: rs.session_id,
+        envelope_kbps_up: 10_000,
+        envelope_kbps_down: 10_000,
+        next_address: u32::from_be_bytes(relay_ip).to_be(),
+        prev_address: 0,
+        next_port: relay_port.to_be(),
+        prev_port: 0,
+        session_version: rs.session_version,
+        next_internal: 0,
+        prev_internal: 0,
+    };
+
+    // Encrypt the RouteToken with relay_backend_pk. relay-xdp eBPF decrypts it
+    // using bpf_relay_xchacha20poly1305_decrypt with the same key to create the
+    // session_map entry.
+    let enc_token = encrypt_route_token(&route_token, &rs.relay_backend_pk);
+
+    // Tokens vec: [relay token (111B)] + [dummy server token (111B)].
+    // num_tokens = 2 is required by ClientInner (begin_next_route rejects < 2).
+    let mut tokens = Vec::with_capacity(ENCRYPTED_ROUTE_TOKEN_BYTES * 2);
+    tokens.extend_from_slice(&enc_token);
+    tokens.extend_from_slice(&[0u8; ENCRYPTED_ROUTE_TOKEN_BYTES]);
+
+    // client_secret_key = relay_backend_pk so RouteManager.begin_next_route can
+    // decrypt Token[0] to read session_id, session_private_key and next_address.
+    client.open_session(server_sdk, rs.relay_backend_pk);
+    inner.pump_commands();
+
+    // Deliver route update -> RouteManager enters pending state and pre-builds
+    // the ROUTE_REQUEST packet (sent on first Tick in the network thread).
+    client.route_update(UPDATE_TYPE_ROUTE, 2, tokens, rs.magic, client_ext);
+    inner.pump_commands();
+
+    log::info!(
+        "relay route pending: session={:016x} relay={} server={}",
+        rs.session_id,
+        relay_addr,
+        server_udp_addr
+    );
+    Ok(())
+}
+
 // ── Network thread ────────────────────────────────────────────────────────────
 
+// route_active is set to true by the network thread the first time the
+// RouteManager reports a confirmed relay route (ROUTE_RESPONSE received and
+// has_network_next_route() returns true). The main task polls this flag in
+// relay mode before starting load generation.
+#[allow(clippy::too_many_arguments)]
 fn network_thread(
     mut inner: ClientInner,
     client_arc: Arc<Mutex<Client>>,
@@ -276,6 +451,7 @@ fn network_thread(
     rtt_data: Arc<Mutex<Vec<u64>>>,
     client_udp: String,
     shutdown: Arc<AtomicBool>,
+    route_active: Arc<AtomicBool>,
 ) {
     let sock = match UdpSocket::bind(&client_udp) {
         Ok(s) => s,
@@ -296,7 +472,13 @@ fn network_thread(
         // 1. Process queued commands (SendPacket, etc.) -> emit SendRaw notifies.
         inner.pump_commands();
 
-        // 2. Dispatch all outbound packets via real UDP.
+        // 2. Detect when the relay route becomes active and publish the flag.
+        if !route_active.load(Ordering::Relaxed) && inner.route_manager.has_network_next_route() {
+            route_active.store(true, Ordering::Relaxed);
+            log::info!("bench_client: route ACTIVE");
+        }
+
+        // 3. Dispatch all outbound packets via real UDP.
         loop {
             let outbound = { client_arc.lock().unwrap().pop_send_raw() };
             match outbound {
@@ -311,7 +493,7 @@ fn network_thread(
             }
         }
 
-        // 3. Receive and process incoming packets.
+        // 4. Receive and process incoming packets.
         match sock.recv_from(&mut recv_buf) {
             Ok((n, _)) => {
                 if let Some(payload) = inner.process_incoming(&recv_buf[..n]) {
@@ -336,7 +518,7 @@ fn network_thread(
             }
         }
 
-        // 4. Tick every ~16 ms to drive route maintenance (continue requests /
+        // 5. Tick every ~16 ms to drive route maintenance (ROUTE_REQUEST retries /
         //    timeout checks). Must happen AFTER pop_send_raw to avoid
         //    drain_notify consuming pending SendRaw items.
         let now = Instant::now();
@@ -350,7 +532,7 @@ fn network_thread(
     log::info!("bench_client: network thread exiting");
 }
 
-// ── Stats task ────────────────────────────────────────────────────────────────
+// ── Stats ─────────────────────────────────────────────────────────────────────
 
 fn print_stats(
     ts_ms: u64,
@@ -430,30 +612,34 @@ async fn main() -> Result<()> {
         cfg.duration_secs
     );
 
-    // Generate session materials locally.
-    let session_id: u64 = rand::random();
-    let session_version: u8 = 1;
-    let mut session_private_key = [0u8; SESSION_PRIVATE_KEY_BYTES];
-    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut session_private_key);
-    let mut client_secret_key = [0u8; XCHACHA_KEY_BYTES];
-    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut client_secret_key);
-    let magic = [0u8; 8]; // direct mode: magic is not validated end-to-end
-
-    let ds = DirectSetup {
-        session_id,
-        session_version,
-        session_private_key,
-        client_secret_key,
-        magic,
-    };
-
     // Create ClientInner / Client pair.
     let (mut inner, client) = ClientInner::create();
     let client_arc = Arc::new(Mutex::new(client));
 
+    // route_active: set by network thread when has_network_next_route() goes true.
+    // In direct mode it is pre-set to true (route confirmed before thread start).
+    // In relay mode main waits on it with a 15 s timeout.
+    let route_active = Arc::new(AtomicBool::new(false));
+
     match &cfg.mode {
         BenchMode::Direct => {
-            // Setup route: use bench_server UDP addr as next_address.
+            // Generate session materials locally (no relay-backend needed).
+            let session_id: u64 = rand::random();
+            let session_version: u8 = 1;
+            let mut session_private_key = [0u8; SESSION_PRIVATE_KEY_BYTES];
+            rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut session_private_key);
+            let mut client_secret_key = [0u8; XCHACHA_KEY_BYTES];
+            rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut client_secret_key);
+            let magic = [0u8; 8]; // magic not validated end-to-end in direct mode
+
+            let ds = DirectSetup {
+                session_id,
+                session_version,
+                session_private_key,
+                client_secret_key,
+                magic,
+            };
+
             setup_direct_route(
                 &mut inner,
                 &mut client_arc.lock().unwrap(),
@@ -461,7 +647,8 @@ async fn main() -> Result<()> {
                 &cfg.bench_server_udp,
             )?;
 
-            // Register session with bench_server: relay_address = bench_client UDP bind.
+            // relay_address = bench_client UDP: bench_server echoes SERVER_TO_CLIENT
+            // directly to the client (no relay hop in direct mode).
             register_session(
                 &cfg.bench_server_http,
                 session_id,
@@ -471,18 +658,96 @@ async fn main() -> Result<()> {
             )
             .context("register_session with bench_server")?;
 
+            // Pre-confirm route_active - route is already established before the
+            // network thread starts.
+            route_active.store(true, Ordering::Relaxed);
+
             log::info!(
                 "direct mode: session {:016x} registered, bench_server={}",
                 session_id,
                 cfg.bench_server_http
             );
         }
-        BenchMode::Relay { .. } => {
-            bail!("relay mode is not implemented in step 4 - only direct mode supported");
+
+        BenchMode::Relay {
+            relay_addr,
+            backend_admin,
+        } => {
+            // 1. Fetch bench_token from relay-backend admin.
+            //    bench_client is responsible for encrypting the RouteToken so that
+            //    relay-xdp-common stays as a dev-dep in relay-backend.
+            let tok = fetch_bench_token(backend_admin, relay_addr)
+                .context("GET /bench_token from relay-backend admin")?;
+
+            log::info!(
+                "bench_token: session_id={} version={} relay={}",
+                tok.session_id,
+                tok.session_version,
+                tok.relay_address
+            );
+
+            // 2. Decode hex fields from JSON response.
+            let session_private_key: [u8; SESSION_PRIVATE_KEY_BYTES] =
+                hex::decode(&tok.session_private_key)
+                    .context("decode session_private_key hex")?
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("session_private_key: wrong length"))?;
+
+            let relay_backend_pk: [u8; XCHACHA_KEY_BYTES] =
+                hex::decode(&tok.relay_backend_public_key)
+                    .context("decode relay_backend_public_key hex")?
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("relay_backend_public_key: wrong length"))?;
+
+            let magic: [u8; 8] = hex::decode(&tok.current_magic)
+                .context("decode current_magic hex")?
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("current_magic: wrong length"))?;
+
+            let rs = RelaySetup {
+                session_id: tok.session_id,
+                session_version: tok.session_version,
+                session_private_key,
+                relay_backend_pk,
+                magic,
+            };
+
+            // 3. Encrypt RouteToken + push open_session/route_update commands.
+            //    ROUTE_REQUEST is pre-built; the network thread sends it on
+            //    the first Tick (~16 ms after start).
+            setup_relay_route(
+                &mut inner,
+                &mut client_arc.lock().unwrap(),
+                &rs,
+                relay_addr,
+                &cfg.bench_server_udp,
+                &cfg.bench_client_udp,
+            )?;
+
+            // 4. Register session with bench_server.
+            //    relay_address = RELAY_ADDR so bench_server sends SERVER_TO_CLIENT
+            //    to the relay, which forwards it back to the client.
+            register_session(
+                &cfg.bench_server_http,
+                tok.session_id,
+                tok.session_version,
+                &session_private_key,
+                relay_addr,
+            )
+            .context("register_session with bench_server")?;
+
+            log::info!(
+                "relay mode: session {:016x} registered, relay={} server={}",
+                tok.session_id,
+                relay_addr,
+                cfg.bench_server_http
+            );
+            // route_active stays false; network thread sets it after receiving
+            // ROUTE_RESPONSE from relay-xdp.
         }
     }
 
-    // Shared state.
+    // Shared counters.
     let pkt_sent = Arc::new(AtomicU64::new(0));
     let pkt_recv = Arc::new(AtomicU64::new(0));
     let rtt_data: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
@@ -495,6 +760,7 @@ async fn main() -> Result<()> {
         let recv_net = Arc::clone(&pkt_recv);
         let rtt_net = Arc::clone(&rtt_data);
         let shutdown_net = Arc::clone(&shutdown);
+        let route_active_net = Arc::clone(&route_active);
         let client_udp = cfg.bench_client_udp.clone();
         std::thread::Builder::new()
             .name("bench_client_net".into())
@@ -507,9 +773,31 @@ async fn main() -> Result<()> {
                     rtt_net,
                     client_udp,
                     shutdown_net,
+                    route_active_net,
                 )
             })
             .expect("failed to spawn network thread");
+    }
+
+    // In relay mode: wait for the network thread to receive a real ROUTE_RESPONSE
+    // from relay-xdp before starting load generation.
+    if matches!(cfg.mode, BenchMode::Relay { .. }) {
+        log::info!("relay mode: waiting for ROUTE_RESPONSE from relay-xdp (timeout 15s)...");
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if route_active.load(Ordering::Relaxed) {
+                log::info!("relay mode: ROUTE_RESPONSE received - route confirmed, starting load");
+                break;
+            }
+            if Instant::now() > deadline {
+                shutdown.store(true, Ordering::Relaxed);
+                bail!(
+                    "relay mode: timed out waiting for ROUTE_RESPONSE after 15s - \
+                    check RELAY_ADDR and that relay-xdp is running with XDP attached"
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 
     // Load generator task: push SendPacket commands at TARGET_PPS.
@@ -557,7 +845,7 @@ async fn main() -> Result<()> {
 
     shutdown.store(true, Ordering::Relaxed);
 
-    // Give the network thread a moment to finish.
+    // Give the network thread a moment to drain.
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     log::info!("bench_client done");
