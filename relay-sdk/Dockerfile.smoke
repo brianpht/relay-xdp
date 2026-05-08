@@ -20,16 +20,19 @@ COPY Cargo.toml Cargo.lock ./
 COPY relay-xdp/Cargo.toml relay-xdp/Cargo.toml
 COPY relay-backend/Cargo.toml relay-backend/Cargo.toml
 COPY xtask/Cargo.toml xtask/Cargo.toml
+COPY relay-bench/Cargo.toml relay-bench/Cargo.toml
 
 # Create stub source files for workspace members we are NOT building.
 # Cargo requires the declared source paths to exist when parsing the workspace
 # manifest, even though none of these crates will be compiled.
-RUN mkdir -p relay-xdp/src relay-backend/src xtask/src \
+RUN mkdir -p relay-xdp/src relay-backend/src xtask/src relay-bench/src/bin \
  && echo 'pub fn _stub() {}' > relay-xdp/src/lib.rs \
  && echo 'fn main() {}' > relay-xdp/src/main.rs \
  && echo 'pub fn _stub() {}' > relay-backend/src/lib.rs \
  && echo 'fn main() {}' > relay-backend/src/main.rs \
- && echo 'fn main() {}' > xtask/src/main.rs
+ && echo 'fn main() {}' > xtask/src/main.rs \
+ && echo 'fn main() {}' > relay-bench/src/bin/bench_server.rs \
+ && echo 'fn main() {}' > relay-bench/src/bin/bench_client.rs
 
 # Copy the crates that are actually compiled.
 COPY relay-xdp-common/ relay-xdp-common/
