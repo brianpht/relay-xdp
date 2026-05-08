@@ -1,5 +1,6 @@
 .PHONY: deploy-production deploy-staging infra-preview-production infra-preview-staging preflight test-infra \
-        e2e-deployed e2e-teardown venv update-admin-cidr
+        e2e-deployed e2e-teardown venv update-admin-cidr \
+        bench-local bench-relay
 
 # Process substitution <(echo ...) requires bash.
 SHELL := /bin/bash
@@ -222,4 +223,41 @@ e2e-teardown:
 	@$(_PULUMI_ENV_STAGING); \
 	pulumi destroy --stack $(STACK) --cwd infra/ --yes
 	@echo "[e2e-teardown] stack=$(STACK) destroyed"
+
+# ---------------------------------------------------------------------------
+# Benchmark targets
+#
+# bench-local: direct mode loopback, no relay-xdp required.
+#   Starts bench_server in the background, runs bench_client in direct mode,
+#   kills bench_server on exit. Asserts p99 RTT < 500 us via exit code.
+#
+# bench-relay: relay mode against a live relay-xdp instance.
+#   Requires RELAY_ADDR (IP:PORT of relay-xdp first hop) and
+#   BACKEND_ADMIN (http://IP:port of relay-backend admin interface) to be set.
+#   Optional: BENCH_SERVER_HTTP (default 127.0.0.1:18080)
+#             TARGET_PPS (default 500), DURATION_SECS (default 30)
+# ---------------------------------------------------------------------------
+RELAY_ADDR      ?=
+BACKEND_ADMIN   ?= http://127.0.0.1:81
+BENCH_SERVER_HTTP ?= 127.0.0.1:18080
+
+bench-local:
+	cargo build --release -p relay-bench
+	./target/release/bench_server &
+	BENCH_SERVER_HTTP=127.0.0.1:18080 BENCH_SERVER_UDP=127.0.0.1:17777 \
+	BENCH_MODE=direct DURATION_SECS=10 TARGET_PPS=1000 \
+	./target/release/bench_client; \
+	STATUS=$$?; kill %1 2>/dev/null || true; exit $$STATUS
+
+bench-relay:
+	@if [ -z "$(RELAY_ADDR)" ]; then \
+		echo "ERROR: RELAY_ADDR is required for relay mode (e.g. make bench-relay RELAY_ADDR=10.0.0.1:40000)"; \
+		exit 1; \
+	fi
+	cargo build --release -p relay-bench
+	BENCH_MODE=relay DURATION_SECS=30 TARGET_PPS=500 \
+	RELAY_ADDR=$(RELAY_ADDR) \
+	BACKEND_ADMIN=$(BACKEND_ADMIN) \
+	BENCH_SERVER_HTTP=$(BENCH_SERVER_HTTP) \
+	./target/release/bench_client
 

@@ -236,8 +236,8 @@ bench-relay:
 3. ~~**High:** Write `relay-bench/src/bin/bench_server.rs` - axum `/register_session` + ServerInner network thread + echo + stats~~ - done 2026-05-08
 4. ~~**High:** Write `relay-bench/src/bin/bench_client.rs` - orchestrator + ClientInner network thread + direct mode with simulated ROUTE_RESPONSE~~ - done 2026-05-08
 5. ~~**Medium:** Add relay mode to `bench_client` - GET /bench_token, encrypt RouteToken, wait for real ROUTE_RESPONSE from relay-xdp~~ - done 2026-05-08
-6. **Medium:** Add `bench-local` + `bench-relay` targets to `Makefile`
-7. **Medium:** Write `relay-bench/README.md` with full Mermaid diagrams (direct mode + relay mode sequences)
+6. ~~**Medium:** Add `bench-local` + `bench-relay` targets to `Makefile`~~ - done 2026-05-08
+7. ~~**Medium:** Write `relay-bench/README.md` with full Mermaid diagrams (direct mode + relay mode sequences)~~ - done 2026-05-08
 8. **Low:** Add integration test for `GET /bench_token` endpoint in `relay-backend/tests/`
 9. **Low:** Evaluate adding `hdrhistogram` crate if rolling-sort p99 is insufficient at TARGET_PPS > 10K
 
@@ -248,7 +248,7 @@ bench-relay:
 | A | `relay-bench/Cargo.toml` |
 | A | `relay-bench/src/bin/bench_server.rs` |
 | A | `relay-bench/src/bin/bench_client.rs` |
-| A | `relay-bench/README.md` (pending - step 7) |
+| A | `relay-bench/README.md` |
 | M | `Cargo.toml` (add `relay-bench` to `members[]`) |
 | M | `relay-backend/src/handlers.rs` (add `bench_token_handler`, route on admin router) |
-| M | `Makefile` (add `bench-local`, `bench-relay` targets) (pending - step 6) |
+| M | `Makefile` (add `bench-local`, `bench-relay` targets) |
