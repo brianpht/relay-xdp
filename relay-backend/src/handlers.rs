@@ -5,7 +5,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     routing::{get, post},
@@ -17,6 +17,12 @@ use crate::magic::MagicSnapshot;
 use crate::relay_update::{relay_id, RelayUpdateRequest, RelayUpdateResponse};
 use crate::route_matrix::RouteMatrix;
 use crate::state::AppState;
+
+// ── Inline hex encoder (avoids adding a hex crate dep) ───────────────────────
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
 
 /// Public router served on `http_port`. Carries only the encrypted
 /// `/relay_update` ingress and health checks - safe to expose to the
@@ -50,6 +56,8 @@ pub fn create_admin_router(state: Arc<AppState>) -> Router {
         .route("/relay_history/{src}/{dest}", get(relay_history_handler))
         .route("/costs", get(costs_handler))
         .route("/active_relays", get(active_relays_handler))
+        // Bench token for relay-bench direct/relay mode setup.
+        .route("/bench_token", get(bench_token_handler))
         // Prometheus metrics - reveal load patterns.
         .route("/metrics", get(metrics_handler))
         .with_state(state)
@@ -384,6 +392,68 @@ fn build_relay_response(
     };
 
     response.write()
+}
+
+// ── Bench token handler (admin) ───────────────────────────────────────────────
+
+/// Query parameters for GET /bench_token.
+#[derive(serde::Deserialize)]
+struct BenchTokenQuery {
+    relay_addr: Option<String>,
+}
+
+/// Generate session materials for relay-bench client/server.
+///
+/// Returns a JSON object with enough information for bench_client to:
+///   - encrypt a RouteToken (relay mode) or simulate one (direct mode)
+///   - register the session with bench_server
+///
+/// Query: `?relay_addr=IP:PORT` - optional relay first-hop address (relay mode).
+/// The handler does NOT import relay-xdp-common in production code; RouteToken
+/// encryption is delegated to bench_client (uses relay-sdk::tokens::encrypt_route_token).
+async fn bench_token_handler(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<BenchTokenQuery>,
+) -> Response {
+    // Generate session_id from random bytes.
+    let mut session_id_bytes = [0u8; 8];
+    if getrandom::fill(&mut session_id_bytes).is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    let session_id = u64::from_le_bytes(session_id_bytes);
+
+    // Generate 32-byte session_private_key for the bench session.
+    let mut session_private_key = [0u8; 32];
+    if getrandom::fill(&mut session_private_key).is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    // Relay backend public key (hex) - bench_client uses this to encrypt RouteToken.
+    let relay_backend_public_key_hex = if state.config.relay_backend_public_key.len() == 32 {
+        hex_encode(&state.config.relay_backend_public_key)
+    } else {
+        hex_encode(&[0u8; 32])
+    };
+
+    // Current magic bytes (bench_client uses the current value).
+    let magic = state.magic_rotator.get();
+    let current_magic_hex = hex_encode(&magic.current_magic);
+
+    let relay_address = q.relay_addr.unwrap_or_default();
+
+    let body = serde_json::json!({
+        "session_id":              session_id,
+        "session_version":         1u8,
+        "session_private_key":     hex_encode(&session_private_key),
+        "relay_backend_public_key": relay_backend_public_key_hex,
+        "relay_address":           relay_address,
+        "current_magic":           current_magic_hex,
+    });
+
+    match serde_json::to_string(&body) {
+        Ok(json) => (StatusCode::OK, [("content-type", "application/json")], json).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 async fn relays_handler(State(state): State<Arc<AppState>>) -> Response {

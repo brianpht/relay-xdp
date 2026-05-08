@@ -13,7 +13,7 @@
 - [x] Define thread model for bench_server and bench_client
 - [x] Define env vars, metrics format, and Makefile targets
 - [x] Resolve session_map provisioning for relay mode
-- [ ] Implementation: code not yet written
+- [x] Implementation: steps 1-4 complete (2026-05-08)
 
 ## Work Completed
 
@@ -212,7 +212,6 @@ bench-relay:
 
 ## Tests Added/Modified
 
-Planning session only - no code written yet. Tests to be added during implementation:
 
 | Test | Type | Status |
 |------|------|--------|
@@ -231,10 +230,10 @@ Planning session only - no code written yet. Tests to be added during implementa
 
 ## Next Steps
 
-1. **High:** Create `relay-bench/Cargo.toml` and add to workspace `Cargo.toml`
-2. **High:** Write `relay-backend/src/handlers.rs`: add `bench_token_handler` to `create_admin_router` - generate session materials, return JSON
-3. **High:** Write `relay-bench/src/bin/bench_server.rs` - axum `/register_session` + ServerInner network thread + echo + stats
-4. **High:** Write `relay-bench/src/bin/bench_client.rs` - orchestrator + ClientInner network thread + direct mode with simulated ROUTE_RESPONSE
+1. ~~**High:** Create `relay-bench/Cargo.toml` and add to workspace `Cargo.toml`~~ - done 2026-05-08
+2. ~~**High:** Write `relay-backend/src/handlers.rs`: add `bench_token_handler` to `create_admin_router` - generate session materials, return JSON~~ - done 2026-05-08
+3. ~~**High:** Write `relay-bench/src/bin/bench_server.rs` - axum `/register_session` + ServerInner network thread + echo + stats~~ - done 2026-05-08
+4. ~~**High:** Write `relay-bench/src/bin/bench_client.rs` - orchestrator + ClientInner network thread + direct mode with simulated ROUTE_RESPONSE~~ - done 2026-05-08
 5. **Medium:** Add relay mode to `bench_client` - GET /bench_token, encrypt RouteToken, wait for real ROUTE_RESPONSE from relay-xdp
 6. **Medium:** Add `bench-local` + `bench-relay` targets to `Makefile`
 7. **Medium:** Write `relay-bench/README.md` with full Mermaid diagrams (direct mode + relay mode sequences)
@@ -248,7 +247,7 @@ Planning session only - no code written yet. Tests to be added during implementa
 | A | `relay-bench/Cargo.toml` |
 | A | `relay-bench/src/bin/bench_server.rs` |
 | A | `relay-bench/src/bin/bench_client.rs` |
-| A | `relay-bench/README.md` |
+| A | `relay-bench/README.md` (pending - step 7) |
 | M | `Cargo.toml` (add `relay-bench` to `members[]`) |
 | M | `relay-backend/src/handlers.rs` (add `bench_token_handler`, route on admin router) |
-| M | `Makefile` (add `bench-local`, `bench-relay` targets) |
+| M | `Makefile` (add `bench-local`, `bench-relay` targets) (pending - step 6) |
