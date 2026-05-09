@@ -243,11 +243,13 @@ BENCH_SERVER_HTTP ?= 127.0.0.1:18080
 
 bench-local:
 	cargo build --release -p relay-bench
-	./target/release/bench_server &
-	BENCH_SERVER_HTTP=127.0.0.1:18080 BENCH_SERVER_UDP=127.0.0.1:17777 \
-	BENCH_MODE=direct DURATION_SECS=10 TARGET_PPS=1000 \
-	./target/release/bench_client; \
-	STATUS=$$?; kill %1 2>/dev/null || true; exit $$STATUS
+	@{ \
+		./target/release/bench_server & SERVER_PID=$$!; \
+		BENCH_SERVER_HTTP=127.0.0.1:18080 BENCH_SERVER_UDP=127.0.0.1:17777 \
+		BENCH_MODE=direct DURATION_SECS=10 TARGET_PPS=1000 \
+		./target/release/bench_client; \
+		STATUS=$$?; kill $$SERVER_PID 2>/dev/null || true; wait $$SERVER_PID 2>/dev/null; exit $$STATUS; \
+	}
 
 bench-relay:
 	@if [ -z "$(RELAY_ADDR)" ]; then \

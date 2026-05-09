@@ -210,6 +210,20 @@ fn fetch_bench_token(admin_url: &str, relay_addr: &str) -> Result<BenchTokenResp
 }
 
 // ── RTT stats ─────────────────────────────────────────────────────────────────
+//
+// Implementation: Vec<u64> drain + sort_unstable each 1 Hz tick.
+//
+// Capacity analysis (evaluated 2026-05-09):
+//   TARGET_PPS  | samples/tick | sort time (est) | heap/tick | verdict
+//   -----------   -----------   ----------------   ---------   -------
+//   1 000       | 1 K          | ~0.02 ms        | 8 KB      | ok
+//   10 000      | 10 K         | ~0.3 ms         | 80 KB     | ok
+//   50 000      | 50 K         | ~1.7 ms         | 400 KB    | borderline
+//   100 000     | 100 K        | ~3.5 ms         | 800 KB    | replace
+//
+// If TARGET_PPS ever exceeds ~50 K, replace Vec<u64> sort with the
+// `hdrhistogram` crate: O(1) record time, O(1) percentile reads,
+// fixed ~120 KB memory.  Default TARGET_PPS is 1 000, so no change needed.
 
 fn percentile(sorted: &[u64], pct: f64) -> u64 {
     if sorted.is_empty() {

@@ -210,6 +210,7 @@ bench-relay:
 | relay-xdp session_map provisioning via ROUTE_REQUEST (automatic) | eBPF processes ROUTE_REQUEST -> decrypts RouteToken -> creates session_map entry; no special provisioning API needed; confirmed from architecture docs | N/A |
 | Criterion benchmarks stay separate (standalone binaries, not merged into benches/relay_sdk.rs) | Micro-benchmarks (criterion) and load tests (multi-second real UDP) serve different purposes; keeping them separate avoids slowing down `cargo bench` | N/A |
 | RTT histogram uses `Vec<u64>` sort-in-place, no HDR histogram crate | Sufficient p99 accuracy for 1s windows (max ~10K entries at 10K PPS); `hdrhistogram` crate can be added later if high-precision percentiles are needed | N/A |
+| Keep `Vec<u64>` sort-in-place for RTT (evaluated 2026-05-09) | Capacity analysis: ok up to ~50K PPS (sort ~1.7ms/tick, 400KB heap). Default TARGET_PPS=1000 is well within budget. Threshold for switching to `hdrhistogram` (O(1) record+read, fixed 120KB) is TARGET_PPS > 50K. No change needed now; threshold documented in bench_client.rs comment. | N/A |
 
 ## Tests Added/Modified
 
@@ -239,7 +240,7 @@ bench-relay:
 6. ~~**Medium:** Add `bench-local` + `bench-relay` targets to `Makefile`~~ - done 2026-05-08
 7. ~~**Medium:** Write `relay-bench/README.md` with full Mermaid diagrams (direct mode + relay mode sequences)~~ - done 2026-05-08
 8. ~~**Low:** Add integration test for `GET /bench_token` endpoint in `relay-backend/tests/`~~ - done 2026-05-09
-9. **Low:** Evaluate adding `hdrhistogram` crate if rolling-sort p99 is insufficient at TARGET_PPS > 10K
+9. ~~**Low:** Evaluate adding `hdrhistogram` crate if rolling-sort p99 is insufficient at TARGET_PPS > 10K~~ - done 2026-05-09 (see decision below)
 
 ## Files Changed
 
