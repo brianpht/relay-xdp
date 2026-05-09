@@ -218,7 +218,7 @@ bench-relay:
 |------|------|--------|
 | `bench_server POST /register_session accepts session and pumps Command` | Integration | Not yet implemented |
 | `bench_client direct mode: p99 RTT < 500us over loopback` | Functional | Not yet implemented |
-| `relay-backend GET /bench_token returns correct JSON shape` | Integration | Not yet implemented |
+| `relay-backend GET /bench_token returns correct JSON shape` | Integration | Done (5 tests in `http_handler_integration.rs`) |
 | `bench_client relay mode: route ACTIVE after ROUTE_RESPONSE` | Integration | Not yet implemented |
 
 ## Issues Encountered
@@ -238,7 +238,7 @@ bench-relay:
 5. ~~**Medium:** Add relay mode to `bench_client` - GET /bench_token, encrypt RouteToken, wait for real ROUTE_RESPONSE from relay-xdp~~ - done 2026-05-08
 6. ~~**Medium:** Add `bench-local` + `bench-relay` targets to `Makefile`~~ - done 2026-05-08
 7. ~~**Medium:** Write `relay-bench/README.md` with full Mermaid diagrams (direct mode + relay mode sequences)~~ - done 2026-05-08
-8. **Low:** Add integration test for `GET /bench_token` endpoint in `relay-backend/tests/`
+8. ~~**Low:** Add integration test for `GET /bench_token` endpoint in `relay-backend/tests/`~~ - done 2026-05-09
 9. **Low:** Evaluate adding `hdrhistogram` crate if rolling-sort p99 is insufficient at TARGET_PPS > 10K
 
 ## Files Changed
