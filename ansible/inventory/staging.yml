@@ -6,6 +6,7 @@
 #   staging         - all staging hosts (triggers playbooks/group_vars/staging/ auto-load)
 #   relay_servers   - hosts running relay-xdp + kernel module
 #   backend_servers - hosts running relay-backend + Redis
+#   bench_servers   - hosts running bench_server (game server simulator, staging only)
 all:
   children:
     staging:
@@ -13,20 +14,25 @@ all:
         backend_servers:
           hosts:
             backend-staging-1:
-              ansible_host: 100.55.119.209
+              ansible_host: 107.23.94.101
+              ansible_user: ubuntu
+        bench_servers:
+          hosts:
+            bench-staging-1:
+              ansible_host: 32.196.255.134
               ansible_user: ubuntu
         relay_servers:
           hosts:
             relay-staging-1:
-              ansible_host: 3.84.65.73
+              ansible_host: 54.159.82.158
               ansible_user: ubuntu
               relay_name: relay-staging-1
             relay-staging-2:
-              ansible_host: 52.16.12.152
+              ansible_host: 52.19.142.146
               ansible_user: ubuntu
               relay_name: relay-staging-2
             relay-staging-3:
-              ansible_host: 18.142.221.155
+              ansible_host: 52.220.225.46
               ansible_user: ubuntu
               relay_name: relay-staging-3
   vars:

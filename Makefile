@@ -277,4 +277,5 @@ INVENTORY ?= ansible/inventory/$(STACK).yml
 
 bench-deploy:
 	cargo build --release -p relay-bench
-	ansible-playbook -i $(INVENTORY) ansible/playbooks/bench-deploy.yml
+	ansible-playbook -i $(INVENTORY) ansible/playbooks/bench-deploy.yml \
+	$(_VAULT_FLAG)

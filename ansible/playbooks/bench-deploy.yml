@@ -24,6 +24,7 @@
 - name: Deploy bench_server to bench node
   hosts: bench_servers
   gather_facts: false
+  become: yes
 
   vars:
     bench_http_port: 18080
