@@ -17,10 +17,10 @@
 //   BENCH_UDP_PORT   (default: 17777) - UDP listen port
 
 use std::io::ErrorKind;
-use std::net::UdpSocket;
+use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
@@ -28,7 +28,15 @@ use serde::Deserialize;
 
 use relay_sdk::address::Address;
 use relay_sdk::constants::{MAX_PACKET_BYTES, SESSION_PRIVATE_KEY_BYTES};
+use relay_sdk::crypto::hash_sha256;
+use relay_sdk::route::stamp_packet;
 use relay_sdk::server::{Server, ServerInner};
+
+// ── Wire-format constants ─────────────────────────────────────────────────────
+
+const RELAY_SERVER_PING_PACKET: u8 = 13;
+const SERVER_PING_BYTES: usize = 66;
+const PING_KEY_BYTES: usize = 32;
 
 // ── HTTP request body ─────────────────────────────────────────────────────────
 
@@ -42,12 +50,96 @@ struct RegisterSessionBody {
     /// In direct mode this is the bench_client UDP bind addr.
     /// In relay mode this is the relay's last-hop address.
     relay_address: String,
+    // ── Relay mode ping params (optional - only set in relay mode) ────────
+    /// Hex-encoded 32B ping_key from relay-backend (bench_client forwards it).
+    ping_key_hex: Option<String>,
+    /// Hex-encoded 8B current_magic for pittle/chonkle stamping.
+    current_magic_hex: Option<String>,
+    /// "IP:PORT" - bench_server's externally visible UDP address. Required so
+    /// PingTokenData.source_address matches the saddr the relay sees post-NAT.
+    server_public_address: Option<String>,
+}
+
+// ── SERVER_PING construction (66 bytes) ───────────────────────────────────────
+//
+// Wire layout (matches relay-xdp-ebpf::handle_server_ping):
+//   [0]      packet type = 13 (RELAY_SERVER_PING_PACKET)
+//   [1..18]  pittle/chonkle DDoS filter bytes
+//   [18..26] echo (8B)
+//   [26..34] expire_timestamp (8B little-endian)
+//   [34..66] SHA-256 token (32B) computed over PingTokenData
+//
+// Unlike CLIENT_PING, source_port = real UDP source port (no NAT workaround).
+fn build_ping_token(
+    ping_key: &[u8; PING_KEY_BYTES],
+    expire_ts: u64,
+    src_ip: [u8; 4],
+    dst_ip: [u8; 4],
+    src_port_be: u16,
+    dst_port_be: u16,
+) -> [u8; 32] {
+    let mut td = [0u8; 52];
+    td[0..32].copy_from_slice(ping_key);
+    td[32..40].copy_from_slice(&expire_ts.to_le_bytes());
+    td[40..44].copy_from_slice(&src_ip);
+    td[44..48].copy_from_slice(&dst_ip);
+    td[48..50].copy_from_slice(&src_port_be.to_le_bytes());
+    td[50..52].copy_from_slice(&dst_port_be.to_le_bytes());
+    hash_sha256(&td)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_server_ping_packet(
+    ping_key: &[u8; PING_KEY_BYTES],
+    expire_ts: u64,
+    server_ip: [u8; 4],
+    server_port_be: u16,
+    relay_ip: [u8; 4],
+    relay_port_be: u16,
+    magic: &[u8; 8],
+) -> [u8; SERVER_PING_BYTES] {
+    let token = build_ping_token(
+        ping_key,
+        expire_ts,
+        server_ip,
+        relay_ip,
+        server_port_be,
+        relay_port_be,
+    );
+    let mut buf = [0u8; SERVER_PING_BYTES];
+    buf[0] = RELAY_SERVER_PING_PACKET;
+    // bytes [18..26] echo - leave zero
+    buf[26..34].copy_from_slice(&expire_ts.to_le_bytes());
+    buf[34..66].copy_from_slice(&token);
+    stamp_packet(&mut buf, magic, &server_ip, &relay_ip);
+    buf
+}
+
+fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Pinger state shared between HTTP handler (writes) and network thread (reads).
+struct ServerPingerState {
+    relay_addr: SocketAddr,
+    ping_key: [u8; PING_KEY_BYTES],
+    server_ip: [u8; 4],
+    server_port_be: u16,
+    relay_ip: [u8; 4],
+    relay_port_be: u16,
+    magic: [u8; 8],
 }
 
 // ── Shared axum state ─────────────────────────────────────────────────────────
 
 struct BenchState {
     server: Arc<Mutex<Server>>,
+    /// Populated by register_session in relay mode. Read by network_thread on a
+    /// timer to send periodic SERVER_PING packets to the relay.
+    pinger: Arc<Mutex<Option<ServerPingerState>>>,
 }
 
 // ── HTTP handler ──────────────────────────────────────────────────────────────
@@ -105,6 +197,31 @@ async fn register_session_handler(
         srv.register_session(body.session_id, body.session_version, key_bytes, relay_addr);
     }
 
+    // If relay-mode ping params were supplied, install pinger state so the
+    // network thread starts sending SERVER_PING. Required for the relay to
+    // whitelist this bench_server's IP:port (otherwise relay drops every
+    // forwarded ROUTE_REQUEST and CLIENT_TO_SERVER targeting us).
+    if let (Some(pk_hex), Some(magic_hex), Some(server_pub)) = (
+        body.ping_key_hex.as_deref(),
+        body.current_magic_hex.as_deref(),
+        body.server_public_address.as_deref(),
+    ) {
+        match install_pinger(
+            &state.pinger,
+            pk_hex,
+            magic_hex,
+            server_pub,
+            &body.relay_address,
+        ) {
+            Ok(()) => log::info!(
+                "register_session: pinger installed (server_pub={} relay={})",
+                server_pub,
+                body.relay_address
+            ),
+            Err(e) => log::warn!("register_session: pinger install failed: {}", e),
+        }
+    }
+
     log::info!(
         "registered session {:016x} v={} relay={}",
         body.session_id,
@@ -113,6 +230,53 @@ async fn register_session_handler(
     );
 
     (StatusCode::OK, "registered").into_response()
+}
+
+fn install_pinger(
+    slot: &Arc<Mutex<Option<ServerPingerState>>>,
+    ping_key_hex: &str,
+    magic_hex: &str,
+    server_public_address: &str,
+    relay_address: &str,
+) -> Result<()> {
+    let ping_key_vec = hex::decode(ping_key_hex)?;
+    if ping_key_vec.len() != PING_KEY_BYTES {
+        anyhow::bail!("ping_key length");
+    }
+    let mut ping_key = [0u8; PING_KEY_BYTES];
+    ping_key.copy_from_slice(&ping_key_vec);
+
+    let magic_vec = hex::decode(magic_hex)?;
+    if magic_vec.len() != 8 {
+        anyhow::bail!("magic length");
+    }
+    let mut magic = [0u8; 8];
+    magic.copy_from_slice(&magic_vec);
+
+    let server_sa: SocketAddr = server_public_address.parse()?;
+    let server_ip = match server_sa.ip() {
+        std::net::IpAddr::V4(v4) => v4.octets(),
+        _ => anyhow::bail!("server_public_address must be IPv4"),
+    };
+    let server_port_be = server_sa.port().to_be();
+
+    let relay_sa: SocketAddr = relay_address.parse()?;
+    let relay_ip = match relay_sa.ip() {
+        std::net::IpAddr::V4(v4) => v4.octets(),
+        _ => anyhow::bail!("relay_address must be IPv4"),
+    };
+    let relay_port_be = relay_sa.port().to_be();
+
+    *slot.lock().unwrap() = Some(ServerPingerState {
+        relay_addr: relay_sa,
+        ping_key,
+        server_ip,
+        server_port_be,
+        relay_ip,
+        relay_port_be,
+        magic,
+    });
+    Ok(())
 }
 
 // ── Network thread ────────────────────────────────────────────────────────────
@@ -124,6 +288,7 @@ fn network_thread(
     pkt_sent: Arc<AtomicU64>,
     udp_port: u16,
     shutdown: Arc<AtomicBool>,
+    pinger: Arc<Mutex<Option<ServerPingerState>>>,
 ) {
     let sock = match UdpSocket::bind(format!("0.0.0.0:{}", udp_port)) {
         Ok(s) => s,
@@ -138,10 +303,39 @@ fn network_thread(
     log::info!("bench_server: UDP listening on :{}", udp_port);
 
     let mut recv_buf = [0u8; MAX_PACKET_BYTES];
+    let mut last_ping = Instant::now() - Duration::from_secs(60);
+    let ping_interval = Duration::from_secs(3);
 
     while !shutdown.load(Ordering::Relaxed) {
         // 1. Drain pending commands (RegisterSession, Open, etc.)
         inner.pump_commands();
+
+        // 1b. Periodic SERVER_PING refresh. Required so the relay's whitelist
+        //     map keeps an entry for our IP:port. Without it the relay drops
+        //     every forwarded ROUTE_REQUEST / CLIENT_TO_SERVER destined here.
+        //     The ping_key snapshot may go stale (rotates every 10s on backend)
+        //     but that just causes ping verification to fail silently after a
+        //     while - the bench_client refreshes the session well before then.
+        if last_ping.elapsed() >= ping_interval {
+            if let Some(p) = pinger.lock().unwrap().as_ref() {
+                let expire_ts = unix_now_secs() + 120;
+                let pkt = build_server_ping_packet(
+                    &p.ping_key,
+                    expire_ts,
+                    p.server_ip,
+                    p.server_port_be,
+                    p.relay_ip,
+                    p.relay_port_be,
+                    &p.magic,
+                );
+                if let Err(e) = sock.send_to(&pkt, p.relay_addr) {
+                    log::warn!("bench_server: SERVER_PING send failed: {}", e);
+                } else {
+                    log::debug!("bench_server: sent SERVER_PING to {}", p.relay_addr);
+                }
+            }
+            last_ping = Instant::now();
+        }
 
         // 2. Receive a packet.
         let (n, from) = match sock.recv_from(&mut recv_buf) {
@@ -230,6 +424,7 @@ async fn main() -> Result<()> {
     let pkt_recv = Arc::new(AtomicU64::new(0));
     let pkt_sent = Arc::new(AtomicU64::new(0));
     let shutdown = Arc::new(AtomicBool::new(false));
+    let pinger: Arc<Mutex<Option<ServerPingerState>>> = Arc::new(Mutex::new(None));
 
     // Spawn network thread.
     {
@@ -237,6 +432,7 @@ async fn main() -> Result<()> {
         let recv_net = Arc::clone(&pkt_recv);
         let sent_net = Arc::clone(&pkt_sent);
         let shutdown_net = Arc::clone(&shutdown);
+        let pinger_net = Arc::clone(&pinger);
         std::thread::Builder::new()
             .name("bench_server_net".into())
             .spawn(move || {
@@ -247,6 +443,7 @@ async fn main() -> Result<()> {
                     sent_net,
                     udp_port,
                     shutdown_net,
+                    pinger_net,
                 )
             })
             .expect("failed to spawn network thread");
@@ -282,6 +479,7 @@ async fn main() -> Result<()> {
     // Start axum server.
     let state = Arc::new(BenchState {
         server: Arc::clone(&server_arc),
+        pinger: Arc::clone(&pinger),
     });
     let app = Router::new()
         .route("/register_session", post(register_session_handler))

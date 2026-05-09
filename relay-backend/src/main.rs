@@ -155,8 +155,13 @@ async fn main() -> anyhow::Result<()> {
 
     let public_server =
         axum::serve(public_listener, public_router).with_graceful_shutdown(shutdown_signal());
-    let admin_server =
-        axum::serve(admin_listener, admin_router).with_graceful_shutdown(shutdown_signal());
+    // ConnectInfo<SocketAddr> is needed by /bench_token to detect the caller's
+    // post-NAT public IPv4 (used as CLIENT_PING source_address).
+    let admin_server = axum::serve(
+        admin_listener,
+        admin_router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal());
 
     let (public_result, admin_result) = tokio::join!(public_server, admin_server);
     public_result?;

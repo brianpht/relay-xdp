@@ -1,11 +1,11 @@
 //! HTTP handlers for the relay backend.
 //! Port of `cmd/relay_backend/relay_backend.go` handler functions.
 
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     routing::{get, post},
@@ -413,6 +413,7 @@ struct BenchTokenQuery {
 /// encryption is delegated to bench_client (uses relay-sdk::tokens::encrypt_route_token).
 async fn bench_token_handler(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     Query(q): Query<BenchTokenQuery>,
 ) -> Response {
     // Generate session_id from random bytes.
@@ -441,6 +442,17 @@ async fn bench_token_handler(
 
     let relay_address = q.relay_addr.unwrap_or_default();
 
+    // Extract caller's public IPv4 (post-NAT) for CLIENT_PING source_address.
+    // Bench client needs this to compute SHA-256(PingTokenData) that the relay
+    // can verify against the saddr it observes.
+    let client_public_address = match peer_addr.ip() {
+        std::net::IpAddr::V4(v4) => v4.to_string(),
+        std::net::IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => v4.to_string(),
+            None => v6.to_string(),
+        },
+    };
+
     let body = serde_json::json!({
         "session_id":              session_id,
         "session_version":         1u8,
@@ -448,6 +460,8 @@ async fn bench_token_handler(
         "relay_backend_public_key": relay_backend_public_key_hex,
         "relay_address":           relay_address,
         "current_magic":           current_magic_hex,
+        "ping_key":                hex_encode(&magic.ping_key),
+        "client_public_address":   client_public_address,
     });
 
     match serde_json::to_string(&body) {

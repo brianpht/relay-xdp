@@ -31,7 +31,7 @@
 //   BENCH_MODE         (default: direct | relay)
 
 use std::io::{Read, Write};
-use std::net::{TcpStream, UdpSocket};
+use std::net::{Ipv4Addr, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -45,11 +45,18 @@ use relay_sdk::constants::{
     ENCRYPTED_ROUTE_TOKEN_BYTES, MAX_PACKET_BYTES, PACKET_TYPE_ROUTE_RESPONSE,
     SESSION_PRIVATE_KEY_BYTES, UPDATE_TYPE_ROUTE,
 };
-use relay_sdk::crypto::XCHACHA_KEY_BYTES;
+use relay_sdk::crypto::{hash_sha256, XCHACHA_KEY_BYTES};
 use relay_sdk::packets::{RouteResponsePacket, ROUTE_RESPONSE_BYTES};
-use relay_sdk::route::{write_header, HEADER_BYTES};
+use relay_sdk::route::{stamp_packet, write_header, HEADER_BYTES};
 use relay_sdk::tokens::encrypt_route_token;
 use relay_xdp_common::RouteToken;
+
+// Wire-format constants for CLIENT_PING / SERVER_PING. Matches the eBPF
+// data-plane parsers in relay-xdp-ebpf::handle_client_ping / handle_server_ping.
+const RELAY_CLIENT_PING_PACKET: u8 = 9;
+const CLIENT_PING_BYTES: usize = 74;
+const PING_KEY_BYTES: usize = 32;
+const PING_TOKEN_BYTES: usize = 32;
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -198,6 +205,12 @@ struct BenchTokenResponse {
     relay_backend_public_key: String,
     relay_address: String,
     current_magic: String,
+    /// Hex-encoded 32B ping_key (rotates every 10s on the backend).
+    /// Required to compute SHA-256 token for CLIENT_PING / SERVER_PING.
+    ping_key: String,
+    /// Caller's post-NAT public IPv4 (detected by backend via ConnectInfo).
+    /// Used as PingTokenData.source_address in CLIENT_PING.
+    client_public_address: String,
 }
 
 fn fetch_bench_token(admin_url: &str, relay_addr: &str) -> Result<BenchTokenResponse> {
@@ -348,6 +361,35 @@ fn setup_direct_route(
 
 // ── Relay-mode setup: build RouteToken + push route_update command ────────────
 
+/// Pinger state passed to network_thread. When `Some`, the network thread
+/// rebuilds + sends a CLIENT_PING every `interval` seconds using the bound
+/// UDP socket. Required so the relay's whitelist_map keeps an entry for the
+/// bench_client IP:port (otherwise eBPF drops every non-ping packet from us).
+struct PingerState {
+    relay_addr: std::net::SocketAddr,
+    ping_key: [u8; PING_KEY_BYTES],
+    session_id: u64,
+    client_ip: [u8; 4],
+    relay_ip: [u8; 4],
+    relay_port_be: u16,
+    magic: [u8; 8],
+    interval: Duration,
+}
+
+impl PingerState {
+    fn build_packet(&self, expire_ts: u64) -> [u8; CLIENT_PING_BYTES] {
+        build_client_ping_packet(
+            &self.ping_key,
+            self.session_id,
+            expire_ts,
+            self.client_ip,
+            self.relay_ip,
+            self.relay_port_be,
+            &self.magic,
+        )
+    }
+}
+
 struct RelaySetup {
     session_id: u64,
     session_version: u8,
@@ -424,11 +466,17 @@ fn setup_relay_route(
     // session_map entry.
     let enc_token = encrypt_route_token(&route_token, &rs.relay_backend_pk);
 
-    // Tokens vec: [relay token (111B)] + [dummy server token (111B)].
-    // num_tokens = 2 is required by ClientInner (begin_next_route rejects < 2).
-    let mut tokens = Vec::with_capacity(ENCRYPTED_ROUTE_TOKEN_BYTES * 2);
-    tokens.extend_from_slice(&enc_token);
-    tokens.extend_from_slice(&[0u8; ENCRYPTED_ROUTE_TOKEN_BYTES]);
+    // Tokens vec: [client_view (Token[0]) | wire_token (Token[1]) | dummy (Token[2])].
+    //   Token[0] is read locally by RouteManager.begin_next_route to extract
+    //              session_id, session_private_key, next_address (never on wire).
+    //   Token[1..num_tokens] is what goes on wire. SDK slices [111..num_tokens*111].
+    //   The relay strips the first wire token (Token[1]) and forwards the rest
+    //   to next_hop. With num_tokens=3 the wire payload = 2*111 = 222B which
+    //   matches the relay's ROUTE_REQUEST_PACKET_WRONG_SIZE check (18 + 2*111).
+    let mut tokens = Vec::with_capacity(ENCRYPTED_ROUTE_TOKEN_BYTES * 3);
+    tokens.extend_from_slice(&enc_token); // [0] - client view
+    tokens.extend_from_slice(&enc_token); // [1] - relay-decryptable token (on wire)
+    tokens.extend_from_slice(&[0u8; ENCRYPTED_ROUTE_TOKEN_BYTES]); // [2] - terminator
 
     // client_secret_key = relay_backend_pk so RouteManager.begin_next_route can
     // decrypt Token[0] to read session_id, session_private_key and next_address.
@@ -437,7 +485,7 @@ fn setup_relay_route(
 
     // Deliver route update -> RouteManager enters pending state and pre-builds
     // the ROUTE_REQUEST packet (sent on first Tick in the network thread).
-    client.route_update(UPDATE_TYPE_ROUTE, 2, tokens, rs.magic, client_ext);
+    client.route_update(UPDATE_TYPE_ROUTE, 3, tokens, rs.magic, client_ext);
     inner.pump_commands();
 
     log::info!(
@@ -465,6 +513,7 @@ fn network_thread(
     client_udp: String,
     shutdown: Arc<AtomicBool>,
     route_active: Arc<AtomicBool>,
+    pinger: Option<PingerState>,
 ) {
     let sock = match UdpSocket::bind(&client_udp) {
         Ok(s) => s,
@@ -478,8 +527,25 @@ fn network_thread(
 
     log::info!("bench_client: UDP listening on {}", client_udp);
 
+    // Send a burst of CLIENT_PINGs at startup so the relay populates the
+    // whitelist before the SDK begins firing ROUTE_REQUEST. Without this the
+    // relay drops every non-ping packet from this socket and ROUTE_RESPONSE
+    // never arrives.
+    if let Some(p) = pinger.as_ref() {
+        for i in 0..3 {
+            let expire_ts = unix_now_secs() + 120;
+            let pkt = p.build_packet(expire_ts);
+            match sock.send_to(&pkt, p.relay_addr) {
+                Ok(_) => log::info!("bench_client: sent initial CLIENT_PING #{} to {}", i + 1, p.relay_addr),
+                Err(e) => log::warn!("bench_client: initial CLIENT_PING send failed: {}", e),
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     let mut recv_buf = [0u8; MAX_PACKET_BYTES];
     let mut last_tick = Instant::now();
+    let mut last_ping = Instant::now();
 
     while !shutdown.load(Ordering::Relaxed) {
         // 1. Process queued commands (SendPacket, etc.) -> emit SendRaw notifies.
@@ -540,6 +606,22 @@ fn network_thread(
             client_arc.lock().unwrap().tick(dt);
             last_tick = now;
         }
+
+        // 6. Periodic CLIENT_PING refresh. WHITELIST_TIMEOUT is 1000s but the
+        //    backend's ping_key rotates every 10s, so we resend on a short
+        //    interval to keep the relay's whitelist alive even if our ping_key
+        //    snapshot is stale (in which case verification fails - acceptable
+        //    once the initial ping has succeeded).
+        if let Some(p) = pinger.as_ref() {
+            if now.duration_since(last_ping) >= p.interval {
+                let expire_ts = unix_now_secs() + 120;
+                let pkt = p.build_packet(expire_ts);
+                if let Err(e) = sock.send_to(&pkt, p.relay_addr) {
+                    log::warn!("bench_client: periodic CLIENT_PING send failed: {}", e);
+                }
+                last_ping = now;
+            }
+        }
     }
 
     log::info!("bench_client: network thread exiting");
@@ -582,21 +664,103 @@ fn print_stats(
     rtt_samples.clear();
 }
 
+// ── CLIENT_PING construction (74 bytes) ───────────────────────────────────────
+fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+// Wire layout (matches relay-xdp-ebpf::handle_client_ping):
+//   [0]      packet type = 9 (RELAY_CLIENT_PING_PACKET)
+//   [1..18]  pittle/chonkle DDoS filter bytes (filled by stamp_packet)
+//   [18..26] echo (8B, arbitrary)
+//   [26..34] session_id (8B little-endian)
+//   [34..42] expire_timestamp (8B little-endian)
+//   [42..74] SHA-256 token (32B) computed over PingTokenData
+//
+// PingTokenData (52B, repr(C, packed)) fed to SHA-256:
+//   [0..32]  ping_key
+//   [32..40] expire_timestamp (LE u64; comment in common says "native, not htonl")
+//   [40..44] source_address (network byte order = client public IP octets)
+//   [44..48] dest_address   (relay public IP octets)
+//   [48..50] source_port    (BE u16; CLIENT_PING uses 0 - NAT workaround)
+//   [50..52] dest_port      (BE u16; UDP destination port = relay port)
+fn build_ping_token(
+    ping_key: &[u8; PING_KEY_BYTES],
+    expire_ts: u64,
+    src_ip: [u8; 4],
+    dst_ip: [u8; 4],
+    src_port_be: u16, // network byte order; 0 for CLIENT_PING
+    dst_port_be: u16, // network byte order
+) -> [u8; PING_TOKEN_BYTES] {
+    let mut td = [0u8; 52];
+    td[0..32].copy_from_slice(ping_key);
+    td[32..40].copy_from_slice(&expire_ts.to_le_bytes());
+    td[40..44].copy_from_slice(&src_ip);
+    td[44..48].copy_from_slice(&dst_ip);
+    td[48..50].copy_from_slice(&src_port_be.to_le_bytes());
+    td[50..52].copy_from_slice(&dst_port_be.to_le_bytes());
+    hash_sha256(&td)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_client_ping_packet(
+    ping_key: &[u8; PING_KEY_BYTES],
+    session_id: u64,
+    expire_ts: u64,
+    client_ip: [u8; 4],
+    relay_ip: [u8; 4],
+    relay_port_be: u16,
+    magic: &[u8; 8],
+) -> [u8; CLIENT_PING_BYTES] {
+    // Note: source_port = 0 (NAT workaround in eBPF).
+    // dest_port = relay UDP destination port in network byte order.
+    let token = build_ping_token(
+        ping_key, expire_ts, client_ip, relay_ip, 0, relay_port_be,
+    );
+
+    let mut buf = [0u8; CLIENT_PING_BYTES];
+    buf[0] = RELAY_CLIENT_PING_PACKET;
+    // bytes [1..18] filled by stamp_packet below
+    // bytes [18..26] echo - leave zero
+    buf[26..34].copy_from_slice(&session_id.to_le_bytes());
+    buf[34..42].copy_from_slice(&expire_ts.to_le_bytes());
+    buf[42..74].copy_from_slice(&token);
+
+    stamp_packet(&mut buf, magic, &client_ip, &relay_ip);
+    buf
+}
+
 // ── POST /register_session to bench_server ────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn register_session(
     bench_server_http: &str,
     session_id: u64,
     session_version: u8,
     session_private_key: &[u8; SESSION_PRIVATE_KEY_BYTES],
     relay_address: &str,
+    // The following fields are populated only in relay mode; bench_server uses
+    // them to send periodic SERVER_PING packets so the relay's whitelist_map
+    // contains the bench_server's IP:port (required for ROUTE_REQUEST forwarding
+    // and CLIENT_TO_SERVER redirection).
+    ping_key_hex: Option<&str>,
+    current_magic_hex: Option<&str>,
+    server_public_address: Option<&str>, // "IP:PORT" - server's externally visible UDP addr
 ) -> Result<()> {
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "session_id":              session_id,
         "session_version":         session_version,
         "session_private_key_hex": hex::encode(session_private_key),
         "relay_address":           relay_address,
     });
+    if let (Some(pk), Some(mg), Some(sa)) = (ping_key_hex, current_magic_hex, server_public_address) {
+        body["ping_key_hex"] = serde_json::Value::String(pk.to_string());
+        body["current_magic_hex"] = serde_json::Value::String(mg.to_string());
+        body["server_public_address"] = serde_json::Value::String(sa.to_string());
+    }
     let body_str = serde_json::to_string(&body)?;
     let status = http_post_json(bench_server_http, "/register_session", &body_str)?;
     if status != 200 {
@@ -634,6 +798,11 @@ async fn main() -> Result<()> {
     // In relay mode main waits on it with a 15 s timeout.
     let route_active = Arc::new(AtomicBool::new(false));
 
+    // Pinger state - only set in relay mode. The network_thread sends
+    // CLIENT_PING packets at a steady cadence so the relay's whitelist_map
+    // accepts our IP:port for ROUTE_REQUEST and CLIENT_TO_SERVER traffic.
+    let mut pinger: Option<PingerState> = None;
+
     match &cfg.mode {
         BenchMode::Direct => {
             // Generate session materials locally (no relay-backend needed).
@@ -668,6 +837,9 @@ async fn main() -> Result<()> {
                 session_version,
                 &session_private_key,
                 &cfg.bench_client_udp,
+                None,
+                None,
+                None,
             )
             .context("register_session with bench_server")?;
 
@@ -717,6 +889,50 @@ async fn main() -> Result<()> {
                 .try_into()
                 .map_err(|_| anyhow::anyhow!("current_magic: wrong length"))?;
 
+            let ping_key: [u8; PING_KEY_BYTES] = hex::decode(&tok.ping_key)
+                .context("decode ping_key hex")?
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("ping_key: wrong length"))?;
+
+            // Parse client public IPv4 (returned by backend via ConnectInfo).
+            // Used as PingTokenData.source_address - must match the saddr the
+            // relay sees post-NAT, otherwise SHA-256 verification fails.
+            let client_pub_octets: [u8; 4] = match tok.client_public_address.parse::<Ipv4Addr>() {
+                Ok(v4) => v4.octets(),
+                Err(e) => bail!(
+                    "invalid client_public_address '{}': {}",
+                    tok.client_public_address,
+                    e
+                ),
+            };
+
+            // Parse RELAY_ADDR for relay IP / port octets.
+            let relay_sa_for_ping: std::net::SocketAddr = relay_addr
+                .parse()
+                .with_context(|| format!("parse relay addr: {}", relay_addr))?;
+            let relay_octets = match relay_sa_for_ping.ip() {
+                std::net::IpAddr::V4(v4) => v4.octets(),
+                _ => bail!("bench only supports IPv4 relay addresses"),
+            };
+            let relay_port_be = relay_sa_for_ping.port().to_be();
+
+            log::info!(
+                "bench_client: client_public_address={} relay_addr={}",
+                tok.client_public_address,
+                relay_addr
+            );
+
+            pinger = Some(PingerState {
+                relay_addr: relay_sa_for_ping,
+                ping_key,
+                session_id: tok.session_id,
+                client_ip: client_pub_octets,
+                relay_ip: relay_octets,
+                relay_port_be,
+                magic,
+                interval: Duration::from_secs(3),
+            });
+
             let rs = RelaySetup {
                 session_id: tok.session_id,
                 session_version: tok.session_version,
@@ -737,15 +953,19 @@ async fn main() -> Result<()> {
                 &cfg.bench_client_udp,
             )?;
 
-            // 4. Register session with bench_server.
-            //    relay_address = RELAY_ADDR so bench_server sends SERVER_TO_CLIENT
-            //    to the relay, which forwards it back to the client.
+            // 4. Register session with bench_server. Pass ping_key + magic +
+            //    bench_server's public address so bench_server sends SERVER_PING
+            //    to keep its IP:port whitelisted on the relay (otherwise relay
+            //    drops ROUTE_REQUEST when forwarding to next_hop).
             register_session(
                 &cfg.bench_server_http,
                 tok.session_id,
                 tok.session_version,
                 &session_private_key,
                 relay_addr,
+                Some(&tok.ping_key),
+                Some(&tok.current_magic),
+                Some(&cfg.bench_server_udp),
             )
             .context("register_session with bench_server")?;
 
@@ -775,6 +995,7 @@ async fn main() -> Result<()> {
         let shutdown_net = Arc::clone(&shutdown);
         let route_active_net = Arc::clone(&route_active);
         let client_udp = cfg.bench_client_udp.clone();
+        let pinger_net = pinger.take();
         std::thread::Builder::new()
             .name("bench_client_net".into())
             .spawn(move || {
@@ -787,6 +1008,7 @@ async fn main() -> Result<()> {
                     client_udp,
                     shutdown_net,
                     route_active_net,
+                    pinger_net,
                 )
             })
             .expect("failed to spawn network thread");
