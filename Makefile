@@ -1,6 +1,7 @@
 .PHONY: deploy-production deploy-staging infra-preview-production infra-preview-staging preflight test-infra \
         e2e-deployed e2e-teardown venv update-admin-cidr \
-        bench-local bench-relay
+        bench-local bench-relay \
+        bench-deploy
 
 # Process substitution <(echo ...) requires bash.
 SHELL := /bin/bash
@@ -261,5 +262,19 @@ bench-relay:
 	RELAY_ADDR=$(RELAY_ADDR) \
 	BACKEND_ADMIN=$(BACKEND_ADMIN) \
 	BENCH_SERVER_HTTP=$(BENCH_SERVER_HTTP) \
+	BENCH_SERVER_UDP=$(BENCH_SERVER_UDP) \
 	./target/release/bench_client
 
+# bench-deploy: build bench_server + deploy to bench node via Ansible.
+#   Requires:
+#     - bench node provisioned: cd infra && pulumi up --stack staging
+#     - bench_servers group in inventory (auto-populated by inventory_gen.py)
+#   Override stack or inventory at the command line:
+#     make bench-deploy STACK=staging
+#     make bench-deploy STACK=staging INVENTORY=ansible/inventory/staging.yml
+STACK     ?= staging
+INVENTORY ?= ansible/inventory/$(STACK).yml
+
+bench-deploy:
+	cargo build --release -p relay-bench
+	ansible-playbook -i $(INVENTORY) ansible/playbooks/bench-deploy.yml

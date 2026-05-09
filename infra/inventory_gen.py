@@ -44,6 +44,7 @@ HEADER = """\
 #   {stack}         - all {stack} hosts (triggers playbooks/group_vars/{stack}/ auto-load)
 #   relay_servers   - hosts running relay-xdp + kernel module
 #   backend_servers - hosts running relay-backend + Redis
+#   bench_servers   - hosts running bench_server (game server simulator, staging only)
 """
 
 
@@ -71,9 +72,15 @@ def build_inventory(outputs: dict, stack: str) -> dict:
                   backend-staging-1:
                     ansible_host: <public_ip>
                     ansible_user: ubuntu
+              bench_servers:              # omitted when bench not provisioned
+                hosts:
+                  bench-staging-1:
+                    ansible_host: <public_ip>
+                    ansible_user: ubuntu
     """
     relay_nodes: dict = outputs.get("relay_nodes", {})
     backend: dict = outputs.get("backend", {})
+    bench: dict = outputs.get("bench") or {}
 
     if not relay_nodes:
         print("ERROR: no relay_nodes in stack outputs. Has `pulumi up` been run?",
@@ -103,6 +110,22 @@ def build_inventory(outputs: dict, stack: str) -> dict:
         }
     }
 
+    # bench_servers group - only present when bench node is provisioned.
+    stack_children: dict = {
+        "relay_servers":   {"hosts": relay_hosts},
+        "backend_servers": {"hosts": backend_hosts},
+    }
+    if bench and bench.get("public_ip"):
+        bench_name: str = bench.get("name", f"bench-{stack}-1")
+        stack_children["bench_servers"] = {
+            "hosts": {
+                bench_name: {
+                    "ansible_host": bench["public_ip"],
+                    "ansible_user": "ubuntu",
+                }
+            }
+        }
+
     return {
         "all": {
             "vars": {
@@ -112,14 +135,7 @@ def build_inventory(outputs: dict, stack: str) -> dict:
                 # Environment group - causes Ansible to auto-load
                 # playbooks/group_vars/<stack>/vars.yml and vault.yml
                 stack: {
-                    "children": {
-                        "relay_servers": {
-                            "hosts": relay_hosts,
-                        },
-                        "backend_servers": {
-                            "hosts": backend_hosts,
-                        },
-                    },
+                    "children": stack_children,
                 },
             },
         }

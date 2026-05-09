@@ -197,9 +197,9 @@ make bench-relay \
 4. ~~**High:** Update `infra/__main__.py` - conditional `BenchNode` provision + `bench` export~~ - done 2026-05-09
 5. ~~**High:** Update `infra/Pulumi.staging.yaml` - add `bench_enabled: "true"` + `bench_instance_type: t3.micro`~~ - done 2026-05-09
 6. ~~**High:** Create `ansible/playbooks/bench-deploy.yml`~~ - done 2026-05-09
-7. **Medium:** Update `infra/stack_outputs.py` - add `bench_host` to `StackEnv` + `format_env`
-8. **Medium:** Update `infra/inventory_gen.py` - auto-populate `bench_servers` group from stack output
-9. **Medium:** Update `Makefile` - add `bench-deploy` target (calls ansible bench-deploy.yml)
+7. ~~**Medium:** Update `infra/stack_outputs.py` - add `bench_host` to `StackEnv` + `format_env`~~ - done 2026-05-09
+8. ~~**Medium:** Update `infra/inventory_gen.py` - auto-populate `bench_servers` group from stack output~~ - done 2026-05-09
+9. ~~**Medium:** Update `Makefile` - add `bench-deploy` target (calls ansible bench-deploy.yml)~~ - done 2026-05-09
 10. **Low:** Add `test_stack_outputs_bench_host_*` tests to `infra/test_stack_outputs.py`
 
 ## Files Changed
@@ -212,8 +212,8 @@ make bench-relay \
 | M | `infra/config.py` (added `bench_enabled`, `bench_instance_type`) |
 | M | `infra/__main__.py` (added `BenchNode` + `bench` export) |
 | M | `infra/Pulumi.staging.yaml` (added `bench_enabled`, `bench_instance_type`) |
-| M (pending) | `infra/stack_outputs.py` (add `bench_host` to `StackEnv` + `format_env`) |
-| M (pending) | `infra/inventory_gen.py` (auto-populate `bench_servers` group) |
-| M (pending) | `ansible/inventory/staging.yml` (add `bench_servers` group) |
-| M (pending) | `Makefile` (add `bench-deploy` target) |
+| M | `infra/stack_outputs.py` (added `bench_host` to `StackEnv`, `parse_e2e_env`, `format_env`, `format_json`) |
+| M | `infra/inventory_gen.py` (auto-populate `bench_servers` group when bench provisioned) |
+| M | `ansible/inventory/staging.yml` (add `bench_servers` group) |
+| M | `Makefile` (added `bench-deploy` target + `BENCH_SERVER_UDP` to `bench-relay`) |
 

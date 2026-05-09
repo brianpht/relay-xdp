@@ -57,6 +57,8 @@ class StackEnv:
     admin_backend_port: int
     relay_public_ips: List[str]
     relay_ids: List[str]
+    # Empty string when bench node is not provisioned (bench_enabled: false).
+    bench_host: str = ""
 
 
 def get_stack_outputs(stack: str) -> dict:
@@ -141,12 +143,17 @@ def parse_e2e_env(outputs: dict) -> StackEnv:
         )
         sys.exit(1)
 
+    # bench host - optional; empty string when bench_enabled is false.
+    bench: dict = outputs.get("bench") or {}
+    bench_host: str = bench.get("public_ip", "") if bench else ""
+
     return StackEnv(
         backend_host=backend["public_ip"],
         backend_port=BACKEND_PUBLIC_PORT,
         admin_backend_port=BACKEND_ADMIN_PORT,
         relay_public_ips=[relay_nodes[r]["public_ip"] for r in sorted_ids],
         relay_ids=sorted_ids,
+        bench_host=bench_host,
     )
 
 
@@ -164,6 +171,8 @@ def format_env(env: StackEnv) -> str:
         f'export RELAY_PUBLIC_IPS="{" ".join(env.relay_public_ips)}"',
         f'export RELAY_IDS="{" ".join(env.relay_ids)}"',
     ]
+    if env.bench_host:
+        lines.append(f'export BENCH_HOST={env.bench_host}')
     return "\n".join(lines)
 
 
@@ -176,6 +185,7 @@ def format_json(env: StackEnv) -> str:
             "admin_backend_port": env.admin_backend_port,
             "relay_public_ips": env.relay_public_ips,
             "relay_ids": env.relay_ids,
+            "bench_host": env.bench_host,
         },
         indent=2,
     )
