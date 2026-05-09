@@ -10,6 +10,6 @@ config:
   relay-xdp-infra:bench_enabled: "true"
   relay-xdp-infra:bench_instance_type: t3.micro
   relay-xdp-infra:key_pub_path: ~/.ssh/personal-key.pub
-  relay-xdp-infra:admin_cidr: 115.73.211.176/32
+  relay-xdp-infra:admin_cidr: 42.116.72.49/32
   aws:profile: relay-xdp-infra
 encryptionsalt: v1:02WuvBBhXpM=:v1:gB0yo+1+F+YeUFAZ:cP3y1+0TNqdtOpE8YPkykN8NevYyfA==
