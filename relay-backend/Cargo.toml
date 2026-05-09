@@ -30,6 +30,14 @@ base64 = "0.22"
 crypto_box = "0.9"
 getrandom = "0.4.2"
 
+# Bench mode: derive per-relay symmetric key + encrypt RouteToken for /bench_token
+# (matches relay-xdp::config::derive_secret_key + relay-sdk::tokens::encrypt_route_token).
+chacha20poly1305 = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+blake2 = "0.10"
+rand = "0.8"
+relay-xdp-common = { path = "../relay-xdp-common", features = ["user"] }
+
 # Utilities
 uuid = { version = "1", features = ["v4"] }
 env_logger = "0.11"
@@ -40,7 +48,6 @@ lru = "0.16"  # P1-01: per-relay nonce LRU for /relay_update replay protection; 
 
 [dev-dependencies]
 relay-xdp = { path = "../relay-xdp" }
-relay-xdp-common = { path = "../relay-xdp-common" }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 crypto_box = "0.9"

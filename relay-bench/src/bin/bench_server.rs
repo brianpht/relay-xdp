@@ -27,15 +27,20 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::po
 use serde::Deserialize;
 
 use relay_sdk::address::Address;
-use relay_sdk::constants::{MAX_PACKET_BYTES, SESSION_PRIVATE_KEY_BYTES};
+use relay_sdk::constants::{
+    MAX_PACKET_BYTES, PACKET_TYPE_ROUTE_RESPONSE, SESSION_PRIVATE_KEY_BYTES,
+};
 use relay_sdk::crypto::hash_sha256;
-use relay_sdk::route::stamp_packet;
+use relay_sdk::route::{stamp_packet, write_header, HEADER_BYTES};
 use relay_sdk::server::{Server, ServerInner};
 
 // ── Wire-format constants ─────────────────────────────────────────────────────
 
 const RELAY_SERVER_PING_PACKET: u8 = 13;
+const RELAY_ROUTE_REQUEST_PACKET: u8 = 1;
 const SERVER_PING_BYTES: usize = 66;
+/// ROUTE_RESPONSE: [type 1B][pittle 2B][chonkle 15B][RELAY_HEADER 25B] = 43B
+const ROUTE_RESPONSE_BYTES: usize = 18 + HEADER_BYTES;
 const PING_KEY_BYTES: usize = 32;
 
 // ── HTTP request body ─────────────────────────────────────────────────────────
@@ -133,6 +138,27 @@ struct ServerPingerState {
     magic: [u8; 8],
 }
 
+/// State required to synthesize a ROUTE_RESPONSE in reply to a relay-forwarded
+/// ROUTE_REQUEST. Populated by /register_session in relay mode.
+///
+/// In the deployed bench topology nothing else generates ROUTE_RESPONSE: the
+/// eBPF data plane only forwards ROUTE_REQUEST -> next_hop and forwards
+/// ROUTE_RESPONSE in the reverse direction (it does not synthesize one). The
+/// smoke test fakes ROUTE_RESPONSE in-process; here bench_server takes that
+/// role so the relay's session_map entry can transition to "confirmed" and
+/// CLIENT_TO_SERVER traffic starts flowing.
+struct RouteResponderState {
+    session_id: u64,
+    session_version: u8,
+    session_private_key: [u8; SESSION_PRIVATE_KEY_BYTES],
+    server_ip: [u8; 4],
+    magic: [u8; 8],
+    /// Monotonic packet sequence per ROUTE_RESPONSE sent. The relay rejects
+    /// any sequence <= session.special_server_to_client_sequence, so we
+    /// strictly increment on every send. Starts at 1.
+    next_sequence: u64,
+}
+
 // ── Shared axum state ─────────────────────────────────────────────────────────
 
 struct BenchState {
@@ -140,6 +166,10 @@ struct BenchState {
     /// Populated by register_session in relay mode. Read by network_thread on a
     /// timer to send periodic SERVER_PING packets to the relay.
     pinger: Arc<Mutex<Option<ServerPingerState>>>,
+    /// Populated by register_session in relay mode. Read by network_thread on
+    /// every inbound ROUTE_REQUEST packet to synthesize a ROUTE_RESPONSE back
+    /// to the relay (so the relay's session_map entry confirms).
+    responder: Arc<Mutex<Option<RouteResponderState>>>,
 }
 
 // ── HTTP handler ──────────────────────────────────────────────────────────────
@@ -220,6 +250,23 @@ async fn register_session_handler(
             ),
             Err(e) => log::warn!("register_session: pinger install failed: {}", e),
         }
+
+        // Also install the responder state so the network thread can synthesize
+        // ROUTE_RESPONSE packets in reply to relay-forwarded ROUTE_REQUEST.
+        match install_responder(
+            &state.responder,
+            body.session_id,
+            body.session_version,
+            &key_bytes,
+            magic_hex,
+            server_pub,
+        ) {
+            Ok(()) => log::info!(
+                "register_session: responder installed (session={:016x})",
+                body.session_id
+            ),
+            Err(e) => log::warn!("register_session: responder install failed: {}", e),
+        }
     }
 
     log::info!(
@@ -279,8 +326,81 @@ fn install_pinger(
     Ok(())
 }
 
+fn install_responder(
+    slot: &Arc<Mutex<Option<RouteResponderState>>>,
+    session_id: u64,
+    session_version: u8,
+    session_private_key: &[u8; SESSION_PRIVATE_KEY_BYTES],
+    magic_hex: &str,
+    server_public_address: &str,
+) -> Result<()> {
+    let magic_vec = hex::decode(magic_hex)?;
+    if magic_vec.len() != 8 {
+        anyhow::bail!("magic length");
+    }
+    let mut magic = [0u8; 8];
+    magic.copy_from_slice(&magic_vec);
+
+    let server_sa: SocketAddr = server_public_address.parse()?;
+    let server_ip = match server_sa.ip() {
+        std::net::IpAddr::V4(v4) => v4.octets(),
+        _ => anyhow::bail!("server_public_address must be IPv4"),
+    };
+
+    *slot.lock().unwrap() = Some(RouteResponderState {
+        session_id,
+        session_version,
+        session_private_key: *session_private_key,
+        server_ip,
+        magic,
+        next_sequence: 1,
+    });
+    Ok(())
+}
+
+/// Build a 43-byte ROUTE_RESPONSE packet (matches relay-xdp-ebpf::handle_route_response).
+///
+/// Wire layout:
+///   [0]      packet type = 2 (RELAY_ROUTE_RESPONSE_PACKET)
+///   [1..18]  pittle/chonkle (filled by stamp_packet)
+///   [18..26] packet_sequence (LE u64)
+///   [26..34] session_id      (LE u64)
+///   [34]     session_version (u8)
+///   [35..43] header MAC: SHA-256(private_key || type || seq || sid || ver)[..8]
+///
+/// `relay_ip` is the relay's IPv4 octets (destination of this UDP packet) used
+/// only for pittle/chonkle stamping.
+fn build_route_response_packet(
+    server_ip: &[u8; 4],
+    relay_ip: &[u8; 4],
+    session_private_key: &[u8; SESSION_PRIVATE_KEY_BYTES],
+    session_id: u64,
+    session_version: u8,
+    sequence: u64,
+    magic: &[u8; 8],
+) -> [u8; ROUTE_RESPONSE_BYTES] {
+    let mut buf = [0u8; ROUTE_RESPONSE_BYTES];
+    buf[0] = PACKET_TYPE_ROUTE_RESPONSE;
+
+    // RELAY_HEADER_BYTES = HEADER_BYTES = 25 starts at offset 18.
+    let mut header = [0u8; HEADER_BYTES];
+    write_header(
+        PACKET_TYPE_ROUTE_RESPONSE,
+        sequence,
+        session_id,
+        session_version,
+        session_private_key,
+        &mut header,
+    );
+    buf[18..18 + HEADER_BYTES].copy_from_slice(&header);
+
+    stamp_packet(&mut buf, magic, server_ip, relay_ip);
+    buf
+}
+
 // ── Network thread ────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn network_thread(
     mut inner: ServerInner,
     server_arc: Arc<Mutex<Server>>,
@@ -289,6 +409,7 @@ fn network_thread(
     udp_port: u16,
     shutdown: Arc<AtomicBool>,
     pinger: Arc<Mutex<Option<ServerPingerState>>>,
+    responder: Arc<Mutex<Option<RouteResponderState>>>,
 ) {
     let sock = match UdpSocket::bind(format!("0.0.0.0:{}", udp_port)) {
         Ok(s) => s,
@@ -350,6 +471,71 @@ fn network_thread(
         };
 
         // 3. Process incoming: expects CLIENT_TO_SERVER.
+        // 3a. ROUTE_REQUEST forwarded by the relay reaches us with type=1 and
+        //     one trailing encrypted token. ServerInner does not handle this
+        //     packet type, so we synthesize a ROUTE_RESPONSE locally and send
+        //     it back to the relay (the source address of the UDP datagram).
+        //     The relay then verifies the header MAC, marks the session_map
+        //     entry confirmed, and forwards the response to bench_client.
+        if n >= 1 && recv_buf[0] == RELAY_ROUTE_REQUEST_PACKET {
+            pkt_recv.fetch_add(1, Ordering::Relaxed);
+            let snapshot = responder.lock().unwrap().as_ref().map(|r| {
+                (
+                    r.session_id,
+                    r.session_version,
+                    r.session_private_key,
+                    r.server_ip,
+                    r.magic,
+                )
+            });
+            if let Some((sid, sver, spk, server_ip, magic)) = snapshot {
+                // Allocate sequence under the lock so concurrent ROUTE_REQUESTs
+                // get strictly increasing values.
+                let seq = {
+                    let mut g = responder.lock().unwrap();
+                    if let Some(r) = g.as_mut() {
+                        let s = r.next_sequence;
+                        r.next_sequence = r.next_sequence.wrapping_add(1);
+                        s
+                    } else {
+                        1
+                    }
+                };
+                let relay_ip = match from.ip() {
+                    std::net::IpAddr::V4(v4) => v4.octets(),
+                    _ => {
+                        log::warn!("bench_server: ROUTE_REQUEST from non-IPv4 source: {}", from);
+                        continue;
+                    }
+                };
+                let pkt = build_route_response_packet(
+                    &server_ip, &relay_ip, &spk, sid, sver, seq, &magic,
+                );
+                match sock.send_to(&pkt, from) {
+                    Ok(_) => {
+                        pkt_sent.fetch_add(1, Ordering::Relaxed);
+                        log::info!(
+                            "bench_server: sent ROUTE_RESPONSE seq={} to relay {}",
+                            seq,
+                            from
+                        );
+                    }
+                    Err(e) => log::warn!(
+                        "bench_server: ROUTE_RESPONSE send to {} failed: {}",
+                        from,
+                        e
+                    ),
+                }
+            } else {
+                log::warn!(
+                    "bench_server: received ROUTE_REQUEST from {} but no responder state \
+                     installed (was /register_session called with relay-mode params?)",
+                    from
+                );
+            }
+            continue;
+        }
+
         let Some((session_id, payload)) = inner.process_incoming(&recv_buf[..n]) else {
             continue;
         };
@@ -425,6 +611,7 @@ async fn main() -> Result<()> {
     let pkt_sent = Arc::new(AtomicU64::new(0));
     let shutdown = Arc::new(AtomicBool::new(false));
     let pinger: Arc<Mutex<Option<ServerPingerState>>> = Arc::new(Mutex::new(None));
+    let responder: Arc<Mutex<Option<RouteResponderState>>> = Arc::new(Mutex::new(None));
 
     // Spawn network thread.
     {
@@ -433,6 +620,7 @@ async fn main() -> Result<()> {
         let sent_net = Arc::clone(&pkt_sent);
         let shutdown_net = Arc::clone(&shutdown);
         let pinger_net = Arc::clone(&pinger);
+        let responder_net = Arc::clone(&responder);
         std::thread::Builder::new()
             .name("bench_server_net".into())
             .spawn(move || {
@@ -444,6 +632,7 @@ async fn main() -> Result<()> {
                     udp_port,
                     shutdown_net,
                     pinger_net,
+                    responder_net,
                 )
             })
             .expect("failed to spawn network thread");
@@ -480,6 +669,7 @@ async fn main() -> Result<()> {
     let state = Arc::new(BenchState {
         server: Arc::clone(&server_arc),
         pinger: Arc::clone(&pinger),
+        responder: Arc::clone(&responder),
     });
     let app = Router::new()
         .route("/register_session", post(register_session_handler))
