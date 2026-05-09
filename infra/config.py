@@ -118,6 +118,12 @@ class InfraConfig:
     # check if this is left as the REPLACE_ME placeholder.
     admin_cidr: str
 
+    # Optional bench node (game server simulator for relay-mode benchmarks).
+    # Set bench_enabled: "true" in Pulumi.<stack>.yaml to provision.
+    # Never set in production - bench node is staging/dev only.
+    bench_enabled: bool = False
+    bench_instance_type: str = "t3.micro"
+
     # Derived: preferred AZ per relay region.
     relay_azs: dict = field(init=False)
 
@@ -220,6 +226,8 @@ def load() -> InfraConfig:
     backend_instance_type: str = cfg.require("backend_instance_type")
     key_pub_path: str = cfg.get("key_pub_path") or "~/.ssh/id_ed25519.pub"
     admin_cidr: str = cfg.require("admin_cidr")
+    bench_enabled: bool = cfg.get_bool("bench_enabled") or False
+    bench_instance_type: str = cfg.get("bench_instance_type") or "t3.micro"
     _validate_admin_cidr(admin_cidr, pulumi.get_stack())
 
     return InfraConfig(
@@ -230,4 +238,6 @@ def load() -> InfraConfig:
         backend_instance_type=backend_instance_type,
         key_pub_path=key_pub_path,
         admin_cidr=admin_cidr,
+        bench_enabled=bench_enabled,
+        bench_instance_type=bench_instance_type,
     )

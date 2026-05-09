@@ -1,0 +1,97 @@
+---
+# playbooks/bench-deploy.yml
+# Deploy bench_server binary to the bench node (game server simulator).
+#
+# The bench node simulates a production game server for relay-mode benchmarks:
+#   bench_client -> relay-xdp:40000 -> bench_server:17777 -> relay-xdp -> bench_client
+#
+# Prerequisites:
+#   - bench node provisioned via `cd infra && pulumi up --stack staging`
+#   - binary built: `cargo build --release -p relay-bench`
+#   - bench_servers group present in inventory (see ansible/inventory/staging.yml)
+#
+# Usage:
+#   ansible-playbook -i inventory/staging.yml playbooks/bench-deploy.yml
+#
+# After deploy, run the benchmark from your local machine:
+#   eval $(python infra/stack_outputs.py --stack staging --format env)
+#   make bench-relay \
+#     RELAY_ADDR=$(echo $RELAY_PUBLIC_IPS | awk '{print $1}'):40000 \
+#     BACKEND_ADMIN=http://${BACKEND_HOST}:8091 \
+#     BENCH_SERVER_HTTP=${BENCH_HOST}:18080 \
+#     BENCH_SERVER_UDP=${BENCH_HOST}:17777
+
+- name: Deploy bench_server to bench node
+  hosts: bench_servers
+  gather_facts: false
+
+  vars:
+    bench_http_port: 18080
+    bench_udp_port:  17777
+    bench_bin_dir:   /usr/local/bin
+
+  tasks:
+    # -- 1. Copy binary -------------------------------------------------------
+    - name: Copy bench_server binary
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../target/release/bench_server"
+        dest: "{{ bench_bin_dir }}/bench_server"
+        mode: "0755"
+      notify: Restart bench-server
+
+    # -- 2. Install systemd unit ----------------------------------------------
+    - name: Install bench-server systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/bench-server.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=bench_server - relay-bench game server simulator
+          Documentation=https://github.com/brianpht/relay-xdp/blob/main/relay-bench/README.md
+          After=network.target
+
+          [Service]
+          ExecStart={{ bench_bin_dir }}/bench_server
+          Environment=BENCH_HTTP_PORT={{ bench_http_port }}
+          Environment=BENCH_UDP_PORT={{ bench_udp_port }}
+          Restart=on-failure
+          RestartSec=2
+          User=ubuntu
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart bench-server
+
+    # -- 3. Enable + start ----------------------------------------------------
+    - name: Enable bench-server
+      ansible.builtin.systemd:
+        name: bench-server
+        daemon_reload: true
+        enabled: true
+
+    # -- 4. Flush handlers (restart if binary or unit changed) ----------------
+    - name: Flush handlers
+      ansible.builtin.meta: flush_handlers
+
+    # -- 5. Verify active -----------------------------------------------------
+    - name: Verify bench-server is active
+      ansible.builtin.command:
+        cmd: systemctl is-active bench-server
+      register: bench_svc
+      changed_when: false
+      failed_when: bench_svc.stdout != "active"
+
+    - name: Report bench-server state
+      ansible.builtin.debug:
+        msg: >
+          [bench-deploy] {{ inventory_hostname }} PASS:
+          bench-server={{ bench_svc.stdout }}
+          HTTP=:{{ bench_http_port }} UDP=:{{ bench_udp_port }}
+
+  handlers:
+    - name: Restart bench-server
+      ansible.builtin.systemd:
+        name: bench-server
+        daemon_reload: true
+        state: restarted
+

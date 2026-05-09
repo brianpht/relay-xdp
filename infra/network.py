@@ -21,6 +21,7 @@ class NetworkResult:
     subnet: aws.ec2.Subnet
     sg_relay: aws.ec2.SecurityGroup
     sg_backend: aws.ec2.SecurityGroup
+    sg_bench: aws.ec2.SecurityGroup
 
 
 def create_regional_network(
@@ -40,6 +41,7 @@ def create_regional_network(
       - Internet Gateway + Route Table + Association
       - sg_relay:   UDP 40000 open, TCP 8080 open, TCP 22 from admin_cidr
       - sg_backend: TCP 8090 open, TCP 6379 from VPC only, TCP 22 from admin_cidr
+      - sg_bench:   TCP 18080 from admin_cidr, UDP 17777 open, TCP 22 from admin_cidr
 
     Parameters
     ----------
@@ -230,10 +232,60 @@ def create_regional_network(
         opts=opts,
     )
 
+    # ------------------------------------------------------------------
+    # Security Group: bench node (game server simulator)
+    #   - TCP 18080 from admin_cidr only (bench_client POST /register_session)
+    #   - UDP 17777 open to internet (relay-xdp forwards CLIENT_TO_SERVER here)
+    #   - TCP 22    from admin_cidr only
+    # ------------------------------------------------------------------
+    sg_bench = aws.ec2.SecurityGroup(
+        f"sg-bench-{name}",
+        name=f"bench-node-{name}",
+        vpc_id=vpc.id,
+        description="bench_server game server simulator security group",
+        ingress=[
+            aws.ec2.SecurityGroupIngressArgs(
+                description="bench_server HTTP provisioning (admin only)",
+                protocol="tcp",
+                from_port=18080,
+                to_port=18080,
+                cidr_blocks=[admin_cidr],
+            ),
+            aws.ec2.SecurityGroupIngressArgs(
+                description="bench_server UDP echo (relay-xdp forwards here)",
+                protocol="udp",
+                from_port=17777,
+                to_port=17777,
+                cidr_blocks=["0.0.0.0/0"],
+                ipv6_cidr_blocks=["::/0"],
+            ),
+            aws.ec2.SecurityGroupIngressArgs(
+                description="SSH admin access",
+                protocol="tcp",
+                from_port=22,
+                to_port=22,
+                cidr_blocks=[admin_cidr],
+            ),
+        ],
+        egress=[
+            aws.ec2.SecurityGroupEgressArgs(
+                description="All outbound",
+                protocol="-1",
+                from_port=0,
+                to_port=0,
+                cidr_blocks=["0.0.0.0/0"],
+                ipv6_cidr_blocks=["::/0"],
+            )
+        ],
+        tags={"Name": f"relay-sg-bench-{name}", "Stack": stack_name},
+        opts=opts,
+    )
+
     return NetworkResult(
         vpc=vpc,
         subnet=subnet,
         sg_relay=sg_relay,
         sg_backend=sg_backend,
+        sg_bench=sg_bench,
     )
 

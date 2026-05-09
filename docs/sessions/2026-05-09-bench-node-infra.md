@@ -12,7 +12,7 @@
 - [x] Design Ansible playbook `bench-deploy.yml`
 - [x] Define stack_outputs integration (export `bench_host`)
 - [x] Define end-to-end workflow (pulumi up -> ansible deploy -> make bench-relay)
-- [ ] Implement and apply all changes (pending - next session)
+- [x] Implement and apply all changes (steps 1-6 done 2026-05-09; steps 7-10 pending)
 
 ## Work Completed
 
@@ -191,12 +191,12 @@ make bench-relay \
 
 ## Next Steps
 
-1. **High:** Implement `infra/network.py` - add `sg_bench` to `NetworkResult` and `create_regional_network()`
-2. **High:** Implement `infra/config.py` - add `bench_enabled` + `bench_instance_type` fields
-3. **High:** Create `infra/bench_node.py` - `BenchNode` ComponentResource
-4. **High:** Update `infra/__main__.py` - conditional `BenchNode` provision + `bench` export
-5. **High:** Update `infra/Pulumi.staging.yaml` - add `bench_enabled: "true"` + `bench_instance_type: t3.micro`
-6. **High:** Create `ansible/playbooks/bench-deploy.yml`
+1. ~~**High:** Implement `infra/network.py` - add `sg_bench` to `NetworkResult` and `create_regional_network()`~~ - done 2026-05-09
+2. ~~**High:** Implement `infra/config.py` - add `bench_enabled` + `bench_instance_type` fields~~ - done 2026-05-09
+3. ~~**High:** Create `infra/bench_node.py` - `BenchNode` ComponentResource~~ - done 2026-05-09
+4. ~~**High:** Update `infra/__main__.py` - conditional `BenchNode` provision + `bench` export~~ - done 2026-05-09
+5. ~~**High:** Update `infra/Pulumi.staging.yaml` - add `bench_enabled: "true"` + `bench_instance_type: t3.micro`~~ - done 2026-05-09
+6. ~~**High:** Create `ansible/playbooks/bench-deploy.yml`~~ - done 2026-05-09
 7. **Medium:** Update `infra/stack_outputs.py` - add `bench_host` to `StackEnv` + `format_env`
 8. **Medium:** Update `infra/inventory_gen.py` - auto-populate `bench_servers` group from stack output
 9. **Medium:** Update `Makefile` - add `bench-deploy` target (calls ansible bench-deploy.yml)
@@ -206,12 +206,12 @@ make bench-relay \
 
 | Status | File |
 |--------|------|
-| A (pending) | `infra/bench_node.py` |
-| A (pending) | `ansible/playbooks/bench-deploy.yml` |
-| M (pending) | `infra/network.py` (add `sg_bench` to `NetworkResult` + `create_regional_network`) |
-| M (pending) | `infra/config.py` (add `bench_enabled`, `bench_instance_type`) |
-| M (pending) | `infra/__main__.py` (add `BenchNode` + `bench` export) |
-| M (pending) | `infra/Pulumi.staging.yaml` (add `bench_enabled`, `bench_instance_type`) |
+| A | `infra/bench_node.py` |
+| A | `ansible/playbooks/bench-deploy.yml` |
+| M | `infra/network.py` (added `sg_bench` to `NetworkResult` + `create_regional_network`) |
+| M | `infra/config.py` (added `bench_enabled`, `bench_instance_type`) |
+| M | `infra/__main__.py` (added `BenchNode` + `bench` export) |
+| M | `infra/Pulumi.staging.yaml` (added `bench_enabled`, `bench_instance_type`) |
 | M (pending) | `infra/stack_outputs.py` (add `bench_host` to `StackEnv` + `format_env`) |
 | M (pending) | `infra/inventory_gen.py` (auto-populate `bench_servers` group) |
 | M (pending) | `ansible/inventory/staging.yml` (add `bench_servers` group) |

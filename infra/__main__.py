@@ -24,6 +24,7 @@ import config as cfg_module
 from network import create_regional_network
 from relay_node import RelayNode
 from backend_node import BackendNode
+from bench_node import BenchNode
 
 # ---------------------------------------------------------------------------
 # Load stack config
@@ -143,4 +144,33 @@ pulumi.export(
 )
 
 pulumi.export("stack", stack_name)
+
+# ---------------------------------------------------------------------------
+# Bench node - optional, staging only (game server simulator for bench-relay)
+# Placed in backend_net (same VPC/region as backend) for low relay->bench latency.
+# Enable with: bench_enabled: "true" in Pulumi.<stack>.yaml
+# ---------------------------------------------------------------------------
+bench_node: BenchNode | None = None
+if cfg.bench_enabled:
+    bench_node_name = f"bench-{stack_name}-1"
+    bench_node = BenchNode(
+        node_name=bench_node_name,
+        region=backend_region,
+        instance_type=cfg.bench_instance_type,
+        public_key_text=public_key_text,
+        stack_name=stack_name,
+        net=backend_net,
+        provider=backend_provider,
+    )
+
+pulumi.export(
+    "bench",
+    pulumi.Output.all(
+        public_ip=bench_node.public_ip,
+        private_ip=bench_node.private_ip,
+        instance_id=bench_node.instance_id,
+        region=bench_node.region,
+        name=bench_node.name,
+    ) if bench_node is not None else pulumi.Output.from_input(None),
+)
 
