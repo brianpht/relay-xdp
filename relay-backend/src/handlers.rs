@@ -24,88 +24,13 @@ fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-// ── Per-relay symmetric key derivation ───────────────────────────────────────
-//
-// Mirrors relay-xdp::config::derive_secret_key. The relay computes:
-//   q  = X25519(relay_sk, backend_pk)
-//   rx = BLAKE2b-512(q || relay_pk || backend_pk)[..32]
-// X25519 is symmetric, so the backend computes the SAME key with:
-//   q  = X25519(backend_sk, relay_pk)
-//   rx = BLAKE2b-512(q || relay_pk || backend_pk)[..32]
-// This 32-byte rx is the XChaCha20-Poly1305 key the relay's eBPF data plane
-// uses to decrypt RouteTokens via bpf_relay_xchacha20poly1305_decrypt.
-fn derive_relay_secret_key(
-    relay_pk: &[u8; 32],
-    backend_sk: &[u8; 32],
-    backend_pk: &[u8; 32],
-) -> [u8; 32] {
-    use blake2::digest::{Update, VariableOutput};
-    use x25519_dalek::{PublicKey, StaticSecret};
-
-    let bsk = StaticSecret::from(*backend_sk);
-    let rpk = PublicKey::from(*relay_pk);
-    let q = bsk.diffie_hellman(&rpk);
-
-    let mut hasher = blake2::Blake2bVar::new(64).expect("valid output size");
-    hasher.update(q.as_bytes());
-    hasher.update(relay_pk);
-    hasher.update(backend_pk);
-    let mut out = [0u8; 64];
-    hasher
-        .finalize_variable(&mut out)
-        .expect("valid output size");
-    let mut rx = [0u8; 32];
-    rx.copy_from_slice(&out[..32]);
-    rx
-}
-
-// ── RouteToken encryption (mirror relay-sdk::tokens::encrypt_route_token) ────
-//
-// RouteToken is #[repr(C, packed)] in relay-xdp-common with size 71 bytes.
-// Encrypted wire: [nonce 24B] || [ciphertext+tag 87B] = 111B total.
-fn encrypt_route_token_inline(
-    token: &relay_xdp_common::RouteToken,
-    key: &[u8; 32],
-) -> [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] {
-    use chacha20poly1305::{
-        aead::{Aead, KeyInit, Payload},
-        XChaCha20Poly1305,
-    };
-    use rand::RngCore;
-
-    const ROUTE_TOKEN_PLAINTEXT_BYTES: usize = 71;
-    const NONCE_BYTES: usize = 24;
-
-    let mut nonce = [0u8; NONCE_BYTES];
-    rand::thread_rng().fill_bytes(&mut nonce);
-
-    // Safety: RouteToken is #[repr(C, packed)], no padding, all bytes valid.
-    let plaintext: [u8; ROUTE_TOKEN_PLAINTEXT_BYTES] = unsafe {
-        let mut buf = [0u8; ROUTE_TOKEN_PLAINTEXT_BYTES];
-        std::ptr::copy_nonoverlapping(
-            token as *const _ as *const u8,
-            buf.as_mut_ptr(),
-            ROUTE_TOKEN_PLAINTEXT_BYTES,
-        );
-        buf
-    };
-
-    let cipher = XChaCha20Poly1305::new(key.into());
-    let ciphertext = cipher
-        .encrypt(
-            (&nonce).into(),
-            Payload {
-                msg: &plaintext,
-                aad: &[],
-            },
-        )
-        .expect("XChaCha20-Poly1305 encrypt should not fail");
-
-    let mut out = [0u8; ENCRYPTED_ROUTE_TOKEN_BYTES];
-    out[..NONCE_BYTES].copy_from_slice(&nonce);
-    out[NONCE_BYTES..].copy_from_slice(&ciphertext);
-    out
-}
+// Per-relay symmetric key derivation and RouteToken encryption are provided
+// by relay-sdk::crypto::derive_relay_session_key and
+// relay-sdk::tokens::encrypt_route_token respectively.
+// Both helpers are shared with relay-xdp (relay side) via the same crate,
+// eliminating the previous inline duplicates.
+use relay_sdk::crypto::derive_relay_session_key;
+use relay_sdk::tokens::encrypt_route_token;
 
 /// Public router served on `http_port`. Carries only the encrypted
 /// `/relay_update` ingress and health checks - safe to expose to the
@@ -672,7 +597,8 @@ fn build_encrypted_bench_token(
     let mut backend_pk = [0u8; 32];
     backend_pk.copy_from_slice(&state.config.relay_backend_public_key);
 
-    let secret = derive_relay_secret_key(&relay_pk, &backend_sk, &backend_pk);
+    // backend side: my_sk=backend_sk, their_pk=relay_pk, relay_pk=relay_pk, backend_pk=backend_pk
+    let secret = derive_relay_session_key(&backend_sk, &relay_pk, &relay_pk, &backend_pk);
 
     // Parse the relay address (Token[0].next = relay).
     let relay_sa: std::net::SocketAddr = relay_addr_str
@@ -737,8 +663,8 @@ fn build_encrypted_bench_token(
         ..client_token
     };
 
-    let client_enc = encrypt_route_token_inline(&client_token, &secret);
-    let wire_enc = encrypt_route_token_inline(&wire_token, &secret);
+    let client_enc = encrypt_route_token(&client_token, &secret);
+    let wire_enc = encrypt_route_token(&wire_token, &secret);
 
     Ok((
         hex_encode(&client_enc),

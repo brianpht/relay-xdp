@@ -338,13 +338,73 @@ two-token bench path is left as follow-up.
 3. ~~**Medium:** Document the bench-relay topology + token wiring + env vars in
    `relay-bench/README.md`.~~ **DONE** (README fully documented in previous
    session; Makefile workflow documented in section 7 above).
-4. **Low:** Consider extracting `derive_relay_secret_key` + `encrypt_route_token`
+4. ~~**Low:** Consider extracting `derive_relay_secret_key` + `encrypt_route_token`
    helpers into a shared crate (currently duplicated between `relay-xdp::config`,
-   `relay-sdk::tokens`, `relay-backend::handlers`).
+   `relay-sdk::tokens`, `relay-backend::handlers`).~~ **DONE** (section 12 below).
 5. **Low (P1):** Multi-hop support: backend `/bench_token` accepts `relay_chain[]`,
    derives per-relay keys for N relays, emits N+2 tokens. bench_client assembles
    all token slots. Relay-to-relay whitelist requires `RELAY_PING` between relay
    nodes. eBPF already supports 3-hop token strip natively.
+
+### 12. Consolidate crypto helpers into relay-sdk (Next Step 4)
+
+**Problem:** `derive_relay_secret_key` (key derivation) and `encrypt_route_token_inline`
+(RouteToken encryption) were duplicated across three crates:
+
+| Site | Function | Status |
+|------|----------|--------|
+| `relay-backend/src/handlers.rs` | `derive_relay_secret_key` (inline) | **removed** |
+| `relay-backend/src/handlers.rs` | `encrypt_route_token_inline` (inline) | **removed** |
+| `relay-xdp/src/config.rs` | `derive_secret_key` (inline) | **replaced** |
+| `relay-sdk/src/crypto/mod.rs` | `derive_relay_session_key` | canonical home |
+| `relay-sdk/src/tokens/mod.rs` | `encrypt_route_token` | canonical home |
+
+**Changes:**
+
+- `relay-sdk/src/crypto/mod.rs`: merged duplicate `mod tests` blocks into one
+  (two blocks existed from separate sessions). Fixed `// ...existing code...`
+  placeholder left by a prior edit tool.
+
+- `relay-backend/Cargo.toml`:
+  - Moved `relay-sdk` from `[dev-dependencies]` to `[dependencies]`.
+  - Removed `chacha20poly1305`, `x25519-dalek`, `blake2`, `rand` from
+    `[dependencies]` (now transitive via relay-sdk).
+  - Added `x25519-dalek` to `[dev-dependencies]` (integration test still needs
+    it to compute `backend_pk` from a test secret key for test setup only).
+
+- `relay-backend/src/handlers.rs`:
+  - Removed `derive_relay_secret_key` (37 lines of inline BLAKE2b + X25519).
+  - Removed `encrypt_route_token_inline` (40 lines of inline chacha20poly1305).
+  - Added `use relay_sdk::crypto::derive_relay_session_key;` and
+    `use relay_sdk::tokens::encrypt_route_token;`.
+  - Call site: `derive_relay_secret_key(&relay_pk, &backend_sk, &backend_pk)`
+    became `derive_relay_session_key(&backend_sk, &relay_pk, &relay_pk, &backend_pk)`
+    (parameter order differs: shared fn takes `my_sk, their_pk, relay_pk, backend_pk`).
+  - Call site: `encrypt_route_token_inline(...)` became `encrypt_route_token(...)`.
+
+- `relay-xdp/Cargo.toml`:
+  - Removed `x25519-dalek` and `blake2` from `[dependencies]`.
+  - Added `relay-sdk = { path = "../relay-sdk" }` to `[dependencies]`.
+  - Added `blake2` + `x25519-dalek` to `[dev-dependencies]` (wire_compat test
+    `test_crypto_kx_session_keys` tests the full libsodium crypto_kx protocol
+    with client/server rx/tx swap - this is distinct from `derive_relay_session_key`
+    and requires raw access to both crates).
+
+- `relay-xdp/src/config.rs`:
+  - Replaced `derive_secret_key` body (28 lines of BLAKE2b + X25519) with a
+    thin wrapper delegating to `relay_sdk::crypto::derive_relay_session_key`.
+  - Relay side call: `derive_relay_session_key(relay_private_key, backend_pk, relay_pk, backend_pk)`.
+
+- `relay-backend/tests/http_handler_integration.rs`:
+  - Updated `test_bench_token_two_token_wire_compat` to replace the inline
+    BLAKE2b key derivation with `relay_sdk::crypto::derive_relay_session_key`.
+
+All 3 crates: `cargo test` + `cargo clippy -D warnings` pass with zero errors
+and zero warnings after the refactoring.
+
+Files: `relay-sdk/src/crypto/mod.rs`, `relay-backend/Cargo.toml`,
+`relay-backend/src/handlers.rs`, `relay-backend/tests/http_handler_integration.rs`,
+`relay-xdp/Cargo.toml`, `relay-xdp/src/config.rs`.
 
 ## Files Changed
 
@@ -355,6 +415,9 @@ two-token bench path is left as follow-up.
 | M | `relay-backend/tests/http_handler_integration.rs` |
 | M | `relay-bench/src/bin/bench_client.rs` |
 | M | `relay-bench/src/bin/bench_server.rs` |
+| M | `relay-xdp/Cargo.toml` |
+| M | `relay-xdp/src/config.rs` |
+| M | `relay-sdk/src/crypto/mod.rs` |
 | M | `Makefile` |
 | A | `ansible/playbooks/bench-backend-deploy.yml` |
 | A | `docs/sessions/2026-05-10-bench-relay-end-to-end.md` |

@@ -602,7 +602,7 @@ async fn test_bench_token_unique_session_ids() {
 
 #[tokio::test]
 async fn test_bench_token_two_token_wire_compat() {
-    use blake2::{Blake2b512, Digest};
+    use relay_sdk::crypto::derive_relay_session_key;
     use relay_sdk::tokens::decrypt_route_token;
     use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -616,21 +616,14 @@ async fn test_bench_token_two_token_wire_compat() {
         PublicKey::from(&sk).to_bytes()
     };
 
-    // Expected relay_secret_key: BLAKE2b-512(q || relay_pk || backend_pk)[..32]
-    // where q = X25519(backend_sk, relay_pk).
-    let expected_key: [u8; 32] = {
-        let backend_sk = StaticSecret::from(backend_sk_bytes);
-        let relay_pk = PublicKey::from(relay_pk_bytes);
-        let q = backend_sk.diffie_hellman(&relay_pk);
-        let mut h = Blake2b512::new();
-        h.update(q.as_bytes());
-        h.update(relay_pk_bytes);
-        h.update(backend_pk_bytes);
-        let out = h.finalize();
-        let mut k = [0u8; 32];
-        k.copy_from_slice(&out[..32]);
-        k
-    };
+    // Expected relay_secret_key via shared derive_relay_session_key
+    // (backend side: my_sk=backend_sk, their_pk=relay_pk, relay_pk=relay_pk, backend_pk=backend_pk).
+    let expected_key: [u8; 32] = derive_relay_session_key(
+        &backend_sk_bytes,
+        &relay_pk_bytes,
+        &relay_pk_bytes,
+        &backend_pk_bytes,
+    );
 
     // Relay data with known public key at index 0.
     let mut rd = test_relay_data();

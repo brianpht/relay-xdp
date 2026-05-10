@@ -511,13 +511,20 @@ fn do_refresh(cfg: &RouteRefreshConfig) -> Result<RefreshedRouteData> {
     let ping_key = decode_hex_32(&tok.ping_key, "ping_key")?;
     let magic = decode_hex_8(&tok.current_magic, "current_magic")?;
 
-    let client_route_token_vec =
-        decode_hex_n(&tok.client_route_token, "client_route_token", ENCRYPTED_ROUTE_TOKEN_BYTES)?;
-    let wire_route_token_vec =
-        decode_hex_n(&tok.wire_route_token, "wire_route_token", ENCRYPTED_ROUTE_TOKEN_BYTES)?;
-    let client_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] = client_route_token_vec
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("client_route_token: wrong length"))?;
+    let client_route_token_vec = decode_hex_n(
+        &tok.client_route_token,
+        "client_route_token",
+        ENCRYPTED_ROUTE_TOKEN_BYTES,
+    )?;
+    let wire_route_token_vec = decode_hex_n(
+        &tok.wire_route_token,
+        "wire_route_token",
+        ENCRYPTED_ROUTE_TOKEN_BYTES,
+    )?;
+    let client_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] =
+        client_route_token_vec
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("client_route_token: wrong length"))?;
     let wire_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] = wire_route_token_vec
         .try_into()
         .map_err(|_| anyhow::anyhow!("wire_route_token: wrong length"))?;
@@ -1015,7 +1022,8 @@ async fn main() -> Result<()> {
             );
 
             // 2. Decode hex fields from JSON response.
-            let session_private_key = decode_hex_32(&tok.session_private_key, "session_private_key")?;
+            let session_private_key =
+                decode_hex_32(&tok.session_private_key, "session_private_key")?;
 
             if tok.relay_secret_key.is_empty()
                 || tok.client_route_token.is_empty()
@@ -1032,15 +1040,21 @@ async fn main() -> Result<()> {
 
             let relay_secret_key = decode_hex_32(&tok.relay_secret_key, "relay_secret_key")?;
 
-            let client_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] =
-                decode_hex_n(&tok.client_route_token, "client_route_token", ENCRYPTED_ROUTE_TOKEN_BYTES)?
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("client_route_token: wrong length"))?;
+            let client_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] = decode_hex_n(
+                &tok.client_route_token,
+                "client_route_token",
+                ENCRYPTED_ROUTE_TOKEN_BYTES,
+            )?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("client_route_token: wrong length"))?;
 
-            let wire_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] =
-                decode_hex_n(&tok.wire_route_token, "wire_route_token", ENCRYPTED_ROUTE_TOKEN_BYTES)?
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("wire_route_token: wrong length"))?;
+            let wire_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] = decode_hex_n(
+                &tok.wire_route_token,
+                "wire_route_token",
+                ENCRYPTED_ROUTE_TOKEN_BYTES,
+            )?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("wire_route_token: wrong length"))?;
 
             let magic = decode_hex_8(&tok.current_magic, "current_magic")?;
             let ping_key = decode_hex_32(&tok.ping_key, "ping_key")?;
@@ -1230,8 +1244,7 @@ async fn main() -> Result<()> {
                     }
 
                     let rfc = Arc::clone(&rf);
-                    let result =
-                        tokio::task::spawn_blocking(move || do_refresh(&rfc)).await;
+                    let result = tokio::task::spawn_blocking(move || do_refresh(&rfc)).await;
 
                     let refreshed = match result {
                         Ok(Ok(r)) => r,

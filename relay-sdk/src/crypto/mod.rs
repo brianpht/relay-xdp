@@ -4,7 +4,12 @@
 //   - SHA-256: header verification (HeaderData struct from relay-xdp-common)
 //   - XChaCha20-Poly1305: token encryption (RouteToken, ContinueToken)
 //
-// All NaCl / BLAKE2 / Ed25519 / KX from rust-sdk are intentionally omitted.
+// Key derivation (X25519 + BLAKE2b-512) is shared between relay-xdp and
+// relay-backend via `derive_relay_session_key`. Both sides compute the same
+// 32-byte key using X25519 symmetry:
+//   relay:   q = X25519(relay_sk,   backend_pk)
+//   backend: q = X25519(backend_sk, relay_pk)
+//   both:    key = BLAKE2b-512(q || relay_pk || backend_pk)[..32]
 
 use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},
@@ -35,6 +40,52 @@ pub enum CryptoError {
     DecryptFailed,
     #[error("ciphertext too short: need at least {XCHACHA_TAG_BYTES} tag bytes")]
     CiphertextTooShort,
+}
+
+// ── Per-relay symmetric key derivation ───────────────────────────────────────
+
+/// Derive the per-relay XChaCha20-Poly1305 key shared between a relay and
+/// the backend.
+///
+/// Both sides compute the same 32-byte key by exploiting X25519 symmetry:
+///
+/// - **Relay side:** `q = X25519(relay_sk, backend_pk)`
+/// - **Backend side:** `q = X25519(backend_sk, relay_pk)`
+/// - **Both:** `key = BLAKE2b-512(q || relay_pk || backend_pk)[..32]`
+///
+/// This key is used by the relay's eBPF kfunc
+/// `bpf_relay_xchacha20poly1305_decrypt` to decrypt `RouteToken`s on the wire,
+/// and by the backend's `/bench_token` handler to encrypt them before sending.
+///
+/// # Parameters
+/// - `my_secret_key`: the caller's X25519 secret key (relay_sk or backend_sk)
+/// - `their_public_key`: the counterpart's X25519 public key (backend_pk or relay_pk)
+/// - `relay_public_key`: the relay's X25519 public key (same on both sides)
+/// - `backend_public_key`: the backend's X25519 public key (same on both sides)
+pub fn derive_relay_session_key(
+    my_secret_key: &[u8; 32],
+    their_public_key: &[u8; 32],
+    relay_public_key: &[u8; 32],
+    backend_public_key: &[u8; 32],
+) -> [u8; 32] {
+    use blake2::digest::{Update, VariableOutput};
+    use x25519_dalek::{PublicKey, StaticSecret};
+
+    let sk = StaticSecret::from(*my_secret_key);
+    let pk = PublicKey::from(*their_public_key);
+    let q = sk.diffie_hellman(&pk);
+
+    let mut hasher = blake2::Blake2bVar::new(64).expect("valid output size");
+    hasher.update(q.as_bytes());
+    hasher.update(relay_public_key);
+    hasher.update(backend_public_key);
+    let mut out = [0u8; 64];
+    hasher
+        .finalize_variable(&mut out)
+        .expect("valid output size");
+    let mut rx = [0u8; 32];
+    rx.copy_from_slice(&out[..32]);
+    rx
 }
 
 // ── SHA-256 ──────────────────────────────────────────────────────────────────
@@ -106,6 +157,64 @@ pub fn xchacha_decrypt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn derive_relay_session_key_symmetric() {
+        // Both sides must compute the identical key via X25519 symmetry.
+        let relay_sk = [0x11u8; 32];
+        let backend_sk = [0x22u8; 32];
+
+        let relay_pk = {
+            use x25519_dalek::{PublicKey, StaticSecret};
+            let sk = StaticSecret::from(relay_sk);
+            PublicKey::from(&sk).to_bytes()
+        };
+        let backend_pk = {
+            use x25519_dalek::{PublicKey, StaticSecret};
+            let sk = StaticSecret::from(backend_sk);
+            PublicKey::from(&sk).to_bytes()
+        };
+
+        // Relay side: my_sk = relay_sk, their_pk = backend_pk
+        let key_relay = derive_relay_session_key(&relay_sk, &backend_pk, &relay_pk, &backend_pk);
+        // Backend side: my_sk = backend_sk, their_pk = relay_pk
+        let key_backend = derive_relay_session_key(&backend_sk, &relay_pk, &relay_pk, &backend_pk);
+
+        assert_eq!(
+            key_relay, key_backend,
+            "relay-side and backend-side keys must be identical (X25519 symmetry)"
+        );
+    }
+
+    #[test]
+    fn derive_relay_session_key_differs_per_relay() {
+        // Different relay key pairs must produce different session keys even
+        // with the same backend key pair.
+        let relay_sk_a = [0x11u8; 32];
+        let relay_sk_b = [0x33u8; 32];
+        let backend_sk = [0x22u8; 32];
+
+        let relay_pk_a = {
+            use x25519_dalek::{PublicKey, StaticSecret};
+            PublicKey::from(&StaticSecret::from(relay_sk_a)).to_bytes()
+        };
+        let relay_pk_b = {
+            use x25519_dalek::{PublicKey, StaticSecret};
+            PublicKey::from(&StaticSecret::from(relay_sk_b)).to_bytes()
+        };
+        let backend_pk = {
+            use x25519_dalek::{PublicKey, StaticSecret};
+            PublicKey::from(&StaticSecret::from(backend_sk)).to_bytes()
+        };
+
+        let key_a = derive_relay_session_key(&backend_sk, &relay_pk_a, &relay_pk_a, &backend_pk);
+        let key_b = derive_relay_session_key(&backend_sk, &relay_pk_b, &relay_pk_b, &backend_pk);
+
+        assert_ne!(
+            key_a, key_b,
+            "distinct relay public keys must yield distinct session keys"
+        );
+    }
 
     #[test]
     fn sha256_known_vector() {

@@ -27,6 +27,11 @@ sha2 = "0.10"               # SHA-256 (header verify)
 rand = "0.8"                # random nonce generation
 zeroize = { version = "1", features = ["derive"] }  # zero secret keys on drop
 
+# Key derivation (X25519 DH + BLAKE2b-512) - derive_relay_session_key
+# shared with relay-xdp (relay side) and relay-backend (backend side).
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+blake2 = "0.10"
+
 # Utilities
 thiserror = "1"
 anyhow = "1"

@@ -45,38 +45,28 @@ fn decode_base64_key<const N: usize>(value: &str) -> Result<[u8; N]> {
 
 /// Derive secret key using crypto_kx_client_session_keys equivalent.
 ///
-/// This computes the client-side session key from a key exchange:
-/// 1. Compute shared secret: q = X25519(client_sk, server_pk)
-/// 2. Compute rx || tx = BLAKE2B-512(q || client_pk || server_pk)
-/// 3. Return rx (first 32 bytes) as the relay secret key
+/// Delegates to relay_sdk::crypto::derive_relay_session_key which is the
+/// canonical shared implementation used by both relay-xdp and relay-backend.
+///
+/// Parameters (relay side):
+///   - public_key: relay's own X25519 public key
+///   - private_key: relay's own X25519 private key
+///   - server_public_key: backend's X25519 public key
+///
+/// Returns rx = BLAKE2b-512(X25519(relay_sk, backend_pk) || relay_pk || backend_pk)[..32]
 fn derive_secret_key(
     public_key: &[u8; 32],
     private_key: &[u8; 32],
     server_public_key: &[u8; 32],
 ) -> Result<[u8; 32]> {
-    use blake2::digest::{Update, VariableOutput};
-    use x25519_dalek::{PublicKey, StaticSecret};
-
-    // Perform X25519 key exchange
-    let client_sk = StaticSecret::from(*private_key);
-    let server_pk = PublicKey::from(*server_public_key);
-    let shared_secret = client_sk.diffie_hellman(&server_pk);
-
-    // BLAKE2B-512(q || client_pk || server_pk)
-    let mut hasher = blake2::Blake2bVar::new(64).expect("valid output size");
-    hasher.update(shared_secret.as_bytes());
-    hasher.update(public_key);
-    hasher.update(server_public_key);
-
-    let mut output = [0u8; 64];
-    hasher
-        .finalize_variable(&mut output)
-        .expect("valid output size");
-
-    // rx = first 32 bytes
-    let mut rx = [0u8; 32];
-    rx.copy_from_slice(&output[..32]);
-    Ok(rx)
+    // relay side: my_sk=relay_private_key, their_pk=backend_pk,
+    //             relay_pk=relay_public_key, backend_pk=backend_public_key
+    Ok(relay_sdk::crypto::derive_relay_session_key(
+        private_key,
+        server_public_key,
+        public_key,
+        server_public_key,
+    ))
 }
 
 pub fn read_config() -> Result<Config> {

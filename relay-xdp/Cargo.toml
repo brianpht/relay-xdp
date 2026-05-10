@@ -29,10 +29,16 @@ libc = "0.2"
 # Pure-Rust crypto (replaces libsodium-sys-stable)
 sha2 = "0.11.0"
 crypto_box = "0.9"
-x25519-dalek = { version = "2", features = ["static_secrets"] }
-blake2 = "0.10"
 getrandom = "0.4.2"
+
+# Key derivation (derive_relay_session_key) and token encryption shared via relay-sdk.
+# relay-sdk owns x25519-dalek + blake2 - no direct dep needed here.
+relay-sdk = { path = "../relay-sdk" }
 
 [dev-dependencies]
 relay-backend = { path = "../relay-backend" }
+# wire_compat tests verify the full crypto_kx protocol (client/server rx/tx derivation)
+# which differs from derive_relay_session_key and requires raw blake2 + x25519 access.
+blake2 = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 

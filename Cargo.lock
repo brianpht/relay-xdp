@@ -1608,8 +1608,6 @@ dependencies = [
  "anyhow",
  "axum",
  "base64",
- "blake2",
- "chacha20poly1305",
  "crypto_box",
  "env_logger",
  "getrandom 0.4.2",
@@ -1618,7 +1616,6 @@ dependencies = [
  "log",
  "lru",
  "num_cpus",
- "rand",
  "redis",
  "relay-sdk",
  "relay-xdp",
@@ -1653,6 +1650,7 @@ name = "relay-sdk"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake2",
  "cbindgen",
  "chacha20poly1305",
  "criterion",
@@ -1662,6 +1660,7 @@ dependencies = [
  "relay-xdp-common",
  "sha2 0.10.9",
  "thiserror",
+ "x25519-dalek",
  "zeroize",
 ]
 
@@ -1681,6 +1680,7 @@ dependencies = [
  "log",
  "object",
  "relay-backend",
+ "relay-sdk",
  "relay-xdp-common",
  "sha2 0.11.0",
  "signal-hook",
