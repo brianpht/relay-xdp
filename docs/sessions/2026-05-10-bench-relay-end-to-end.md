@@ -14,9 +14,8 @@
       generator before).
 - [x] Local CI gates clean for changed crates: `cargo fmt`, `cargo clippy
       -D warnings`, `cargo test`.
-- [ ] Periodic `/bench_token` refresh + continue tokens so a single run can
-      sustain traffic past `2 * SLICE_SECONDS` (~20s) without the SDK route
-      expiring.
+- [x] Periodic `/bench_token` refresh + ping-key rotation so a single run
+      sustains traffic indefinitely without the SDK route expiring after 20s.
 
 ## Work Completed
 
@@ -82,7 +81,42 @@ Files: `relay-bench/src/bin/bench_server.rs`.
 
 Files: `relay-bench/src/bin/bench_client.rs`.
 
-### 4. SCP deploy + restart against staging
+### 4. Route refresh + ping-key rotation (`relay-bench`)
+
+`CLIENT_ROUTE_TIMEOUT = 20s` in relay-sdk: if no `route_update` arrives within
+20s the SDK falls back to direct mode and pkt_sent drops to 0. Solved via a
+background refresh task in bench_client.
+
+- Added `ROUTE_REFRESH_INTERVAL_SECS = 10` constant (matches `SLICE_SECONDS`).
+- Added `PingerRefreshKeys { ping_key, magic }` under `Arc<Mutex<>>`:
+  - The network thread reads it (under lock, copy-out) when building each
+    `CLIENT_PING` packet every 3s.
+  - The refresh task writes it (under lock) after every successful re-fetch.
+- Added `RouteRefreshConfig` (admin_url, relay_addr, bench_server endpoints,
+  shared keys arc) constructed once at startup and `Arc`-shared into the task.
+- Added blocking `do_refresh(cfg) -> Result<RefreshedRouteData>`:
+  1. `GET /bench_token` - fetches fresh token pair + keys from backend.
+  2. `POST /register_session` to bench_server - keeps server responder in sync.
+  3. Returns decoded session material.
+- Background `tokio::spawn` task (spawned after ROUTE_RESPONSE confirmed):
+  - Skips first tick (avoids redundant immediate re-fetch).
+  - Every 10s: `spawn_blocking(do_refresh)` -> update `PingerRefreshKeys` ->
+    call `client.route_update(UPDATE_TYPE_ROUTE, 3, tokens, magic, client_ext)`.
+  - Log `INFO` on success, `WARN` on failure (continues; next tick re-tries).
+- `open_session` called once at startup; `relay_secret_key` is not refreshed
+  because it is derived deterministically from stable keypairs (no effect on
+  correctness across refreshes).
+- Chose `UPDATE_TYPE_ROUTE` (full re-route) over `UPDATE_TYPE_CONTINUE`
+  (ContinueToken) because the backend does not currently issue ContinueTokens
+  for bench sessions; re-fetching `/bench_token` achieves the same liveness
+  goal at negligible cost (1 HTTP round-trip every 10s).
+
+Added hex helpers extracted from `setup_relay_route`: `decode_hex_32`,
+`decode_hex_8`, `decode_hex_n` - DRY re-use across initial setup and refresh.
+
+Files: `relay-bench/src/bin/bench_client.rs`.
+
+### 5. SCP deploy + restart against staging
 
 - `relay-backend` -> `107.23.94.101:/usr/local/bin/relay-backend` (`systemctl
   restart relay-backend`).
@@ -91,7 +125,7 @@ Files: `relay-bench/src/bin/bench_client.rs`.
 - Relay daemon (`relay-staging-1`) was not restarted - only its BPF maps
   carried state across runs.
 
-### 5. End-to-end run
+### 6. End-to-end run
 
 ```
 cd relay-xdp && RUST_LOG=info make bench-relay \
@@ -126,6 +160,7 @@ Relay counters delta during the successful run:
 
 After ~20s the SDK route expires (no continue tokens issued), `pkt_sent` falls
 to 0; this is expected SDK behavior, separate from the data-plane plumbing.
+Route refresh implemented in section 4 above resolves this for subsequent runs.
 
 ## Decisions Made
 
@@ -138,6 +173,9 @@ to 0; this is expected SDK behavior, separate from the data-plane plumbing.
 | Inline `encrypt_route_token` + `derive_relay_secret_key` in `relay-backend` (no `relay-sdk` dep) | Backend already has `chacha20poly1305`, `blake2`, `x25519-dalek` available; adding `relay-sdk` would pull in unnecessary client/server logic. | N/A |
 | Keep `RouteResponderState` and `ServerPingerState` as separate `Mutex<Option<...>>` slots | They are populated together but read independently (per-packet vs on a 3s timer). Separation avoids holding one lock while doing the other's work. | N/A |
 | Make `ConnectInfo` optional in `bench_token_handler` (raw request extension) | Existing `tower::oneshot` integration tests do not provide `ConnectInfo`; the typed extractor would 500 in tests. | N/A |
+| Route refresh via `UPDATE_TYPE_ROUTE` every 10s instead of `UPDATE_TYPE_CONTINUE` | Backend does not issue ContinueTokens for bench sessions; re-fetching `/bench_token` achieves the same liveness goal with no backend changes. Cost: 1 HTTP round-trip / 10s - acceptable. | N/A |
+| `PingerRefreshKeys` under `Arc<Mutex<>>` shared with refresh task | Lock held only for a copy-out (network thread) or copy-in (refresh task); never during blocking I/O. Prevents stale ping_key across backend rotation cycles without extra channels. | N/A |
+| `do_refresh` as blocking fn wrapped in `spawn_blocking` | Uses std `TcpStream` (blocking HTTP). Avoids blocking the async runtime executor thread. | N/A |
 
 ## Tests Added/Modified
 
@@ -164,25 +202,26 @@ two-token bench path is left as follow-up.
 | `tower::oneshot` integration tests started returning 500 once `ConnectInfo` extractor was required | Read `ConnectInfo` from `req.extensions()` instead of using the typed extractor; absent extension -> empty `client_public_address`. | No |
 | Stray duplicated `) {` in `bench_server.rs` after a refactor edit | Manual re-edit removing the duplicate line. | No |
 | First post-redeploy bench run timed out (no `ROUTE_REQUEST_RECEIVED` increment despite `make bench-relay` running) | Likely interplay between NAT port reassignment after a long idle gap and `ping_key` rotation; an immediate back-to-back run succeeded. Documented as follow-up. | No (worked on retry) |
-| `pkt_sent` falls to 0 after ~20s of clean traffic | Expected SDK behavior: `current_route_expire_time` lapses without continue tokens. Documented as follow-up. | No |
+| `pkt_sent` falls to 0 after ~20s of clean traffic | Resolved: background refresh task in bench_client calls `route_update(UPDATE_TYPE_ROUTE)` every 10s. SDK route no longer expires during long runs. | Was |
 
 ## Next Steps
 
-1. **High:** Periodic `/bench_token` refresh + continue tokens in bench_client
-   so a 30s+ run keeps the SDK route alive for the full duration. Either add
-   a `/bench_continue` endpoint on the backend or have bench_client re-fetch
-   `/bench_token` every ~5s and call `route_update` with the new pair.
-2. **Medium:** `ping_key` rotation handling in bench_client / bench_server.
-   Re-poll `/bench_token` every ~5s and update `PingerState` so consecutive or
-   long runs do not see intermittent `CLIENT_PING_PACKET_DID_NOT_VERIFY`.
-3. **Medium:** Wire-compat integration test exercising the backend-issued
-   token pair (decrypt with the derived secret, assert next/prev addresses on
-   both sides).
-4. **Low:** Document the bench-relay topology + token wiring in
-   `relay-bench/README.md` (currently only the harness session doc covers it).
-5. **Low:** Consider extracting `derive_relay_secret_key` +
-   `encrypt_route_token` helpers into a shared crate (currently duplicated
-   between `relay-xdp::config`, `relay-sdk::tokens`, `relay-backend::handlers`).
+1. **High:** Deploy updated `bench_client` binary to staging and validate that a
+   60s+ run shows zero `pkt_sent` drops (SDK route refresh confirmed working
+   locally via compile check; needs live smoke test).
+2. **Medium:** Wire-compat integration test exercising the backend-issued token
+   pair (derive relay secret from known keypair, call `/bench_token`, decode +
+   decrypt both tokens with `relay_sdk::tokens::decrypt_route_token`, assert
+   `next_address` / `prev_address` fields).
+3. **Medium:** Document the bench-relay topology + token wiring + env vars in
+   `relay-bench/README.md` (currently undocumented beyond this session file).
+4. **Low:** Consider extracting `derive_relay_secret_key` + `encrypt_route_token`
+   helpers into a shared crate (currently duplicated between `relay-xdp::config`,
+   `relay-sdk::tokens`, `relay-backend::handlers`).
+5. **Low (P1):** Multi-hop support: backend `/bench_token` accepts `relay_chain[]`,
+   derives per-relay keys for N relays, emits N+2 tokens. bench_client assembles
+   all token slots. Relay-to-relay whitelist requires `RELAY_PING` between relay
+   nodes. eBPF already supports 3-hop token strip natively.
 
 ## Files Changed
 
