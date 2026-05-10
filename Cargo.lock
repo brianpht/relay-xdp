@@ -1620,6 +1620,7 @@ dependencies = [
  "num_cpus",
  "rand",
  "redis",
+ "relay-sdk",
  "relay-xdp",
  "relay-xdp-common",
  "serde",

@@ -327,10 +327,14 @@ two-token bench path is left as follow-up.
 
 1. ~~**High:** Deploy updated `bench_client` binary to staging and validate that a
    60s+ run shows zero `pkt_sent` drops.~~ **DONE** (section 10 above).
-2. **Medium:** Wire-compat integration test exercising the backend-issued token
+2. ~~**Medium:** Wire-compat integration test exercising the backend-issued token
    pair (derive relay secret from known keypair, call `/bench_token`, decode +
    decrypt both tokens with `relay_sdk::tokens::decrypt_route_token`, assert
-   `next_address` / `prev_address` fields).
+   `next_address` / `prev_address` fields).~~ **DONE** (Test 12 in
+   `relay-backend/tests/http_handler_integration.rs`; upgraded from raw
+   `chacha20poly1305` to typed `relay_sdk::tokens::decrypt_route_token` API;
+   added `prev_address = 0` assertion for both tokens; `relay-sdk` added as
+   dev-dependency).
 3. ~~**Medium:** Document the bench-relay topology + token wiring + env vars in
    `relay-bench/README.md`.~~ **DONE** (README fully documented in previous
    session; Makefile workflow documented in section 7 above).
@@ -348,6 +352,7 @@ two-token bench path is left as follow-up.
 |--------|------|
 | M | `relay-backend/Cargo.toml` |
 | M | `relay-backend/src/handlers.rs` |
+| M | `relay-backend/tests/http_handler_integration.rs` |
 | M | `relay-bench/src/bin/bench_client.rs` |
 | M | `relay-bench/src/bin/bench_server.rs` |
 | M | `Makefile` |

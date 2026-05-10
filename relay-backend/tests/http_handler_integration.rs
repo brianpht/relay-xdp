@@ -591,20 +591,19 @@ async fn test_bench_token_unique_session_ids() {
 // Verifies that:
 //   1. relay_secret_key = BLAKE2b-512(X25519(backend_sk, relay_pk)
 //                                     || relay_pk || backend_pk)[..32]
-//   2. client_route_token (Token[0]) decrypts to RouteToken with
-//      next_address = relay IP:port
-//   3. wire_route_token (Token[1]) decrypts to RouteToken with
-//      next_address = bench_server IP:port
+//   2. client_route_token (Token[0]) decrypts via relay_sdk::tokens::decrypt_route_token
+//      and carries next_address = relay IP:port, prev_address = 0 (no ConnectInfo)
+//   3. wire_route_token (Token[1]) decrypts via relay_sdk::tokens::decrypt_route_token
+//      and carries next_address = bench_server IP:port, prev_address = 0 (no ConnectInfo)
 //
-// Encryption uses XChaCha20-Poly1305 with the derived relay_secret_key.
-// Verifying the decrypted plaintext at the wire level proves the bench
-// path (backend -> relay -> bench_client) carries the correct routing.
+// Uses relay_sdk::tokens::decrypt_route_token (the same function the SDK uses on wire
+// traffic) to prove end-to-end compatibility across the backend -> eBPF -> client path.
 // ===================================================================
 
 #[tokio::test]
 async fn test_bench_token_two_token_wire_compat() {
     use blake2::{Blake2b512, Digest};
-    use chacha20poly1305::{aead::Aead, KeyInit, XChaCha20Poly1305};
+    use relay_sdk::tokens::decrypt_route_token;
     use x25519_dalek::{PublicKey, StaticSecret};
 
     // Relay public key stored in relay_data (index 0 = "10.0.0.1:40000").
@@ -696,80 +695,73 @@ async fn test_bench_token_two_token_wire_compat() {
          || relay_pk || backend_pk)[..32]"
     );
 
-    // Helper: decrypt a 111-byte XChaCha20-Poly1305 blob with the derived key.
-    // Layout: [nonce 24B][ciphertext+tag 87B] -> plaintext 71B.
-    let xchacha_decrypt = |blob: &[u8], key: &[u8; 32]| -> Vec<u8> {
-        assert_eq!(blob.len(), 111, "encrypted token must be 111 bytes");
-        let cipher = XChaCha20Poly1305::new_from_slice(key).unwrap();
-        let nonce = chacha20poly1305::XNonce::from_slice(&blob[..24]);
-        cipher
-            .decrypt(nonce, &blob[24..])
-            .expect("XChaCha20Poly1305 decryption failed")
+    // Helper: hex-decode a token blob and call relay_sdk::tokens::decrypt_route_token.
+    // Returns the typed RouteToken struct (fields accessed as packed - copy out before use).
+    let sdk_decrypt = |hex_str: &str, key: &[u8; 32]| -> relay_xdp_common::RouteToken {
+        let blob: [u8; 111] = hex::decode(hex_str)
+            .expect("token hex decode failed")
+            .try_into()
+            .expect("encrypted token must be 111 bytes");
+        decrypt_route_token(&blob, key).expect("relay_sdk::tokens::decrypt_route_token failed")
     };
 
-    // RouteToken plaintext layout (relay-xdp-common, #[repr(C, packed)]):
-    //   [0..32]  session_private_key
-    //   [32..40] expire_timestamp (LE u64)
-    //   [40..48] session_id       (LE u64)
-    //   [48..52] envelope_kbps_up (LE u32)
-    //   [52..56] envelope_kbps_down
-    //   [56..60] next_address     (BE u32  = IP octets)
-    //   [60..64] prev_address
-    //   [64..66] next_port        (BE u16)
-    //   [66..68] prev_port
-    //   [68]     session_version
-    //   [69]     next_internal
-    //   [70]     prev_internal
-    const NEXT_ADDR_OFF: usize = 56;
-    const NEXT_PORT_OFF: usize = 64;
-
     // --- 2. Token[0]: client view -> next = relay (10.0.0.1:40000) -----------
+    // prev_address = 0 because tower::oneshot does not provide ConnectInfo;
+    // the handler falls back to empty string -> 0.0.0.0.
 
-    let client_token_blob = hex::decode(json["client_route_token"].as_str().unwrap()).unwrap();
-    let client_plain = xchacha_decrypt(&client_token_blob, &relay_secret_key);
-    assert_eq!(
-        client_plain.len(),
-        71,
-        "decrypted RouteToken must be 71 bytes"
+    let client_token = sdk_decrypt(
+        json["client_route_token"].as_str().unwrap(),
+        &relay_secret_key,
     );
 
+    // next_address is stored as ip.to_be() in the packed struct.
+    // u32::from_be() reverses that to get host-order; compare with u32::from_be_bytes(octets).
+    let next_addr_0: u32 = client_token.next_address;
     assert_eq!(
-        &client_plain[NEXT_ADDR_OFF..NEXT_ADDR_OFF + 4],
-        &[10u8, 0, 0, 1],
+        u32::from_be(next_addr_0),
+        u32::from_be_bytes([10u8, 0, 0, 1]),
         "Token[0].next_address must be relay IP 10.0.0.1"
     );
+    let next_port_0: u16 = client_token.next_port;
     assert_eq!(
-        u16::from_be_bytes(
-            client_plain[NEXT_PORT_OFF..NEXT_PORT_OFF + 2]
-                .try_into()
-                .unwrap()
-        ),
+        u16::from_be(next_port_0),
         40000u16,
         "Token[0].next_port must be relay port 40000"
     );
+    // No ConnectInfo in oneshot -> prev_address = 0 (0.0.0.0).
+    let prev_addr_0: u32 = client_token.prev_address;
+    assert_eq!(
+        prev_addr_0, 0,
+        "Token[0].prev_address must be 0 when no ConnectInfo is present"
+    );
 
     // --- 3. Token[1]: wire view -> next = bench_server (10.0.0.2:7777) -------
+    // prev_address = 0 for the same reason (no ConnectInfo in oneshot).
+    // In production the handler sets prev_address = client public IPv4 so that
+    // the relay's eBPF can use it as the ROUTE_RESPONSE redirect target.
 
-    let wire_token_blob = hex::decode(json["wire_route_token"].as_str().unwrap()).unwrap();
-    let wire_plain = xchacha_decrypt(&wire_token_blob, &relay_secret_key);
-    assert_eq!(
-        wire_plain.len(),
-        71,
-        "decrypted RouteToken must be 71 bytes"
+    let wire_token = sdk_decrypt(
+        json["wire_route_token"].as_str().unwrap(),
+        &relay_secret_key,
     );
 
+    let next_addr_1: u32 = wire_token.next_address;
     assert_eq!(
-        &wire_plain[NEXT_ADDR_OFF..NEXT_ADDR_OFF + 4],
-        &[10u8, 0, 0, 2],
+        u32::from_be(next_addr_1),
+        u32::from_be_bytes([10u8, 0, 0, 2]),
         "Token[1].next_address must be bench_server IP 10.0.0.2"
     );
+    let next_port_1: u16 = wire_token.next_port;
     assert_eq!(
-        u16::from_be_bytes(
-            wire_plain[NEXT_PORT_OFF..NEXT_PORT_OFF + 2]
-                .try_into()
-                .unwrap()
-        ),
+        u16::from_be(next_port_1),
         7777u16,
         "Token[1].next_port must be bench_server port 7777"
+    );
+    // prev_address = 0 (no ConnectInfo). In a live run this is the client public IPv4
+    // extracted from the TCP connection - not reproducible in an in-process oneshot test.
+    let prev_addr_1: u32 = wire_token.prev_address;
+    assert_eq!(
+        prev_addr_1, 0,
+        "Token[1].prev_address must be 0 when no ConnectInfo is present"
     );
 }

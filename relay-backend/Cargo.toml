@@ -48,6 +48,7 @@ lru = "0.16"  # P1-01: per-relay nonce LRU for /relay_update replay protection; 
 
 [dev-dependencies]
 relay-xdp = { path = "../relay-xdp" }
+relay-sdk = { path = "../relay-sdk" }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 crypto_box = "0.9"
