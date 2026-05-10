@@ -584,3 +584,192 @@ async fn test_bench_token_unique_session_ids() {
         "each /bench_token call must return a unique session_id"
     );
 }
+
+// ===================================================================
+// Test 12: /bench_token two-token wire-compat test
+//
+// Verifies that:
+//   1. relay_secret_key = BLAKE2b-512(X25519(backend_sk, relay_pk)
+//                                     || relay_pk || backend_pk)[..32]
+//   2. client_route_token (Token[0]) decrypts to RouteToken with
+//      next_address = relay IP:port
+//   3. wire_route_token (Token[1]) decrypts to RouteToken with
+//      next_address = bench_server IP:port
+//
+// Encryption uses XChaCha20-Poly1305 with the derived relay_secret_key.
+// Verifying the decrypted plaintext at the wire level proves the bench
+// path (backend -> relay -> bench_client) carries the correct routing.
+// ===================================================================
+
+#[tokio::test]
+async fn test_bench_token_two_token_wire_compat() {
+    use blake2::{Blake2b512, Digest};
+    use chacha20poly1305::{aead::Aead, KeyInit, XChaCha20Poly1305};
+    use x25519_dalek::{PublicKey, StaticSecret};
+
+    // Relay public key stored in relay_data (index 0 = "10.0.0.1:40000").
+    let relay_pk_bytes = [0x42u8; 32];
+
+    // Backend key pair (deterministic for this test).
+    let backend_sk_bytes = [0x01u8; 32];
+    let backend_pk_bytes: [u8; 32] = {
+        let sk = StaticSecret::from(backend_sk_bytes);
+        PublicKey::from(&sk).to_bytes()
+    };
+
+    // Expected relay_secret_key: BLAKE2b-512(q || relay_pk || backend_pk)[..32]
+    // where q = X25519(backend_sk, relay_pk).
+    let expected_key: [u8; 32] = {
+        let backend_sk = StaticSecret::from(backend_sk_bytes);
+        let relay_pk = PublicKey::from(relay_pk_bytes);
+        let q = backend_sk.diffie_hellman(&relay_pk);
+        let mut h = Blake2b512::new();
+        h.update(q.as_bytes());
+        h.update(relay_pk_bytes);
+        h.update(backend_pk_bytes);
+        let out = h.finalize();
+        let mut k = [0u8; 32];
+        k.copy_from_slice(&out[..32]);
+        k
+    };
+
+    // Relay data with known public key at index 0.
+    let mut rd = test_relay_data();
+    rd.relay_public_keys[0] = relay_pk_bytes;
+
+    let state = Arc::new(AppState {
+        config: Arc::new(Config {
+            relay_backend_private_key: backend_sk_bytes.to_vec(),
+            relay_backend_public_key: backend_pk_bytes.to_vec(),
+            ..test_config()
+        }),
+        relay_data: Arc::new(rd),
+        relay_manager: Arc::new(RelayManager::new(false)),
+        relays_csv: RwLock::new(vec![]),
+        cost_matrix_data: RwLock::new(vec![]),
+        route_matrix_data: RwLock::new(vec![]),
+        start_time: SystemTime::now(),
+        delay_completed: AtomicBool::new(true),
+        leader_election: Arc::new(RedisLeaderElection::new("127.0.0.1:6379", "test", 0)),
+        magic_rotator: Arc::new(MagicRotator::new()),
+        last_optimize_ms: AtomicU64::new(0),
+        nonce_cache: relay_backend::replay::NonceCache::new(),
+        relay_update_replay_rejected: AtomicU64::new(0),
+        relay_update_clock_skew_rejected: AtomicU64::new(0),
+    });
+
+    let app = create_router(state);
+
+    // relay = "10.0.0.1:40000", bench_server = "10.0.0.2:7777"
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/bench_token?relay_addr=10.0.0.1:40000&bench_server_addr=10.0.0.2:7777")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    // --- 1. Verify relay_secret_key matches X25519 + BLAKE2b derivation -------
+
+    let relay_secret_key_hex = json["relay_secret_key"].as_str().unwrap();
+    assert!(
+        !relay_secret_key_hex.is_empty(),
+        "relay_secret_key must be present when relay_addr + bench_server_addr given"
+    );
+    let relay_secret_key: [u8; 32] = hex::decode(relay_secret_key_hex)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        relay_secret_key, expected_key,
+        "relay_secret_key must equal BLAKE2b-512(X25519(backend_sk, relay_pk) \
+         || relay_pk || backend_pk)[..32]"
+    );
+
+    // Helper: decrypt a 111-byte XChaCha20-Poly1305 blob with the derived key.
+    // Layout: [nonce 24B][ciphertext+tag 87B] -> plaintext 71B.
+    let xchacha_decrypt = |blob: &[u8], key: &[u8; 32]| -> Vec<u8> {
+        assert_eq!(blob.len(), 111, "encrypted token must be 111 bytes");
+        let cipher = XChaCha20Poly1305::new_from_slice(key).unwrap();
+        let nonce = chacha20poly1305::XNonce::from_slice(&blob[..24]);
+        cipher
+            .decrypt(nonce, &blob[24..])
+            .expect("XChaCha20Poly1305 decryption failed")
+    };
+
+    // RouteToken plaintext layout (relay-xdp-common, #[repr(C, packed)]):
+    //   [0..32]  session_private_key
+    //   [32..40] expire_timestamp (LE u64)
+    //   [40..48] session_id       (LE u64)
+    //   [48..52] envelope_kbps_up (LE u32)
+    //   [52..56] envelope_kbps_down
+    //   [56..60] next_address     (BE u32  = IP octets)
+    //   [60..64] prev_address
+    //   [64..66] next_port        (BE u16)
+    //   [66..68] prev_port
+    //   [68]     session_version
+    //   [69]     next_internal
+    //   [70]     prev_internal
+    const NEXT_ADDR_OFF: usize = 56;
+    const NEXT_PORT_OFF: usize = 64;
+
+    // --- 2. Token[0]: client view -> next = relay (10.0.0.1:40000) -----------
+
+    let client_token_blob = hex::decode(json["client_route_token"].as_str().unwrap()).unwrap();
+    let client_plain = xchacha_decrypt(&client_token_blob, &relay_secret_key);
+    assert_eq!(
+        client_plain.len(),
+        71,
+        "decrypted RouteToken must be 71 bytes"
+    );
+
+    assert_eq!(
+        &client_plain[NEXT_ADDR_OFF..NEXT_ADDR_OFF + 4],
+        &[10u8, 0, 0, 1],
+        "Token[0].next_address must be relay IP 10.0.0.1"
+    );
+    assert_eq!(
+        u16::from_be_bytes(
+            client_plain[NEXT_PORT_OFF..NEXT_PORT_OFF + 2]
+                .try_into()
+                .unwrap()
+        ),
+        40000u16,
+        "Token[0].next_port must be relay port 40000"
+    );
+
+    // --- 3. Token[1]: wire view -> next = bench_server (10.0.0.2:7777) -------
+
+    let wire_token_blob = hex::decode(json["wire_route_token"].as_str().unwrap()).unwrap();
+    let wire_plain = xchacha_decrypt(&wire_token_blob, &relay_secret_key);
+    assert_eq!(
+        wire_plain.len(),
+        71,
+        "decrypted RouteToken must be 71 bytes"
+    );
+
+    assert_eq!(
+        &wire_plain[NEXT_ADDR_OFF..NEXT_ADDR_OFF + 4],
+        &[10u8, 0, 0, 2],
+        "Token[1].next_address must be bench_server IP 10.0.0.2"
+    );
+    assert_eq!(
+        u16::from_be_bytes(
+            wire_plain[NEXT_PORT_OFF..NEXT_PORT_OFF + 2]
+                .try_into()
+                .unwrap()
+        ),
+        7777u16,
+        "Token[1].next_port must be bench_server port 7777"
+    );
+}

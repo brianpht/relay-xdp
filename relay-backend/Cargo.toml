@@ -52,4 +52,5 @@ tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 crypto_box = "0.9"
 getrandom = "0.4.2"
+hex = "0.4"
 

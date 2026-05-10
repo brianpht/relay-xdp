@@ -12,6 +12,9 @@
 //     orchestrator  setup + route establishment (sequential)
 //     load generator  tokio::time::interval at TARGET_PPS -> Command::SendPacket
 //     stats printer   1 Hz -> stdout JSON
+//     refresh task    every ROUTE_REFRESH_INTERVAL_SECS: re-fetch tokens,
+//                     update pinger keys, re-register bench_server session,
+//                     call route_update so SDK never hits CLIENT_ROUTE_TIMEOUT
 //   std::thread (network):
 //     ClientInner pump_commands + recv_from loop + RTT measurement
 //
@@ -57,6 +60,12 @@ const RELAY_CLIENT_PING_PACKET: u8 = 9;
 const CLIENT_PING_BYTES: usize = 74;
 const PING_KEY_BYTES: usize = 32;
 const PING_TOKEN_BYTES: usize = 32;
+
+// How often the background task re-fetches /bench_token and issues a fresh
+// UPDATE_TYPE_ROUTE. Must be < CLIENT_ROUTE_TIMEOUT (20s) to prevent the SDK
+// route from expiring. SLICE_SECONDS = 10 in relay-sdk; we match it here so
+// each refresh arrives well before the current route's expire_time runs out.
+const ROUTE_REFRESH_INTERVAL_SECS: u64 = 10;
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -181,6 +190,30 @@ fn url_host_port(url: &str) -> &str {
         Some(pos) => &stripped[..pos],
         None => stripped,
     }
+}
+
+// ── Hex decode helpers ────────────────────────────────────────────────────────
+
+fn decode_hex_32(s: &str, name: &str) -> Result<[u8; 32]> {
+    hex::decode(s)
+        .with_context(|| format!("decode {} hex", name))?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("{}: expected 32 bytes", name))
+}
+
+fn decode_hex_8(s: &str, name: &str) -> Result<[u8; 8]> {
+    hex::decode(s)
+        .with_context(|| format!("decode {} hex", name))?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("{}: expected 8 bytes", name))
+}
+
+fn decode_hex_n(s: &str, name: &str, expected: usize) -> Result<Vec<u8>> {
+    let v = hex::decode(s).with_context(|| format!("decode {} hex", name))?;
+    if v.len() != expected {
+        bail!("{}: expected {} bytes, got {}", name, expected, v.len());
+    }
+    Ok(v)
 }
 
 // ── bench_token response from relay-backend GET /bench_token ─────────────────
@@ -387,33 +420,133 @@ fn setup_direct_route(
 
 // ── Relay-mode setup: build RouteToken + push route_update command ────────────
 
+/// Ping keys that rotate during a long run. Both the network thread (reads)
+/// and the route refresh task (writes) share this struct via Arc<Mutex<>>.
+/// The lock is held only for the duration of the copy - never while doing I/O.
+struct PingerRefreshKeys {
+    ping_key: [u8; PING_KEY_BYTES],
+    magic: [u8; 8],
+}
+
 /// Pinger state passed to network_thread. When `Some`, the network thread
 /// rebuilds + sends a CLIENT_PING every `interval` seconds using the bound
 /// UDP socket. Required so the relay's whitelist_map keeps an entry for the
 /// bench_client IP:port (otherwise eBPF drops every non-ping packet from us).
 struct PingerState {
     relay_addr: std::net::SocketAddr,
-    ping_key: [u8; PING_KEY_BYTES],
     session_id: u64,
     client_ip: [u8; 4],
     relay_ip: [u8; 4],
     relay_port_be: u16,
-    magic: [u8; 8],
     interval: Duration,
+    /// Refreshed every ROUTE_REFRESH_INTERVAL_SECS by the background task.
+    /// Network thread reads under the lock only when building a CLIENT_PING.
+    keys: Arc<Mutex<PingerRefreshKeys>>,
 }
 
 impl PingerState {
     fn build_packet(&self, expire_ts: u64) -> [u8; CLIENT_PING_BYTES] {
+        let k = self.keys.lock().unwrap();
         build_client_ping_packet(
-            &self.ping_key,
+            &k.ping_key,
             self.session_id,
             expire_ts,
             self.client_ip,
             self.relay_ip,
             self.relay_port_be,
-            &self.magic,
+            &k.magic,
         )
     }
+}
+
+/// Config shared with the background route refresh tokio task.
+/// Wrapped in Arc so it can be moved into the async closure cheaply.
+struct RouteRefreshConfig {
+    /// relay-backend admin URL (e.g. "http://1.2.3.4:8091")
+    admin_url: String,
+    /// relay UDP address "IP:PORT" - must be a known relay in relays.json
+    relay_addr: String,
+    /// bench_server HTTP address "IP:PORT" for /register_session
+    bench_server_http: String,
+    /// bench_server UDP address "IP:PORT" for /bench_token + register_session
+    bench_server_udp: String,
+    /// bench_client UDP bind address - used as client_ext in route_update
+    client_udp_addr: String,
+    /// Shared with PingerState in network_thread. Refresh task writes here;
+    /// network thread reads when building CLIENT_PING.
+    keys: Arc<Mutex<PingerRefreshKeys>>,
+}
+
+/// Data returned by a single successful route refresh cycle.
+struct RefreshedRouteData {
+    session_id: u64,
+    #[allow(dead_code)]
+    session_version: u8,
+    #[allow(dead_code)]
+    session_private_key: [u8; SESSION_PRIVATE_KEY_BYTES],
+    client_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES],
+    wire_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES],
+    ping_key: [u8; PING_KEY_BYTES],
+    magic: [u8; 8],
+}
+
+/// Perform one route refresh cycle (blocking I/O - run via spawn_blocking):
+///   1. GET /bench_token from relay-backend -> new session + tokens + ping_key
+///   2. POST /register_session to bench_server with the new session
+///
+/// The caller is responsible for updating shared keys and calling route_update
+/// on the Client after this returns.
+fn do_refresh(cfg: &RouteRefreshConfig) -> Result<RefreshedRouteData> {
+    let tok = fetch_bench_token(&cfg.admin_url, &cfg.relay_addr, &cfg.bench_server_udp)
+        .context("refresh: GET /bench_token")?;
+
+    if tok.relay_secret_key.is_empty()
+        || tok.client_route_token.is_empty()
+        || tok.wire_route_token.is_empty()
+    {
+        bail!("refresh: /bench_token missing relay token fields");
+    }
+
+    let session_private_key = decode_hex_32(&tok.session_private_key, "session_private_key")?;
+    let ping_key = decode_hex_32(&tok.ping_key, "ping_key")?;
+    let magic = decode_hex_8(&tok.current_magic, "current_magic")?;
+
+    let client_route_token_vec =
+        decode_hex_n(&tok.client_route_token, "client_route_token", ENCRYPTED_ROUTE_TOKEN_BYTES)?;
+    let wire_route_token_vec =
+        decode_hex_n(&tok.wire_route_token, "wire_route_token", ENCRYPTED_ROUTE_TOKEN_BYTES)?;
+    let client_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] = client_route_token_vec
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("client_route_token: wrong length"))?;
+    let wire_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] = wire_route_token_vec
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("wire_route_token: wrong length"))?;
+
+    // Register the new session with bench_server so it can:
+    //   - synthesise ROUTE_RESPONSE for the new ROUTE_REQUEST
+    //   - accept CLIENT_TO_SERVER packets stamped with the new session_private_key
+    //   - send updated SERVER_PING with fresh ping_key/magic
+    register_session(
+        &cfg.bench_server_http,
+        tok.session_id,
+        tok.session_version,
+        &session_private_key,
+        &cfg.relay_addr,
+        Some(&tok.ping_key),
+        Some(&tok.current_magic),
+        Some(&cfg.bench_server_udp),
+    )
+    .context("refresh: POST /register_session to bench_server")?;
+
+    Ok(RefreshedRouteData {
+        session_id: tok.session_id,
+        session_version: tok.session_version,
+        session_private_key,
+        client_route_token,
+        wire_route_token,
+        ping_key,
+        magic,
+    })
 }
 
 struct RelaySetup {
@@ -808,6 +941,11 @@ async fn main() -> Result<()> {
     // accepts our IP:port for ROUTE_REQUEST and CLIENT_TO_SERVER traffic.
     let mut pinger: Option<PingerState> = None;
 
+    // Route refresh config - only set in relay mode. Used by the background
+    // task that re-fetches /bench_token and calls route_update every
+    // ROUTE_REFRESH_INTERVAL_SECS to keep CLIENT_ROUTE_TIMEOUT from firing.
+    let mut refresh_cfg: Option<Arc<RouteRefreshConfig>> = None;
+
     match &cfg.mode {
         BenchMode::Direct => {
             // Generate session materials locally (no relay-backend needed).
@@ -877,11 +1015,7 @@ async fn main() -> Result<()> {
             );
 
             // 2. Decode hex fields from JSON response.
-            let session_private_key: [u8; SESSION_PRIVATE_KEY_BYTES] =
-                hex::decode(&tok.session_private_key)
-                    .context("decode session_private_key hex")?
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("session_private_key: wrong length"))?;
+            let session_private_key = decode_hex_32(&tok.session_private_key, "session_private_key")?;
 
             if tok.relay_secret_key.is_empty()
                 || tok.client_route_token.is_empty()
@@ -896,32 +1030,20 @@ async fn main() -> Result<()> {
                 );
             }
 
-            let relay_secret_key: [u8; XCHACHA_KEY_BYTES] = hex::decode(&tok.relay_secret_key)
-                .context("decode relay_secret_key hex")?
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("relay_secret_key: wrong length"))?;
+            let relay_secret_key = decode_hex_32(&tok.relay_secret_key, "relay_secret_key")?;
 
             let client_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] =
-                hex::decode(&tok.client_route_token)
-                    .context("decode client_route_token hex")?
+                decode_hex_n(&tok.client_route_token, "client_route_token", ENCRYPTED_ROUTE_TOKEN_BYTES)?
                     .try_into()
                     .map_err(|_| anyhow::anyhow!("client_route_token: wrong length"))?;
 
             let wire_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] =
-                hex::decode(&tok.wire_route_token)
-                    .context("decode wire_route_token hex")?
+                decode_hex_n(&tok.wire_route_token, "wire_route_token", ENCRYPTED_ROUTE_TOKEN_BYTES)?
                     .try_into()
                     .map_err(|_| anyhow::anyhow!("wire_route_token: wrong length"))?;
 
-            let magic: [u8; 8] = hex::decode(&tok.current_magic)
-                .context("decode current_magic hex")?
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("current_magic: wrong length"))?;
-
-            let ping_key: [u8; PING_KEY_BYTES] = hex::decode(&tok.ping_key)
-                .context("decode ping_key hex")?
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("ping_key: wrong length"))?;
+            let magic = decode_hex_8(&tok.current_magic, "current_magic")?;
+            let ping_key = decode_hex_32(&tok.ping_key, "ping_key")?;
 
             // Parse client public IPv4 (returned by backend via ConnectInfo).
             // Used as PingTokenData.source_address - must match the saddr the
@@ -951,16 +1073,30 @@ async fn main() -> Result<()> {
                 relay_addr
             );
 
+            // Shared refreshable keys - network thread reads, refresh task writes.
+            let keys_arc: Arc<Mutex<PingerRefreshKeys>> =
+                Arc::new(Mutex::new(PingerRefreshKeys { ping_key, magic }));
+
             pinger = Some(PingerState {
                 relay_addr: relay_sa_for_ping,
-                ping_key,
                 session_id: tok.session_id,
                 client_ip: client_pub_octets,
                 relay_ip: relay_octets,
                 relay_port_be,
-                magic,
                 interval: Duration::from_secs(3),
+                keys: Arc::clone(&keys_arc),
             });
+
+            // Store refresh config for the background task (spawned after
+            // network thread).
+            refresh_cfg = Some(Arc::new(RouteRefreshConfig {
+                admin_url: backend_admin.clone(),
+                relay_addr: relay_addr.clone(),
+                bench_server_http: cfg.bench_server_http.clone(),
+                bench_server_udp: cfg.bench_server_udp.clone(),
+                client_udp_addr: cfg.bench_client_udp.clone(),
+                keys: Arc::clone(&keys_arc),
+            }));
 
             let rs = RelaySetup {
                 session_id: tok.session_id,
@@ -1063,6 +1199,90 @@ async fn main() -> Result<()> {
                 );
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // Spawn background route refresh task. Fires every ROUTE_REFRESH_INTERVAL_SECS,
+        // skipping the first immediate tick (initial route was just confirmed above).
+        //
+        // Each iteration:
+        //   1. Blocking: GET /bench_token -> new session + pre-encrypted tokens
+        //   2. Blocking: POST /register_session to bench_server (new session)
+        //   3. Async: update shared ping_key + magic (PingerRefreshKeys)
+        //   4. Async: call route_update(UPDATE_TYPE_ROUTE) on Client
+        //
+        // The SDK's route_manager.update() resets last_route_update_time (preventing
+        // FLAGS_ROUTE_TIMED_OUT at CLIENT_ROUTE_TIMEOUT=20s). When the relay's
+        // ROUTE_RESPONSE arrives, confirm_pending_route extends current_route_expire_time
+        // by 2*SLICE_SECONDS=20s, keeping the route alive indefinitely.
+        if let Some(rf) = refresh_cfg {
+            let refresh_client = Arc::clone(&client_arc);
+            let refresh_shutdown = Arc::clone(&shutdown);
+            tokio::spawn(async move {
+                let mut interval =
+                    tokio::time::interval(Duration::from_secs(ROUTE_REFRESH_INTERVAL_SECS));
+                // The interval fires immediately on first tick; skip it.
+                interval.tick().await;
+
+                while !refresh_shutdown.load(Ordering::Relaxed) {
+                    interval.tick().await;
+                    if refresh_shutdown.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    let rfc = Arc::clone(&rf);
+                    let result =
+                        tokio::task::spawn_blocking(move || do_refresh(&rfc)).await;
+
+                    let refreshed = match result {
+                        Ok(Ok(r)) => r,
+                        Ok(Err(e)) => {
+                            log::warn!("bench_client: route refresh failed: {}", e);
+                            continue;
+                        }
+                        Err(e) => {
+                            log::warn!("bench_client: route refresh task panicked: {}", e);
+                            continue;
+                        }
+                    };
+
+                    // Update shared ping/magic keys used by the network thread
+                    // when building periodic CLIENT_PING packets.
+                    {
+                        let mut keys = rf.keys.lock().unwrap();
+                        keys.ping_key = refreshed.ping_key;
+                        keys.magic = refreshed.magic;
+                    }
+
+                    // Build new token vec: [Token[0] client view][Token[1] wire][Token[2] zeros]
+                    let mut tokens = Vec::with_capacity(ENCRYPTED_ROUTE_TOKEN_BYTES * 3);
+                    tokens.extend_from_slice(&refreshed.client_route_token);
+                    tokens.extend_from_slice(&refreshed.wire_route_token);
+                    tokens.extend_from_slice(&[0u8; ENCRYPTED_ROUTE_TOKEN_BYTES]);
+
+                    // Parse client_ext from the configured UDP bind address.
+                    let client_ext = {
+                        let sa: std::net::SocketAddr = rf
+                            .client_udp_addr
+                            .parse()
+                            .unwrap_or_else(|_| "127.0.0.1:17778".parse().unwrap());
+                        Address::from(sa)
+                    };
+
+                    refresh_client.lock().unwrap().route_update(
+                        UPDATE_TYPE_ROUTE,
+                        3,
+                        tokens,
+                        refreshed.magic,
+                        client_ext,
+                    );
+
+                    log::info!(
+                        "bench_client: route refreshed: new_session={:016x} magic={}",
+                        refreshed.session_id,
+                        hex::encode(refreshed.magic),
+                    );
+                }
+            });
         }
     }
 

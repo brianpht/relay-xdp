@@ -1613,6 +1613,7 @@ dependencies = [
  "crypto_box",
  "env_logger",
  "getrandom 0.4.2",
+ "hex",
  "http-body-util",
  "log",
  "lru",
