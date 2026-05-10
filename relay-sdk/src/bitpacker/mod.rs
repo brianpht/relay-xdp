@@ -21,7 +21,7 @@ impl BitWriter {
     /// `bytes` must be a multiple of 4.
     pub fn new(bytes: usize) -> Self {
         assert!(
-            bytes % 4 == 0,
+            bytes.is_multiple_of(4),
             "buffer must be a multiple of 4 bytes"
         );
         let num_words = bytes / 4;
@@ -65,12 +65,12 @@ impl BitWriter {
         if remainder != 0 {
             self.write_bits(0, (8 - remainder) as u32);
         }
-        debug_assert!(self.bits_written % 8 == 0);
+        debug_assert!(self.bits_written.is_multiple_of(8));
     }
 
     /// Copy `bytes` bytes into the stream (must be byte-aligned first).
     pub fn write_bytes(&mut self, data: &[u8]) {
-        debug_assert!(self.bits_written % 8 == 0);
+        debug_assert!(self.bits_written.is_multiple_of(8));
         // Flush scratch so the current partial word is stored
         self.flush_bits();
         let byte_offset = self.bits_written / 8;
@@ -204,7 +204,7 @@ impl<'a> BitReader<'a> {
 
     /// Read `n` bytes into `out` (must be byte-aligned).
     pub fn read_bytes(&mut self, out: &mut [u8]) {
-        debug_assert!(self.bits_read % 8 == 0);
+        debug_assert!(self.bits_read.is_multiple_of(8));
         let start = self.bits_read / 8;
         out.copy_from_slice(&self.data[start..start + out.len()]);
         self.bits_read += out.len() * 8;

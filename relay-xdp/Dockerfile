@@ -46,7 +46,7 @@ RUN cargo +nightly build \
 # -------------------------------------------------------
 # Stage 2: Build userspace binary (stable)
 # -------------------------------------------------------
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.87-bookworm AS builder
 
 WORKDIR /build
 
