@@ -232,15 +232,58 @@ e2e-teardown:
 #   Starts bench_server in the background, runs bench_client in direct mode,
 #   kills bench_server on exit. Asserts p99 RTT < 500 us via exit code.
 #
+# bench-deploy: build + deploy bench_server (bench node) + relay-backend (backend node).
+#   bench_client always runs locally (laptop/CI). Full deploy + validate workflow:
+#
+#     Step 1 - provision infra (once per stack):
+#       make deploy-staging          # or: cd infra && pulumi up --stack staging
+#
+#     Step 2 - deploy bench_server (bench node) + relay-backend (backend node):
+#       make bench-deploy STACK=staging
+#
+#     Step 3 - run bench_client locally for >=60 s (addresses auto-resolved from stack):
+#       make bench-relay STACK=staging DURATION_SECS=60
+#
+#       Or override individual addresses explicitly:
+#       make bench-relay \
+#         RELAY_ADDR=${RELAY_PUBLIC_IPS%% *}:40000 \
+#         BACKEND_ADMIN=http://${BACKEND_HOST}:8091 \
+#         BENCH_SERVER_HTTP=${BENCH_HOST}:18080 \
+#         BENCH_SERVER_UDP=${BENCH_HOST}:17777 \
+#         DURATION_SECS=60
+#
+#   A healthy 60 s run shows pkt_sent=~500 every second with loss <1% and
+#   zero drops to pkt_sent=0 (which would indicate the SDK route expired
+#   without the 10 s refresh task kicking in).
+#
 # bench-relay: relay mode against a live relay-xdp instance.
-#   Requires RELAY_ADDR (IP:PORT of relay-xdp first hop) and
-#   BACKEND_ADMIN (http://IP:port of relay-backend admin interface) to be set.
-#   Optional: BENCH_SERVER_HTTP (default 127.0.0.1:18080)
-#             TARGET_PPS (default 500), DURATION_SECS (default 30)
+#   All address variables are OPTIONAL when STACK= is set - they are auto-resolved
+#   from Pulumi stack outputs via stack_outputs.py when not explicitly provided.
+#
+#   Minimal usage (auto-resolve addresses from staging stack):
+#     make bench-relay
+#     make bench-relay STACK=staging DURATION_SECS=120
+#
+#   Explicit usage (override individual vars, bypasses stack_outputs.py):
+#     make bench-relay RELAY_ADDR=10.0.0.1:40000 BACKEND_ADMIN=http://10.0.0.2:8091
+#
+#   Optional overrides:
+#     STACK            (default: staging)   Pulumi stack to resolve addresses from
+#     RELAY_ADDR       auto: first IP in RELAY_PUBLIC_IPS + :40000
+#     BACKEND_ADMIN    auto: http://BACKEND_HOST:ADMIN_BACKEND_PORT
+#     BENCH_SERVER_HTTP auto: BENCH_HOST:18080
+#     BENCH_SERVER_UDP  auto: BENCH_HOST:17777
+#     BENCH_CLIENT_UDP  (default 0.0.0.0:17778)
+#     TARGET_PPS        (default 500)
+#     DURATION_SECS     (default 60 - long enough to exercise route refresh)
 # ---------------------------------------------------------------------------
-RELAY_ADDR      ?=
-BACKEND_ADMIN   ?= http://127.0.0.1:81
-BENCH_SERVER_HTTP ?= 127.0.0.1:18080
+RELAY_ADDR        ?=
+BACKEND_ADMIN     ?=
+BENCH_SERVER_HTTP ?=
+BENCH_SERVER_UDP  ?=
+BENCH_CLIENT_UDP  ?= 0.0.0.0:17778
+TARGET_PPS        ?= 500
+DURATION_SECS     ?= 60
 
 bench-local:
 	cargo build --release -p relay-bench
@@ -253,22 +296,43 @@ bench-local:
 	}
 
 bench-relay:
-	@if [ -z "$(RELAY_ADDR)" ]; then \
-		echo "ERROR: RELAY_ADDR is required for relay mode (e.g. make bench-relay RELAY_ADDR=10.0.0.1:40000)"; \
-		exit 1; \
-	fi
 	cargo build --release -p relay-bench
-	BENCH_MODE=relay DURATION_SECS=30 TARGET_PPS=500 \
-	RELAY_ADDR=$(RELAY_ADDR) \
-	BACKEND_ADMIN=$(BACKEND_ADMIN) \
-	BENCH_SERVER_HTTP=$(BENCH_SERVER_HTTP) \
-	BENCH_SERVER_UDP=$(BENCH_SERVER_UDP) \
+	@$(_PULUMI_ENV_STAGING); \
+	_relay="$(RELAY_ADDR)"; \
+	_admin="$(BACKEND_ADMIN)"; \
+	_bench_http="$(BENCH_SERVER_HTTP)"; \
+	_bench_udp="$(BENCH_SERVER_UDP)"; \
+	if [ -z "$$_relay" ]; then \
+		echo "[bench-relay] RELAY_ADDR not set - resolving from stack=$(STACK) via stack_outputs.py..."; \
+		eval $$($(INFRA_PYTHON) infra/stack_outputs.py --stack $(STACK) --format env); \
+		_relay=$$(echo $$RELAY_PUBLIC_IPS | awk '{print $$1}'):40000; \
+		_admin=http://$$BACKEND_HOST:$$ADMIN_BACKEND_PORT; \
+		_bench_http=$$BENCH_HOST:18080; \
+		_bench_udp=$$BENCH_HOST:17777; \
+	fi; \
+	echo "[bench-relay] relay=$$_relay backend=$$_admin bench_http=$$_bench_http bench_udp=$$_bench_udp duration=$(DURATION_SECS)s pps=$(TARGET_PPS)"; \
+	BENCH_MODE=relay \
+	DURATION_SECS=$(DURATION_SECS) \
+	TARGET_PPS=$(TARGET_PPS) \
+	RELAY_ADDR=$$_relay \
+	BACKEND_ADMIN=$$_admin \
+	BENCH_SERVER_HTTP=$$_bench_http \
+	BENCH_SERVER_UDP=$$_bench_udp \
+	BENCH_CLIENT_UDP=$(BENCH_CLIENT_UDP) \
 	./target/release/bench_client
 
-# bench-deploy: build bench_server + deploy to bench node via Ansible.
+# bench-deploy: build and deploy ALL bench-related services to the staging stack.
+#   Deploys relay-backend (backend node) AND bench_server (bench node).
+#   bench_client is NOT deployed - it always runs from the local machine.
+#
+#   Deployment order:
+#     1. relay-backend  -> backend_servers  (bench-backend-deploy.yml)
+#     2. bench_server   -> bench_servers    (bench-deploy.yml)
+#
 #   Requires:
-#     - bench node provisioned: cd infra && pulumi up --stack staging
-#     - bench_servers group in inventory (auto-populated by inventory_gen.py)
+#     - bench node + backend node provisioned (pulumi up --stack staging)
+#     - bench_servers + backend_servers groups in inventory
+#       (auto-populated by infra/inventory_gen.py)
 #   Override stack or inventory at the command line:
 #     make bench-deploy STACK=staging
 #     make bench-deploy STACK=staging INVENTORY=ansible/inventory/staging.yml
@@ -276,6 +340,8 @@ STACK     ?= staging
 INVENTORY ?= ansible/inventory/$(STACK).yml
 
 bench-deploy:
-	cargo build --release -p relay-bench
+	cargo build --release -p relay-bench -p relay-backend
+	ansible-playbook -i $(INVENTORY) ansible/playbooks/bench-backend-deploy.yml \
+	$(_VAULT_FLAG)
 	ansible-playbook -i $(INVENTORY) ansible/playbooks/bench-deploy.yml \
 	$(_VAULT_FLAG)

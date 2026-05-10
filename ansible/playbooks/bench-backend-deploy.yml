@@ -1,0 +1,60 @@
+---
+# playbooks/bench-backend-deploy.yml
+# Deploy a locally-built relay-backend binary to the backend node.
+#
+# Used as part of the bench-deploy workflow when relay-backend has changed
+# (e.g. /bench_token API additions) alongside bench_server changes.
+# Copies target/release/relay-backend from the operator workstation directly,
+# bypassing the artifact_base_url download used by the full site.yml deploy.
+#
+# Prerequisites:
+#   - binary built: `cargo build --release -p relay-backend`
+#   - backend node reachable (see ansible/inventory/<stack>.yml)
+#
+# Usage (normally called via `make bench-deploy`):
+#   ansible-playbook -i inventory/staging.yml playbooks/bench-backend-deploy.yml
+
+- name: Deploy relay-backend binary to backend node
+  hosts: backend_servers
+  gather_facts: false
+  become: yes
+
+  vars:
+    relay_bin_dir: /usr/local/bin
+
+  tasks:
+    # -- 1. Copy binary -------------------------------------------------------
+    - name: Copy relay-backend binary
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../target/release/relay-backend"
+        dest: "{{ relay_bin_dir }}/relay-backend"
+        mode: "0755"
+        owner: root
+        group: root
+      notify: Restart relay-backend
+
+    # -- 2. Flush handlers (restart only if binary changed) -------------------
+    - name: Flush handlers
+      ansible.builtin.meta: flush_handlers
+
+    # -- 3. Verify active -----------------------------------------------------
+    - name: Verify relay-backend is active
+      ansible.builtin.command:
+        cmd: systemctl is-active relay-backend
+      register: backend_svc
+      changed_when: false
+      failed_when: backend_svc.stdout != "active"
+
+    - name: Report relay-backend state
+      ansible.builtin.debug:
+        msg: >
+          [bench-backend-deploy] {{ inventory_hostname }} PASS:
+          relay-backend={{ backend_svc.stdout }}
+
+  handlers:
+    - name: Restart relay-backend
+      ansible.builtin.systemd:
+        name: relay-backend
+        daemon_reload: false
+        state: restarted
+
