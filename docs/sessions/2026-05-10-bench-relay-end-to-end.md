@@ -166,9 +166,9 @@ Route refresh implemented in section 4 above resolves this for subsequent runs.
 
 | Decision | Rationale | ADR |
 |----------|-----------|-----|
-| Move RouteToken encryption to backend `/bench_token` | bench_client cannot derive the per-relay key (no relay_sk, no backend_sk). Backend has both sides. | N/A |
-| Return TWO encrypted tokens (Token[0] client view + Token[1] wire) instead of one shared blob | SDK uses `Token[0].next_address` as its first-hop send target; relay uses `Token[1].next_address` as the next hop. They must differ (relay vs bench_server). | N/A |
-| Populate `wire_token.prev_address = client_public_ipv4` | eBPF copies `token.prev_address` verbatim into `session.prev_address`. Only `prev_port` is auto-substituted from `udp.source` when zero. Without this, ROUTE_RESPONSE redirect targets `0.0.0.0` -> `REDIRECT_NOT_IN_WHITELIST`. | N/A |
+| Move RouteToken encryption to backend `/bench_token` | bench_client cannot derive the per-relay key (no relay_sk, no backend_sk). Backend has both sides. | [ADR-006](../decisions/ADR-006-route-token-split-client-wire.md) |
+| Return TWO encrypted tokens (Token[0] client view + Token[1] wire) instead of one shared blob | SDK uses `Token[0].next_address` as its first-hop send target; relay uses `Token[1].next_address` as the next hop. They must differ (relay vs bench_server). | [ADR-006](../decisions/ADR-006-route-token-split-client-wire.md) |
+| Populate `wire_token.prev_address = client_public_ipv4` | eBPF copies `token.prev_address` verbatim into `session.prev_address`. Only `prev_port` is auto-substituted from `udp.source` when zero. Without this, ROUTE_RESPONSE redirect targets `0.0.0.0` -> `REDIRECT_NOT_IN_WHITELIST`. | [ADR-006](../decisions/ADR-006-route-token-split-client-wire.md) |
 | bench_server synthesizes ROUTE_RESPONSE on inbound type=1 | Modifying the eBPF data plane requires a relay redeploy + verifier re-validation; bench_server is userspace and the smoke test already proved the wire layout. | N/A |
 | Inline `encrypt_route_token` + `derive_relay_secret_key` in `relay-backend` (no `relay-sdk` dep) | Backend already has `chacha20poly1305`, `blake2`, `x25519-dalek` available; adding `relay-sdk` would pull in unnecessary client/server logic. | N/A |
 | Keep `RouteResponderState` and `ServerPingerState` as separate `Mutex<Option<...>>` slots | They are populated together but read independently (per-packet vs on a 3s timer). Separation avoids holding one lock while doing the other's work. | N/A |
