@@ -91,6 +91,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          # cargo-audit deps require Rust >= 1.88. This job only audits
+          # Cargo.lock - it does not compile project code - so we do not
+          # pin to the project toolchain here.
+          toolchain: stable
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
