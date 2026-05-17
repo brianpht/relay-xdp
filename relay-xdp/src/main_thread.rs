@@ -3,8 +3,7 @@
 
 use anyhow::{bail, Context, Result};
 use relay_xdp_common::*;
-use std::collections::HashSet;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -82,12 +81,14 @@ impl MainThread {
     ) -> Result<Self> {
         let start_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .context("system clock before Unix epoch")?
             .as_secs();
 
         // Set relay config in BPF (if available)
         if let Some(ref bpf) = bpf {
-            let mut bpf_guard = bpf.lock().unwrap();
+            let mut bpf_guard = bpf
+                .lock()
+                .map_err(|_| anyhow::anyhow!("BPF mutex poisoned"))?;
             let relay_config = RelayConfig {
                 dedicated: if config.dedicated { 1 } else { 0 },
                 relay_port: config.relay_port.to_be(),
@@ -215,7 +216,9 @@ impl MainThread {
         // Read per-CPU stats
         let mut counters = [0u64; RELAY_NUM_COUNTERS];
         if let Some(ref bpf) = self.bpf {
-            let mut bpf_guard = bpf.lock().unwrap();
+            let mut bpf_guard = bpf
+                .lock()
+                .map_err(|_| anyhow::anyhow!("BPF mutex poisoned"))?;
             if let Ok(stats_map) = bpf_guard.stats_map() {
                 if let Ok(values) = stats_map.get(&0, 0) {
                     for per_cpu_stats in values.iter() {
@@ -234,7 +237,10 @@ impl MainThread {
 
         // Pump stats messages from ping thread
         {
-            let mut queue = self.stats_queue.lock().unwrap();
+            let mut queue = self
+                .stats_queue
+                .lock()
+                .map_err(|_| anyhow::anyhow!("stats_queue mutex poisoned"))?;
             while let Some(msg) = queue.pop_front() {
                 self.pings_sent = msg.pings_sent;
                 self.bytes_sent = msg.bytes_sent;
@@ -318,11 +324,11 @@ impl MainThread {
         w.write_uint16(self.config.relay_port);
 
         // Everything after this point gets encrypted
-        let _encrypt_start = w.position();
+        let encrypt_start = w.position();
 
         let local_timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .context("system clock before Unix epoch")?
             .as_secs();
 
         w.write_uint64(local_timestamp);
@@ -353,7 +359,7 @@ impl MainThread {
         w.write_float32(server_pps as f32);
         w.write_float32(relay_pps as f32);
 
-        let relay_flags: u64 = if self.shutting_down { 1 } else { 0 };
+        let relay_flags: u64 = u64::from(self.shutting_down);
         w.write_uint64(relay_flags);
 
         w.write_string(RELAY_VERSION, RELAY_VERSION_LENGTH);
@@ -366,7 +372,6 @@ impl MainThread {
         // Encrypt the data after the relay address header using crypto_box
         const CRYPTO_BOX_NONCEBYTES: usize = 24;
 
-        let encrypt_start = _encrypt_start;
         let plaintext = self.update_data[encrypt_start..].to_vec();
 
         // Generate random nonce
@@ -461,6 +466,8 @@ impl MainThread {
             relay_ping_set.push(id, addr, port, internal);
         }
 
+        // Target version is read but not validated here - version checks are
+        // handled by the backend's response. The value is intentionally discarded.
         let _target_version = r
             .read_string(RELAY_VERSION_LENGTH)
             .context("failed to read target version")?;
@@ -496,6 +503,8 @@ impl MainThread {
         }
 
         let mut expected_relay_pk = [0u8; RELAY_PUBLIC_KEY_BYTES];
+        // Backend public key is read for wire-format completeness but not validated
+        // here - it is fixed at startup via relay_backend_public_key config.
         let mut _expected_backend_pk = [0u8; RELAY_BACKEND_PUBLIC_KEY_BYTES];
         r.read_bytes_into(&mut expected_relay_pk)
             .context("failed to read relay public key")?;
@@ -516,7 +525,9 @@ impl MainThread {
 
         // Update BPF state
         if let Some(ref bpf) = self.bpf {
-            let mut bpf_guard = bpf.lock().unwrap();
+            let mut bpf_guard = bpf
+                .lock()
+                .map_err(|_| anyhow::anyhow!("BPF mutex poisoned"))?;
             let state = RelayState {
                 current_timestamp: self.current_timestamp,
                 current_magic,
@@ -531,7 +542,10 @@ impl MainThread {
 
         // Check if control queue is full (skip if so)
         {
-            let queue = self.control_queue.lock().unwrap();
+            let queue = self
+                .control_queue
+                .lock()
+                .map_err(|_| anyhow::anyhow!("control_queue mutex poisoned"))?;
             if queue.len() >= 64 {
                 return Ok(());
             }
@@ -575,7 +589,10 @@ impl MainThread {
         };
 
         {
-            let mut queue = self.control_queue.lock().unwrap();
+            let mut queue = self
+                .control_queue
+                .lock()
+                .map_err(|_| anyhow::anyhow!("control_queue mutex poisoned"))?;
             queue.push_back(msg);
         }
 
@@ -592,10 +609,12 @@ impl MainThread {
             None => return Ok(stats),
         };
 
-        // Phase 1: Lock → iterate session_map → collect expired keys → unlock
+        // Phase 1: Lock -> iterate session_map -> collect expired keys -> unlock
         let session_keys_to_delete: Vec<SessionKey>;
         {
-            let mut bpf_guard = bpf.lock().unwrap();
+            let mut bpf_guard = bpf
+                .lock()
+                .map_err(|_| anyhow::anyhow!("BPF mutex poisoned"))?;
             if let Ok(session_map) = bpf_guard.session_map() {
                 session_keys_to_delete = session_map
                     .iter()
@@ -616,9 +635,11 @@ impl MainThread {
             }
         }
 
-        // Phase 2: Lock → batch delete expired sessions → unlock
+        // Phase 2: Lock -> batch delete expired sessions -> unlock
         if !session_keys_to_delete.is_empty() {
-            let mut bpf_guard = bpf.lock().unwrap();
+            let mut bpf_guard = bpf
+                .lock()
+                .map_err(|_| anyhow::anyhow!("BPF mutex poisoned"))?;
             if let Ok(mut session_map) = bpf_guard.session_map() {
                 for key in &session_keys_to_delete {
                     if session_map.remove(key).is_ok() {
@@ -628,10 +649,12 @@ impl MainThread {
             }
         }
 
-        // Phase 3: Lock → iterate whitelist_map → collect expired keys → unlock
+        // Phase 3: Lock -> iterate whitelist_map -> collect expired keys -> unlock
         let whitelist_keys_to_delete: Vec<WhitelistKey>;
         {
-            let mut bpf_guard = bpf.lock().unwrap();
+            let mut bpf_guard = bpf
+                .lock()
+                .map_err(|_| anyhow::anyhow!("BPF mutex poisoned"))?;
             if let Ok(whitelist_map) = bpf_guard.whitelist_map() {
                 whitelist_keys_to_delete = whitelist_map
                     .iter()
@@ -649,9 +672,11 @@ impl MainThread {
             }
         }
 
-        // Phase 4: Lock → batch delete expired whitelist entries → unlock
+        // Phase 4: Lock -> batch delete expired whitelist entries -> unlock
         if !whitelist_keys_to_delete.is_empty() {
-            let mut bpf_guard = bpf.lock().unwrap();
+            let mut bpf_guard = bpf
+                .lock()
+                .map_err(|_| anyhow::anyhow!("BPF mutex poisoned"))?;
             if let Ok(mut whitelist_map) = bpf_guard.whitelist_map() {
                 for key in &whitelist_keys_to_delete {
                     let _ = whitelist_map.remove(key);

@@ -11,11 +11,54 @@ use crate::bpf::BpfContext;
 use crate::config::Config;
 use crate::encoding::Writer;
 use crate::main_thread::{ControlMessage, MessageQueue, StatsMessage};
-use crate::manager::RelayManager;
+use crate::manager::{RelayManager, RelaySet};
 use crate::packet_filter;
 use crate::platform;
 
-/// SHA-256 hash using the `sha2` crate (pure Rust).
+/// Insert or remove entries from the BPF relay_map for a set of relays.
+///
+/// Key layout mirrors handle_relay_ping in eBPF:
+///   key = (addr_be as u64) << 32 | port_be as u64
+/// where addr_be/port_be are the big-endian wire representations.
+fn apply_relay_map_changes(bpf: &Option<Arc<Mutex<BpfContext>>>, set: &RelaySet, insert: bool) {
+    let Some(ref bpf) = bpf else { return };
+    let Ok(mut bpf_guard) = bpf.lock() else {
+        log::error!("BPF mutex poisoned in apply_relay_map_changes");
+        return;
+    };
+    let Ok(mut relay_map) = bpf_guard.relay_map() else {
+        return;
+    };
+    for i in 0..set.num_relays {
+        let addr_be = set.address[i].to_be();
+        let port_be = set.port[i].to_be();
+        let key = ((addr_be as u64) << 32) | (port_be as u64);
+        if insert {
+            let _ = relay_map.insert(key, 1u64, 0);
+        } else {
+            let _ = relay_map.remove(&key);
+        }
+    }
+}
+
+/// Log relay set entries at INFO level with the given action label.
+fn log_relay_set(set: &RelaySet, action: &str) {
+    log::info!("-------------------------------------------------------");
+    for i in 0..set.num_relays {
+        let a = set.address[i].to_be_bytes();
+        log::info!(
+            "{} relay {}.{}.{}.{}:{}",
+            action,
+            a[0],
+            a[1],
+            a[2],
+            a[3],
+            set.port[i]
+        );
+    }
+    log::info!("-------------------------------------------------------");
+}
+
 fn sha256(data: &[u8]) -> [u8; 32] {
     use sha2::Digest;
     let hash = sha2::Sha256::digest(data);
@@ -116,64 +159,15 @@ impl PingThread {
                             self.ping_key = msg.ping_key;
                             self.current_magic = msg.current_magic;
 
-                            // Add/remove relays in BPF relay_map
+                            // Add/remove relays in BPF relay_map and log changes
                             if msg.new_relays.num_relays > 0 {
-                                println!("-------------------------------------------------------");
-                                if let Some(ref bpf) = self.bpf {
-                                    let mut bpf_guard = bpf.lock().unwrap();
-                                    if let Ok(mut relay_map) = bpf_guard.relay_map() {
-                                        for i in 0..msg.new_relays.num_relays {
-                                            // Key layout must match the eBPF reader in
-                                            // handle_relay_ping, which builds:
-                                            //   ((*ip).saddr as u64) << 32 | (*udp).source as u64
-                                            // saddr/source are __be32/__be16 in the IP/UDP
-                                            // headers; on a LE host aya exposes them as the
-                                            // numeric value whose bytes are the wire (BE)
-                                            // bytes (e.g. port 40000 wire bytes 9C 40 -> u16
-                                            // value 0x409C). So we need:
-                                            //   addr_be = address.to_be() (u32 BE-byte value)
-                                            //   port_be = port.to_be()    (u16 BE-byte value)
-                                            //   key = (addr_be as u64) << 32 | port_be as u64
-                                            let addr_be = msg.new_relays.address[i].to_be();
-                                            let port_be = msg.new_relays.port[i].to_be();
-                                            let key = ((addr_be as u64) << 32) | (port_be as u64);
-                                            let _ = relay_map.insert(key, 1u64, 0);
-                                        }
-                                    }
-                                }
-                                for i in 0..msg.new_relays.num_relays {
-                                    let a = msg.new_relays.address[i].to_be_bytes();
-                                    println!(
-                                        "new relay {}.{}.{}.{}:{}",
-                                        a[0], a[1], a[2], a[3], msg.new_relays.port[i]
-                                    );
-                                }
-                                println!("-------------------------------------------------------");
+                                apply_relay_map_changes(&self.bpf, &msg.new_relays, true);
+                                log_relay_set(&msg.new_relays, "new");
                             }
 
                             if msg.delete_relays.num_relays > 0 {
-                                println!("-------------------------------------------------------");
-                                if let Some(ref bpf) = self.bpf {
-                                    let mut bpf_guard = bpf.lock().unwrap();
-                                    if let Ok(mut relay_map) = bpf_guard.relay_map() {
-                                        for i in 0..msg.delete_relays.num_relays {
-                                            // See insert path above for the key derivation
-                                            // contract with handle_relay_ping in eBPF.
-                                            let addr_be = msg.delete_relays.address[i].to_be();
-                                            let port_be = msg.delete_relays.port[i].to_be();
-                                            let key = ((addr_be as u64) << 32) | (port_be as u64);
-                                            let _ = relay_map.remove(&key);
-                                        }
-                                    }
-                                }
-                                for i in 0..msg.delete_relays.num_relays {
-                                    let a = msg.delete_relays.address[i].to_be_bytes();
-                                    println!(
-                                        "delete relay {}.{}.{}.{}:{}",
-                                        a[0], a[1], a[2], a[3], msg.delete_relays.port[i]
-                                    );
-                                }
-                                println!("-------------------------------------------------------");
+                                apply_relay_map_changes(&self.bpf, &msg.delete_relays, false);
+                                log_relay_set(&msg.delete_relays, "delete");
                             }
 
                             self.manager.update(&msg.new_relays, &msg.delete_relays);

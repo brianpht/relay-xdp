@@ -182,7 +182,12 @@ impl RelayManager {
         }
 
         let enable_history = inner.enable_history;
-        let source_entry = inner.source_entries.get_mut(&relay_id).unwrap();
+        // SAFETY: entry was inserted or already existed in the block above,
+        // so get_mut cannot fail here.
+        let source_entry = inner
+            .source_entries
+            .get_mut(&relay_id)
+            .expect("source_entry must exist: was inserted above");
 
         // Time out stale dest entries
         source_entry

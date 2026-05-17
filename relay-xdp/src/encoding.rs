@@ -160,7 +160,15 @@ impl<'a> Reader<'a> {
     /// Read address in relay update response format: address_type(1) + ip(4) + port(2)
     /// Returns (address_host_order, port)
     pub fn read_address(&mut self) -> Result<(u32, u16), ReadError> {
-        let _addr_type = self.read_uint8()?;
+        let addr_type = self.read_uint8()?;
+        if addr_type != relay_xdp_common::RELAY_ADDRESS_IPV4 {
+            // Only IPv4 is supported on the wire; treat unexpected type as
+            // a malformed frame by poisoning the position so further reads fail.
+            return Err(ReadError {
+                needed: 0,
+                available: 0,
+            });
+        }
         let addr_be = self.read_uint32()?;
         let port = self.read_uint16()?;
         // Convert from big-endian (network order) to host order

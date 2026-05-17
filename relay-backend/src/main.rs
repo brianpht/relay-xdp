@@ -138,7 +138,6 @@ async fn main() -> anyhow::Result<()> {
     // Start web servers - two routers on two ports.
     // Public: /relay_update + health checks, bound to 0.0.0.0
     // Admin:  topology, cost/route matrices, /metrics, bound to admin_bind_address (default 127.0.0.1)
-    // See P1-14 in docs/sessions/2026-05-04-project-audit-plan-v2.md.
     let public_router = handlers::create_public_router(state.clone());
     let admin_router = handlers::create_admin_router(state.clone());
 
