@@ -257,8 +257,8 @@ make bench-relay RELAY_ADDR=52.201.126.193:40000 DURATION_SECS=60   # legacy 1-h
      (counter 124) when relay1 tried to forward ROUTE_REQUEST to relay2. Fix:
      use `port.to_be() as u64` (u16-level byte swap) so the key low 16 bits
      match what eBPF reads from `(*udp).source`.
-4. **Medium:** Add `test_bench_token_chain_three_relays` (upper bound = `MAX_RELAY_HOPS`).
-   Add `test_bench_token_chain_four_relays` to assert HTTP 400 (clamp enforcement).
+4. ~~**Medium:** Add `test_bench_token_chain_three_relays` (upper bound = `MAX_RELAY_HOPS`).
+   Add `test_bench_token_chain_four_relays` to assert HTTP 400 (clamp enforcement).~~ **Done 2026-05-17.**
 5. **Low:** Document multi-hop token layout in `relay-bench/README.md` (token slot
    table: index, role, encrypted-with, next_address field).
 
@@ -269,7 +269,7 @@ make bench-relay RELAY_ADDR=52.201.126.193:40000 DURATION_SECS=60   # legacy 1-h
 | M | `relay-xdp-common/src/lib.rs` - added `MAX_RELAY_HOPS = 3` |
 | M | `relay-sdk/src/constants.rs` - lowered `MAX_TOKENS` from 7 to 5 |
 | M | `relay-backend/src/handlers.rs` - `relay_chain` query param, `build_encrypted_bench_token_chain`, `relay_chain_tokens` in JSON, `MAX_RELAY_HOPS` clamp |
-| M | `relay-backend/tests/http_handler_integration.rs` - added `test_bench_token_chain_two_relays` (Test 13) |
+| M | `relay-backend/tests/http_handler_integration.rs` - added `test_bench_token_chain_two_relays` (Test 13), `test_bench_token_chain_three_relays` (Test 14, upper-bound = MAX_RELAY_HOPS), `test_bench_token_chain_four_relays_rejected` (Test 15, clamp enforcement) |
 
 
 | M | `relay-bench/src/bin/bench_client.rs` - `RELAY_CHAIN` env var, `relay_chain_tokens` in response + `RelaySetup`, N+2 token assembly in `setup_relay_route` + refresh task |
