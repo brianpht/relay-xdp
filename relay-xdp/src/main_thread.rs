@@ -169,7 +169,7 @@ impl MainThread {
 
         // Handle clean shutdown (SIGTERM/SIGHUP)
         if self.clean_shutdown.load(Ordering::Relaxed) {
-            println!("\nClean shutdown...");
+            log::info!("Clean shutdown...");
             self.shutting_down = true;
 
             // Drain time is configurable via RELAY_SHUTDOWN_DRAIN_SECS so that
@@ -190,7 +190,7 @@ impl MainThread {
                         break;
                     }
                 }
-                println!(
+                log::info!(
                     "Shutting down in {} seconds",
                     drain_secs.saturating_sub(seconds)
                 );
@@ -198,9 +198,9 @@ impl MainThread {
                 seconds += 1;
             }
 
-            println!("Clean shutdown completed");
+            log::info!("Clean shutdown completed");
         } else {
-            println!("\nHard shutdown!");
+            log::info!("Hard shutdown!");
         }
 
         // Signal quit to stop ping thread

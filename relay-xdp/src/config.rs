@@ -71,12 +71,12 @@ fn derive_secret_key(
 
 pub fn read_config() -> Result<Config> {
     let relay_name = get_env("RELAY_NAME")?;
-    println!("Relay name is '{relay_name}'");
+    log::info!("Relay name is '{relay_name}'");
 
     let public_addr_str = get_env("RELAY_PUBLIC_ADDRESS")?;
     let (relay_public_address, relay_port) = platform::parse_address(&public_addr_str)?;
-    println!("Relay port is {relay_port}");
-    println!(
+    log::info!("Relay port is {relay_port}");
+    log::info!(
         "Relay public address is {}",
         platform::format_address(relay_public_address, relay_port)
     );
@@ -84,7 +84,7 @@ pub fn read_config() -> Result<Config> {
     let relay_internal_address = match std::env::var("RELAY_INTERNAL_ADDRESS") {
         Ok(s) if !s.is_empty() => {
             let (addr, _) = platform::parse_address(&s)?;
-            println!(
+            log::info!(
                 "Relay internal address is {}",
                 platform::format_address(addr, relay_port)
             );
@@ -96,12 +96,12 @@ pub fn read_config() -> Result<Config> {
     let relay_public_key_str = get_env("RELAY_PUBLIC_KEY")?;
     let relay_public_key: [u8; RELAY_PUBLIC_KEY_BYTES] =
         decode_base64_key(&relay_public_key_str).context("invalid relay public key")?;
-    println!("Relay public key is {relay_public_key_str}");
+    log::info!("Relay public key is {relay_public_key_str}");
 
     let relay_private_key_str = get_env("RELAY_PRIVATE_KEY")?;
     let relay_private_key: [u8; RELAY_PRIVATE_KEY_BYTES] =
         decode_base64_key(&relay_private_key_str).context("invalid relay private key")?;
-    println!(
+    log::info!(
         "Relay private key is {}...",
         &relay_private_key_str[..relay_private_key_str.len().min(4)]
     );
@@ -110,7 +110,7 @@ pub fn read_config() -> Result<Config> {
     let relay_backend_public_key: [u8; RELAY_BACKEND_PUBLIC_KEY_BYTES] =
         decode_base64_key(&relay_backend_public_key_str)
             .context("invalid relay backend public key")?;
-    println!("Relay backend public key is {relay_backend_public_key_str}");
+    log::info!("Relay backend public key is {relay_backend_public_key_str}");
 
     let relay_secret_key = derive_secret_key(
         &relay_public_key,
@@ -119,12 +119,12 @@ pub fn read_config() -> Result<Config> {
     )?;
 
     let relay_backend_url = get_env("RELAY_BACKEND_URL")?;
-    println!("Relay backend url is {relay_backend_url}");
+    log::info!("Relay backend url is {relay_backend_url}");
 
     let (use_gateway_ethernet_address, gateway_ethernet_address) =
         match std::env::var("RELAY_GATEWAY_ETHERNET_ADDRESS") {
             Ok(s) if !s.is_empty() => {
-                println!("Relay gateway ethernet address is '{s}'");
+                log::info!("Relay gateway ethernet address is '{s}'");
                 let parts: Vec<&str> = s.split(':').collect();
                 if parts.len() != RELAY_ETHERNET_ADDRESS_BYTES {
                     bail!("invalid RELAY_GATEWAY_ETHERNET_ADDRESS");
@@ -134,9 +134,14 @@ pub fn read_config() -> Result<Config> {
                     addr[i] =
                         u8::from_str_radix(part, 16).context("invalid hex in ethernet address")?;
                 }
-                println!(
+                log::info!(
                     "Parsed to {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                    addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]
+                    addr[0],
+                    addr[1],
+                    addr[2],
+                    addr[3],
+                    addr[4],
+                    addr[5]
                 );
                 (true, addr)
             }
@@ -147,7 +152,7 @@ pub fn read_config() -> Result<Config> {
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
     if dedicated {
-        println!("Relay dedicated mode is ENABLED");
+        log::info!("Relay dedicated mode is ENABLED");
     }
 
     Ok(Config {
