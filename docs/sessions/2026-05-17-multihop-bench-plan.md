@@ -259,8 +259,8 @@ make bench-relay RELAY_ADDR=52.201.126.193:40000 DURATION_SECS=60   # legacy 1-h
      match what eBPF reads from `(*udp).source`.
 4. ~~**Medium:** Add `test_bench_token_chain_three_relays` (upper bound = `MAX_RELAY_HOPS`).
    Add `test_bench_token_chain_four_relays` to assert HTTP 400 (clamp enforcement).~~ **Done 2026-05-17.**
-5. **Low:** Document multi-hop token layout in `relay-bench/README.md` (token slot
-   table: index, role, encrypted-with, next_address field).
+5. ~~**Low:** Document multi-hop token layout in `relay-bench/README.md` (token slot
+   table: index, role, encrypted-with, next_address field).~~ **Done 2026-05-17.**
 
 ## Files Changed
 
@@ -275,6 +275,7 @@ make bench-relay RELAY_ADDR=52.201.126.193:40000 DURATION_SECS=60   # legacy 1-h
 | M | `relay-bench/src/bin/bench_client.rs` - `RELAY_CHAIN` env var, `relay_chain_tokens` in response + `RelaySetup`, N+2 token assembly in `setup_relay_route` + refresh task |
 | M | `Makefile` - `RELAY_CHAIN ?=` variable, `bench-relay` recipe updated to pass `RELAY_CHAIN` env when set |
 | M | `relay-xdp/src/ping_thread.rs` - fix relay_map key construction (port was being placed in wrong u64 byte position, causing 100% RELAY_PING_UNKNOWN_RELAY drops on every peer ping) |
+| M | `relay-bench/README.md` - document multi-hop token layout (token slot table, prev_address rules, MTU budget table, bench_server registration rule, multi-hop sequence diagram); update env vars table with RELAY_CHAIN; add multi-hop quick-start examples |
 
 <!-- Remaining planned changes: staging validation run -->
 <!-- make bench-relay RELAY_CHAIN=52.201.126.193:40000,52.48.191.174:40000 DURATION_SECS=60 -->
