@@ -60,7 +60,11 @@
 
 #define relay_ENCRYPTED_CONTINUE_TOKEN_BYTES 57
 
-#define relay_MAX_TOKENS 7
+/**
+ * Maximum number of tokens in a route update = MAX_RELAY_HOPS(3) + client_view(1) + zeros_pad(1).
+ * Aligned with relay_xdp_common::MAX_RELAY_HOPS to prevent unsupported 5-relay chains.
+ */
+#define relay_MAX_TOKENS 5
 
 #define relay_UPDATE_TYPE_DIRECT 0
 

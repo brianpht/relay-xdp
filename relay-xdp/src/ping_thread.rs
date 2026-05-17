@@ -123,10 +123,20 @@ impl PingThread {
                                     let mut bpf_guard = bpf.lock().unwrap();
                                     if let Ok(mut relay_map) = bpf_guard.relay_map() {
                                         for i in 0..msg.new_relays.num_relays {
+                                            // Key layout must match the eBPF reader in
+                                            // handle_relay_ping, which builds:
+                                            //   ((*ip).saddr as u64) << 32 | (*udp).source as u64
+                                            // saddr/source are __be32/__be16 in the IP/UDP
+                                            // headers; on a LE host aya exposes them as the
+                                            // numeric value whose bytes are the wire (BE)
+                                            // bytes (e.g. port 40000 wire bytes 9C 40 -> u16
+                                            // value 0x409C). So we need:
+                                            //   addr_be = address.to_be() (u32 BE-byte value)
+                                            //   port_be = port.to_be()    (u16 BE-byte value)
+                                            //   key = (addr_be as u64) << 32 | port_be as u64
                                             let addr_be = msg.new_relays.address[i].to_be();
-                                            let port_be = (msg.new_relays.port[i] as u32).to_be();
-                                            let key = ((addr_be as u64) << 32)
-                                                | (port_be as u64 & 0xFFFF);
+                                            let port_be = msg.new_relays.port[i].to_be();
+                                            let key = ((addr_be as u64) << 32) | (port_be as u64);
                                             let _ = relay_map.insert(key, 1u64, 0);
                                         }
                                     }
@@ -147,11 +157,11 @@ impl PingThread {
                                     let mut bpf_guard = bpf.lock().unwrap();
                                     if let Ok(mut relay_map) = bpf_guard.relay_map() {
                                         for i in 0..msg.delete_relays.num_relays {
+                                            // See insert path above for the key derivation
+                                            // contract with handle_relay_ping in eBPF.
                                             let addr_be = msg.delete_relays.address[i].to_be();
-                                            let port_be =
-                                                (msg.delete_relays.port[i] as u32).to_be();
-                                            let key = ((addr_be as u64) << 32)
-                                                | (port_be as u64 & 0xFFFF);
+                                            let port_be = msg.delete_relays.port[i].to_be();
+                                            let key = ((addr_be as u64) << 32) | (port_be as u64);
                                             let _ = relay_map.remove(&key);
                                         }
                                     }

@@ -409,9 +409,15 @@ fn build_relay_response(
 struct BenchTokenQuery {
     relay_addr: Option<String>,
     /// "IP:PORT" of bench_server (the next hop after relay). Required when
-    /// `relay_addr` is set so the backend can populate RouteToken.next_address /
-    /// next_port. If omitted, the encrypted token is returned with next = 0.
+    /// `relay_addr` or `relay_chain` is set so the backend can populate
+    /// RouteToken.next_address / next_port. If omitted, the encrypted token
+    /// is returned with next = 0.
     bench_server_addr: Option<String>,
+    /// Comma-separated "IP:PORT" list for multi-hop bench mode.
+    /// When set, supersedes relay_addr for token building.
+    /// Must not exceed relay_xdp_common::MAX_RELAY_HOPS entries.
+    /// Example: "1.2.3.4:40000,5.6.7.8:40000"
+    relay_chain: Option<String>,
 }
 
 /// Generate session materials for relay-bench client/server.
@@ -478,40 +484,68 @@ async fn bench_token_handler(
         },
         None => String::new(),
     };
+    // Extract IPv4 variant for token prev_address population.
+    let client_pub_v4 = match peer_ip {
+        Some(std::net::IpAddr::V4(v4)) => Some(v4),
+        _ => None,
+    };
 
     // ── Derive per-relay symmetric key + encrypt RouteToken pair ────────────
     //
-    // We need TWO encrypted tokens, both using the same per-relay symmetric
-    // key:
+    // Two modes:
     //
-    //   client_route_token  (Token[0]): next = RELAY      -> SDK reads this
-    //                                                         locally and sends
-    //                                                         CLIENT_TO_SERVER
-    //                                                         to the relay.
-    //   wire_route_token    (Token[1]): next = BENCH_SERVER -> relay decrypts
-    //                                                         this on the wire
-    //                                                         and forwards the
-    //                                                         packet there.
+    //   relay_chain mode (multi-hop): relay_chain=IP1:PORT1,IP2:PORT2
+    //     Builds N+1 tokens (Token[0] = client_route_token, Token[1..N] in
+    //     relay_chain_tokens). Each Token[i+1] is encrypted with relay[i]'s
+    //     symmetric key. Supersedes relay_addr when set.
     //
-    // The wire layout sent by the SDK is tokens[111..N*111], so Token[0] is
-    // local-only (never on wire) and Token[1] is what the relay actually sees.
+    //   legacy 1-hop mode: relay_addr + bench_server_addr
+    //     Builds two tokens (client_route_token + wire_route_token) with the
+    //     same relay symmetric key. Kept for backward compatibility.
     let mut client_route_token_hex = String::new();
     let mut wire_route_token_hex = String::new();
     let mut relay_secret_key_hex = String::new();
+    let mut relay_chain_tokens_hex: Vec<String> = Vec::new();
 
-    if let (Some(ref relay_addr_str), Some(ref bench_server_addr_str)) =
+    // Parse comma-separated relay_chain query parameter.
+    let relay_chain_addrs: Vec<&str> = q
+        .relay_chain
+        .as_deref()
+        .map(|s| s.split(',').filter(|e| !e.is_empty()).collect())
+        .unwrap_or_default();
+
+    if !relay_chain_addrs.is_empty() {
+        // Clamp: reject chain that exceeds MAX_RELAY_HOPS.
+        if relay_chain_addrs.len() > relay_xdp_common::MAX_RELAY_HOPS {
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+        if let Some(ref bench_server_addr_str) = q.bench_server_addr {
+            match build_encrypted_bench_token_chain(
+                &state,
+                &relay_chain_addrs,
+                bench_server_addr_str,
+                session_id,
+                &session_private_key,
+                client_pub_v4,
+            ) {
+                Ok((client_hex, chain_tokens, key_hex)) => {
+                    client_route_token_hex = client_hex;
+                    relay_chain_tokens_hex = chain_tokens;
+                    relay_secret_key_hex = key_hex;
+                }
+                Err(e) => {
+                    log::warn!(
+                        "/bench_token chain: encrypt failed (chain={:?} server={}): {}",
+                        relay_chain_addrs,
+                        bench_server_addr_str,
+                        e
+                    );
+                }
+            }
+        }
+    } else if let (Some(ref relay_addr_str), Some(ref bench_server_addr_str)) =
         (q.relay_addr.as_ref(), q.bench_server_addr.as_ref())
     {
-        // Parse client public IPv4 (post-NAT) for wire_token.prev_address. The
-        // relay's eBPF data plane copies token.prev_address verbatim into
-        // session.prev_address and uses it as the destination of the eventual
-        // ROUTE_RESPONSE redirect. If left at 0, the response is dropped by
-        // the relay's whitelist gate (REDIRECT_NOT_IN_WHITELIST).
-        let client_pub_v4 = match peer_ip {
-            Some(std::net::IpAddr::V4(v4)) => Some(v4),
-            _ => None,
-        };
-
         match build_encrypted_bench_token(
             &state,
             relay_addr_str,
@@ -547,13 +581,18 @@ async fn bench_token_handler(
         "client_public_address":   client_public_address,
         // Backwards-compatible alias - same value as client_route_token.
         "encrypted_route_token":   client_route_token_hex,
-        // New (relay mode): two pre-encrypted 111B RouteTokens (hex):
+        // Single-hop (relay_addr mode): two pre-encrypted 111B RouteTokens (hex):
         //   client_route_token: next_address = RELAY (Token[0], local SDK use).
         //   wire_route_token:   next_address = BENCH_SERVER (Token[1], on wire).
         "client_route_token":      client_route_token_hex,
         "wire_route_token":        wire_route_token_hex,
+        // Multi-hop (relay_chain mode): N encrypted 111B wire tokens (hex),
+        //   one per relay in the chain. Client assembles:
+        //   [client_route_token, relay_chain_tokens[0..N], zeros_pad].
+        "relay_chain_tokens":      relay_chain_tokens_hex,
         // Per-relay symmetric key (hex). bench_client's RouteManager needs it
-        // to locally decrypt Token[0]. Empty when not in relay mode.
+        // to locally decrypt Token[0]. Always relay[0]'s key. Empty when not
+        // in relay mode.
         "relay_secret_key":        relay_secret_key_hex,
     });
 
@@ -670,6 +709,143 @@ fn build_encrypted_bench_token(
         hex_encode(&client_enc),
         hex_encode(&wire_enc),
         hex_encode(&secret),
+    ))
+}
+
+/// Build an N-hop encrypted token chain for relay-bench multi-hop mode.
+///
+/// Returns (client_route_token_hex, relay_chain_tokens_hex, relay_secret_key_hex).
+///
+/// Token layout for N relays (relay_chain.len() == N):
+///   Token[0]   = client_route_token: next = relay[0], encrypted with key_0
+///   Token[i+1] = wire token for relay[i]: next = relay[i+1] or bench_server,
+///                prev = client_pub_v4 (i==0) or relay_data.relay_addresses[i-1].ip (i>0),
+///                encrypted with key_i
+///
+/// relay_chain_tokens_hex = [Token[1], ..., Token[N]] hex-encoded (len == N).
+/// relay_secret_key_hex   = key_0 (relay[0] symmetric key).
+fn build_encrypted_bench_token_chain(
+    state: &AppState,
+    relay_chain: &[&str],
+    bench_server_addr_str: &str,
+    session_id: u64,
+    session_private_key: &[u8; 32],
+    client_pub_v4: Option<std::net::Ipv4Addr>,
+) -> Result<(String, Vec<String>, String), String> {
+    let n = relay_chain.len();
+    if n == 0 {
+        return Err("relay_chain is empty".into());
+    }
+
+    // Backend keys.
+    if state.config.relay_backend_private_key.len() != 32
+        || state.config.relay_backend_public_key.len() != 32
+    {
+        return Err("backend keys not configured".into());
+    }
+    let mut backend_sk = [0u8; 32];
+    backend_sk.copy_from_slice(&state.config.relay_backend_private_key);
+    let mut backend_pk = [0u8; 32];
+    backend_pk.copy_from_slice(&state.config.relay_backend_public_key);
+
+    // Parse bench_server address.
+    let server_sa: std::net::SocketAddr = bench_server_addr_str
+        .parse()
+        .map_err(|e| format!("parse bench_server_addr {}: {}", bench_server_addr_str, e))?;
+    let server_ip = match server_sa.ip() {
+        std::net::IpAddr::V4(v4) => v4.octets(),
+        _ => return Err("bench_server_addr must be IPv4".into()),
+    };
+    let server_port = server_sa.port();
+
+    let expire_timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        + 300;
+
+    // Parse relay addresses and derive per-relay symmetric keys.
+    let mut relay_sas: Vec<std::net::SocketAddrV4> = Vec::with_capacity(n);
+    let mut relay_keys: Vec<[u8; 32]> = Vec::with_capacity(n);
+    let mut relay_indices: Vec<usize> = Vec::with_capacity(n);
+
+    for &addr_str in relay_chain.iter() {
+        let sa: std::net::SocketAddr = addr_str
+            .parse()
+            .map_err(|e| format!("parse relay_chain addr {}: {}", addr_str, e))?;
+        let sa_v4 = match sa {
+            std::net::SocketAddr::V4(v4) => v4,
+            _ => return Err(format!("relay_chain addr must be IPv4: {}", addr_str)),
+        };
+        let rid = relay_id(addr_str);
+        let relay_index = *state
+            .relay_data
+            .relay_id_to_index
+            .get(&rid)
+            .ok_or_else(|| format!("unknown relay in chain: {}", addr_str))?;
+        if relay_index >= state.relay_data.relay_public_keys.len() {
+            return Err(format!("no public key for relay in chain: {}", addr_str));
+        }
+        let relay_pk = state.relay_data.relay_public_keys[relay_index];
+        let key = derive_relay_session_key(&backend_sk, &relay_pk, &relay_pk, &backend_pk);
+        relay_sas.push(sa_v4);
+        relay_keys.push(key);
+        relay_indices.push(relay_index);
+    }
+
+    // Token[0]: client view - next = relay_chain[0], prev = 0, encrypted with key_0.
+    let relay0_ip = relay_sas[0].ip().octets();
+    let relay0_port = relay_sas[0].port();
+    let base_token = relay_xdp_common::RouteToken {
+        session_private_key: *session_private_key,
+        expire_timestamp,
+        session_id,
+        envelope_kbps_up: 10_000,
+        envelope_kbps_down: 10_000,
+        next_address: u32::from_be_bytes(relay0_ip).to_be(),
+        prev_address: 0,
+        next_port: relay0_port.to_be(),
+        prev_port: 0,
+        session_version: 1,
+        next_internal: 0,
+        prev_internal: 0,
+    };
+    let client_enc = encrypt_route_token(&base_token, &relay_keys[0]);
+
+    // Token[i+1] for each relay[i]: wire token - next = relay[i+1] or bench_server,
+    // prev = client_pub_v4 (i==0) or relay_data.relay_addresses[relay_indices[i-1]].ip (i>0).
+    let mut chain_tokens_hex: Vec<String> = Vec::with_capacity(n);
+    for i in 0..n {
+        let (next_ip_bytes, next_port) = if i + 1 < n {
+            (relay_sas[i + 1].ip().octets(), relay_sas[i + 1].port())
+        } else {
+            (server_ip, server_port)
+        };
+        let prev_addr_be = if i == 0 {
+            match client_pub_v4 {
+                Some(v4) => u32::from_be_bytes(v4.octets()).to_be(),
+                None => 0,
+            }
+        } else {
+            // prev = public IP of relay[i-1] from relay_data (authoritative).
+            let prev_addr = state.relay_data.relay_addresses[relay_indices[i - 1]];
+            u32::from_be_bytes(prev_addr.ip().octets()).to_be()
+        };
+        let wire_token = relay_xdp_common::RouteToken {
+            next_address: u32::from_be_bytes(next_ip_bytes).to_be(),
+            next_port: next_port.to_be(),
+            prev_address: prev_addr_be,
+            prev_port: 0,
+            ..base_token
+        };
+        let wire_enc = encrypt_route_token(&wire_token, &relay_keys[i]);
+        chain_tokens_hex.push(hex_encode(&wire_enc));
+    }
+
+    Ok((
+        hex_encode(&client_enc),
+        chain_tokens_hex,
+        hex_encode(&relay_keys[0]),
     ))
 }
 

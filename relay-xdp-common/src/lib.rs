@@ -12,6 +12,12 @@
 pub const MAX_RELAYS: usize = 1024;
 pub const MAX_SESSIONS: usize = 100_000;
 
+/// Maximum number of relay hops in a single route chain.
+/// Shared by eBPF, userspace, relay-backend, and relay-sdk.
+/// num_tokens_max = MAX_RELAY_HOPS + 2 (client_view + zeros_pad).
+/// ROUTE_REQUEST max body = 18 + MAX_RELAY_HOPS * 111 = 351 B - well within MTU 1200.
+pub const MAX_RELAY_HOPS: usize = 3;
+
 pub const RELAY_HEADER_BYTES: usize = 25;
 pub const RELAY_MTU: usize = 1200;
 pub const RELAY_MAX_PACKET_BYTES: usize = 1384;

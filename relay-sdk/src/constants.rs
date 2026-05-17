@@ -28,7 +28,9 @@ pub const PACKET_BODY_OFFSET: usize = 18;
 pub const SESSION_PRIVATE_KEY_BYTES: usize = 32;
 pub const ENCRYPTED_ROUTE_TOKEN_BYTES: usize = 111; // nonce(24) + plaintext(71) + tag(16)
 pub const ENCRYPTED_CONTINUE_TOKEN_BYTES: usize = 57; // nonce(24) + plaintext(17) + tag(16)
-pub const MAX_TOKENS: usize = 7;
+/// Maximum number of tokens in a route update = MAX_RELAY_HOPS(3) + client_view(1) + zeros_pad(1).
+/// Aligned with relay_xdp_common::MAX_RELAY_HOPS to prevent unsupported 5-relay chains.
+pub const MAX_TOKENS: usize = 5;
 // Route update types
 pub const UPDATE_TYPE_DIRECT: u8 = 0;
 pub const UPDATE_TYPE_ROUTE: u8 = 1;

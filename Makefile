@@ -260,17 +260,27 @@ e2e-teardown:
 #   All address variables are OPTIONAL when STACK= is set - they are auto-resolved
 #   from Pulumi stack outputs via stack_outputs.py when not explicitly provided.
 #
-#   Minimal usage (auto-resolve addresses from staging stack):
+#   Minimal usage (auto-resolve ALL addresses from staging stack):
 #     make bench-relay
 #     make bench-relay STACK=staging DURATION_SECS=120
 #
 #   Explicit usage (override individual vars, bypasses stack_outputs.py):
 #     make bench-relay RELAY_ADDR=10.0.0.1:40000 BACKEND_ADMIN=http://10.0.0.2:8091
 #
+#   Multi-hop usage (2-relay chain):
+#     make bench-relay RELAY_CHAIN=52.201.126.193:40000,52.48.191.174:40000 DURATION_SECS=60
+#     make bench-relay RELAY_CHAIN=relay1:40000,relay2:40000 BACKEND_ADMIN=http://backend:8091
+#
+#   Note: BACKEND_ADMIN / BENCH_SERVER_HTTP / BENCH_SERVER_UDP are auto-resolved from
+#   the Pulumi stack whenever any of them is not explicitly provided - this applies to
+#   both single-hop (RELAY_ADDR) and multi-hop (RELAY_CHAIN) runs.
+#
 #   Optional overrides:
 #     STACK            (default: staging)   Pulumi stack to resolve addresses from
-#     RELAY_ADDR       auto: first IP in RELAY_PUBLIC_IPS + :40000
-#     BACKEND_ADMIN    auto: http://BACKEND_HOST:ADMIN_BACKEND_PORT
+#     RELAY_ADDR       auto: first IP in RELAY_PUBLIC_IPS + :40000  (single-hop)
+#     RELAY_CHAIN      multi-hop: comma-separated IP:PORT list (overrides RELAY_ADDR)
+#                      e.g. RELAY_CHAIN=52.201.126.193:40000,52.48.191.174:40000
+#     BACKEND_ADMIN    auto: http://BACKEND_HOST:ADMIN_BACKEND_PORT (port 8091)
 #     BENCH_SERVER_HTTP auto: BENCH_HOST:18080
 #     BENCH_SERVER_UDP  auto: BENCH_HOST:17777
 #     BENCH_CLIENT_UDP  (default 0.0.0.0:17778)
@@ -278,6 +288,7 @@ e2e-teardown:
 #     DURATION_SECS     (default 60 - long enough to exercise route refresh)
 # ---------------------------------------------------------------------------
 RELAY_ADDR        ?=
+RELAY_CHAIN       ?=
 BACKEND_ADMIN     ?=
 BENCH_SERVER_HTTP ?=
 BENCH_SERVER_UDP  ?=
@@ -302,24 +313,38 @@ bench-relay:
 	_admin="$(BACKEND_ADMIN)"; \
 	_bench_http="$(BENCH_SERVER_HTTP)"; \
 	_bench_udp="$(BENCH_SERVER_UDP)"; \
-	if [ -z "$$_relay" ]; then \
-		echo "[bench-relay] RELAY_ADDR not set - resolving from stack=$(STACK) via stack_outputs.py..."; \
+	if [ -z "$$_relay" ] && [ -z "$(RELAY_CHAIN)" ] \
+	   || [ -z "$$_admin" ] || [ -z "$$_bench_http" ] || [ -z "$$_bench_udp" ]; then \
+		echo "[bench-relay] resolving missing addresses from stack=$(STACK) via stack_outputs.py..."; \
 		eval $$($(INFRA_PYTHON) infra/stack_outputs.py --stack $(STACK) --format env); \
-		_relay=$$(echo $$RELAY_PUBLIC_IPS | awk '{print $$1}'):40000; \
-		_admin=http://$$BACKEND_HOST:$$ADMIN_BACKEND_PORT; \
-		_bench_http=$$BENCH_HOST:18080; \
-		_bench_udp=$$BENCH_HOST:17777; \
+		[ -z "$$_relay" ] && [ -z "$(RELAY_CHAIN)" ] && _relay=$$(echo $$RELAY_PUBLIC_IPS | awk '{print $$1}'):40000; \
+		[ -z "$$_admin" ]      && _admin=http://$$BACKEND_HOST:$$ADMIN_BACKEND_PORT; \
+		[ -z "$$_bench_http" ] && _bench_http=$$BENCH_HOST:18080; \
+		[ -z "$$_bench_udp" ]  && _bench_udp=$$BENCH_HOST:17777; \
 	fi; \
-	echo "[bench-relay] relay=$$_relay backend=$$_admin bench_http=$$_bench_http bench_udp=$$_bench_udp duration=$(DURATION_SECS)s pps=$(TARGET_PPS)"; \
-	BENCH_MODE=relay \
-	DURATION_SECS=$(DURATION_SECS) \
-	TARGET_PPS=$(TARGET_PPS) \
-	RELAY_ADDR=$$_relay \
-	BACKEND_ADMIN=$$_admin \
-	BENCH_SERVER_HTTP=$$_bench_http \
-	BENCH_SERVER_UDP=$$_bench_udp \
-	BENCH_CLIENT_UDP=$(BENCH_CLIENT_UDP) \
-	./target/release/bench_client
+	if [ -n "$(RELAY_CHAIN)" ]; then \
+		echo "[bench-relay] relay_chain=$(RELAY_CHAIN) backend=$$_admin bench_http=$$_bench_http bench_udp=$$_bench_udp duration=$(DURATION_SECS)s pps=$(TARGET_PPS)"; \
+		BENCH_MODE=relay \
+		DURATION_SECS=$(DURATION_SECS) \
+		TARGET_PPS=$(TARGET_PPS) \
+		RELAY_CHAIN=$(RELAY_CHAIN) \
+		BACKEND_ADMIN=$$_admin \
+		BENCH_SERVER_HTTP=$$_bench_http \
+		BENCH_SERVER_UDP=$$_bench_udp \
+		BENCH_CLIENT_UDP=$(BENCH_CLIENT_UDP) \
+		./target/release/bench_client; \
+	else \
+		echo "[bench-relay] relay=$$_relay backend=$$_admin bench_http=$$_bench_http bench_udp=$$_bench_udp duration=$(DURATION_SECS)s pps=$(TARGET_PPS)"; \
+		BENCH_MODE=relay \
+		DURATION_SECS=$(DURATION_SECS) \
+		TARGET_PPS=$(TARGET_PPS) \
+		RELAY_ADDR=$$_relay \
+		BACKEND_ADMIN=$$_admin \
+		BENCH_SERVER_HTTP=$$_bench_http \
+		BENCH_SERVER_UDP=$$_bench_udp \
+		BENCH_CLIENT_UDP=$(BENCH_CLIENT_UDP) \
+		./target/release/bench_client; \
+	fi
 
 # bench-deploy: build and deploy ALL bench-related services to the staging stack.
 #   Deploys relay-backend (backend node) AND bench_server (bench node).

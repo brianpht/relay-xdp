@@ -27,7 +27,9 @@
 //   BENCH_SERVER_UDP   (default: 127.0.0.1:17777)
 //   BENCH_CLIENT_UDP   (default: 127.0.0.1:17778)
 //   BACKEND_ADMIN      (default: http://127.0.0.1:81)
-//   RELAY_ADDR         (required in relay mode)
+//   RELAY_ADDR         (required in relay mode when RELAY_CHAIN is not set)
+//   RELAY_CHAIN        (optional; comma-separated IP:PORT list for multi-hop;
+//                       overrides RELAY_ADDR when set; e.g. "1.2.3.4:40000,5.6.7.8:40000")
 //   TARGET_PPS         (default: 1000)
 //   PAYLOAD_BYTES      (default: 128, minimum 8)
 //   DURATION_SECS      (default: 30)
@@ -82,7 +84,10 @@ struct Config {
 enum BenchMode {
     Direct,
     Relay {
-        relay_addr: String,
+        /// Full relay chain (len >= 1). relay_chain[0] is the first hop.
+        /// Populated from RELAY_CHAIN env var (comma-separated) when set,
+        /// otherwise from RELAY_ADDR (single-hop backward compat).
+        relay_chain: Vec<String>,
         backend_admin: String,
     },
 }
@@ -113,12 +118,28 @@ fn read_config() -> Result<Config> {
 
     let mode = match mode_str.as_str() {
         "relay" => {
-            let relay_addr =
-                std::env::var("RELAY_ADDR").context("RELAY_ADDR required in relay mode")?;
+            // RELAY_CHAIN supersedes RELAY_ADDR when set.
+            // RELAY_CHAIN = comma-separated "IP:PORT" list for multi-hop.
+            // Falls back to single RELAY_ADDR for 1-hop backward compat.
+            let relay_chain_env = std::env::var("RELAY_CHAIN").unwrap_or_default();
+            let relay_chain: Vec<String> = if !relay_chain_env.is_empty() {
+                relay_chain_env
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect()
+            } else {
+                let relay_addr =
+                    std::env::var("RELAY_ADDR").context("RELAY_ADDR required in relay mode")?;
+                vec![relay_addr]
+            };
+            if relay_chain.is_empty() {
+                bail!("RELAY_CHAIN is empty");
+            }
             let backend_admin =
                 std::env::var("BACKEND_ADMIN").unwrap_or_else(|_| "http://127.0.0.1:81".into());
             BenchMode::Relay {
-                relay_addr,
+                relay_chain,
                 backend_admin,
             }
         }
@@ -263,19 +284,34 @@ struct BenchTokenResponse {
     /// BLAKE2b-512(X25519(backend_sk, relay_pk) || relay_pk || backend_pk)[..32].
     #[serde(default)]
     relay_secret_key: String,
+    /// Multi-hop: N hex-encoded 111B wire tokens (one per relay in the chain).
+    /// Token[i+1] is encrypted with relay[i]'s symmetric key.
+    /// Empty in legacy 1-hop mode (use wire_route_token instead).
+    #[serde(default)]
+    relay_chain_tokens: Vec<String>,
 }
 
 fn fetch_bench_token(
     admin_url: &str,
-    relay_addr: &str,
+    relay_chain: &[String],
     bench_server_addr: &str,
 ) -> Result<BenchTokenResponse> {
     let host_port = url_host_port(admin_url);
     // Both query values contain only digits/dots/colons - no encoding needed.
-    let path = format!(
-        "/bench_token?relay_addr={}&bench_server_addr={}",
-        relay_addr, bench_server_addr
-    );
+    let path = if relay_chain.len() > 1 {
+        // Multi-hop: use relay_chain param (comma-separated).
+        format!(
+            "/bench_token?relay_chain={}&bench_server_addr={}",
+            relay_chain.join(","),
+            bench_server_addr
+        )
+    } else {
+        // Single-hop: use relay_addr param for backward compat with older backends.
+        format!(
+            "/bench_token?relay_addr={}&bench_server_addr={}",
+            relay_chain[0], bench_server_addr
+        )
+    };
     let body = http_get_body(host_port, &path)
         .with_context(|| format!("GET /bench_token from {}", admin_url))?;
     serde_json::from_str(&body).with_context(|| format!("parse /bench_token response: {}", body))
@@ -464,8 +500,8 @@ impl PingerState {
 struct RouteRefreshConfig {
     /// relay-backend admin URL (e.g. "http://1.2.3.4:8091")
     admin_url: String,
-    /// relay UDP address "IP:PORT" - must be a known relay in relays.json
-    relay_addr: String,
+    /// Full relay chain (len >= 1). [0] is the first hop.
+    relay_chain: Vec<String>,
     /// bench_server HTTP address "IP:PORT" for /register_session
     bench_server_http: String,
     /// bench_server UDP address "IP:PORT" for /bench_token + register_session
@@ -485,7 +521,9 @@ struct RefreshedRouteData {
     #[allow(dead_code)]
     session_private_key: [u8; SESSION_PRIVATE_KEY_BYTES],
     client_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES],
-    wire_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES],
+    /// Wire tokens for each relay hop. len == relay_chain.len().
+    /// Token[i+1] is relay_chain_tokens[i] (encrypted with relay[i]'s key).
+    relay_chain_tokens: Vec<[u8; ENCRYPTED_ROUTE_TOKEN_BYTES]>,
     ping_key: [u8; PING_KEY_BYTES],
     magic: [u8; 8],
 }
@@ -497,13 +535,10 @@ struct RefreshedRouteData {
 /// The caller is responsible for updating shared keys and calling route_update
 /// on the Client after this returns.
 fn do_refresh(cfg: &RouteRefreshConfig) -> Result<RefreshedRouteData> {
-    let tok = fetch_bench_token(&cfg.admin_url, &cfg.relay_addr, &cfg.bench_server_udp)
+    let tok = fetch_bench_token(&cfg.admin_url, &cfg.relay_chain, &cfg.bench_server_udp)
         .context("refresh: GET /bench_token")?;
 
-    if tok.relay_secret_key.is_empty()
-        || tok.client_route_token.is_empty()
-        || tok.wire_route_token.is_empty()
-    {
+    if tok.relay_secret_key.is_empty() || tok.client_route_token.is_empty() {
         bail!("refresh: /bench_token missing relay token fields");
     }
 
@@ -516,29 +551,61 @@ fn do_refresh(cfg: &RouteRefreshConfig) -> Result<RefreshedRouteData> {
         "client_route_token",
         ENCRYPTED_ROUTE_TOKEN_BYTES,
     )?;
-    let wire_route_token_vec = decode_hex_n(
-        &tok.wire_route_token,
-        "wire_route_token",
-        ENCRYPTED_ROUTE_TOKEN_BYTES,
-    )?;
     let client_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] =
         client_route_token_vec
             .try_into()
             .map_err(|_| anyhow::anyhow!("client_route_token: wrong length"))?;
-    let wire_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] = wire_route_token_vec
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("wire_route_token: wrong length"))?;
+
+    // Normalize relay_chain_tokens from the response.
+    // Multi-hop response: relay_chain_tokens has N entries (one per relay).
+    // Legacy 1-hop response: relay_chain_tokens is empty; use wire_route_token.
+    let relay_chain_tokens: Vec<[u8; ENCRYPTED_ROUTE_TOKEN_BYTES]> =
+        if !tok.relay_chain_tokens.is_empty() {
+            let mut v = Vec::with_capacity(tok.relay_chain_tokens.len());
+            for (i, hex) in tok.relay_chain_tokens.iter().enumerate() {
+                let bytes: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] = decode_hex_n(
+                    hex,
+                    &format!("relay_chain_tokens[{}]", i),
+                    ENCRYPTED_ROUTE_TOKEN_BYTES,
+                )?
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("relay_chain_tokens[{}]: wrong length", i))?;
+                v.push(bytes);
+            }
+            v
+        } else if !tok.wire_route_token.is_empty() {
+            // Legacy 1-hop path: wire_route_token is Token[1].
+            let bytes: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] = decode_hex_n(
+                &tok.wire_route_token,
+                "wire_route_token",
+                ENCRYPTED_ROUTE_TOKEN_BYTES,
+            )?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("wire_route_token: wrong length"))?;
+            vec![bytes]
+        } else {
+            bail!("refresh: /bench_token missing both relay_chain_tokens and wire_route_token");
+        };
 
     // Register the new session with bench_server so it can:
     //   - synthesise ROUTE_RESPONSE for the new ROUTE_REQUEST
     //   - accept CLIENT_TO_SERVER packets stamped with the new session_private_key
     //   - send updated SERVER_PING with fresh ping_key/magic
+    // bench_server must ping the LAST relay in the chain - that is the relay
+    // directly forwarding packets to bench_server. SERVER_PING from bench_server
+    // populates the last relay's whitelist entry for bench_server's IP:port,
+    // which allows the last relay to forward ROUTE_REQUEST to bench_server.
+    // For single-hop this is identical to relay_chain[0].
+    let server_relay = cfg
+        .relay_chain
+        .last()
+        .expect("relay_chain is non-empty (validated at startup)");
     register_session(
         &cfg.bench_server_http,
         tok.session_id,
         tok.session_version,
         &session_private_key,
-        &cfg.relay_addr,
+        server_relay,
         Some(&tok.ping_key),
         Some(&tok.current_magic),
         Some(&cfg.bench_server_udp),
@@ -550,7 +617,7 @@ fn do_refresh(cfg: &RouteRefreshConfig) -> Result<RefreshedRouteData> {
         session_version: tok.session_version,
         session_private_key,
         client_route_token,
-        wire_route_token,
+        relay_chain_tokens,
         ping_key,
         magic,
     })
@@ -561,13 +628,14 @@ struct RelaySetup {
     session_version: u8,
     session_private_key: [u8; SESSION_PRIVATE_KEY_BYTES],
     // Per-relay XChaCha20-Poly1305 symmetric key derived by the backend.
+    // Always relay[0]'s key - used by RouteManager to decrypt Token[0].
     relay_secret_key: [u8; XCHACHA_KEY_BYTES],
-    // Token[0] (client view): next_address = relay. SDK uses this to send
-    // CLIENT_TO_SERVER packets to the relay (first hop).
+    // Token[0] (client view): next_address = relay[0]. SDK uses this to send
+    // CLIENT_TO_SERVER packets to the first relay.
     client_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES],
-    // Token[1] (wire token): next_address = bench_server. The relay decrypts
-    // this off the wire and forwards the packet to bench_server.
-    wire_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES],
+    // Wire tokens: relay_chain_tokens[i] = Token[i+1], encrypted with relay[i]'s key.
+    // len == relay_chain.len() (one token per relay in the chain).
+    relay_chain_tokens: Vec<[u8; ENCRYPTED_ROUTE_TOKEN_BYTES]>,
     magic: [u8; 8],
 }
 
@@ -605,17 +673,20 @@ fn setup_relay_route(
         .unwrap_or_else(|_| "127.0.0.1:17778".parse().unwrap());
     let client_ext = Address::from(client_ext_sa);
 
-    // Tokens vec layout:
-    //   Token[0] = client_route_token (next = relay)         - decrypted locally
-    //   Token[1] = wire_route_token   (next = bench_server)  - decrypted by relay
-    //   Token[2] = zeros (terminator)
+    // Tokens vec layout (N = rs.relay_chain_tokens.len()):
+    //   Token[0]     = client_route_token (next = relay[0])     - decrypted locally
+    //   Token[1..N]  = relay_chain_tokens                       - decrypted by relay[i]
+    //   Token[N+1]   = zeros (terminator / trailing pad)
     //
-    // Wire bytes sent by the SDK = tokens[111..3*111] = Token[1] + Token[2].
-    // The relay strips Token[1] via bpf_xdp_adjust_head and forwards
-    // [type=1][pittle/chonkle][Token[2]] to bench_server (43+111 = 154 bytes).
-    let mut tokens = Vec::with_capacity(ENCRYPTED_ROUTE_TOKEN_BYTES * 3);
+    // Wire bytes sent by the SDK = tokens[111..] = Token[1..N+1].
+    // Each relay strips its token via bpf_xdp_adjust_head and forwards the rest.
+    let n = rs.relay_chain_tokens.len();
+    let num_tokens = n + 2; // client_view(1) + wire_tokens(N) + zeros_pad(1)
+    let mut tokens = Vec::with_capacity(ENCRYPTED_ROUTE_TOKEN_BYTES * num_tokens);
     tokens.extend_from_slice(&rs.client_route_token);
-    tokens.extend_from_slice(&rs.wire_route_token);
+    for chain_tok in &rs.relay_chain_tokens {
+        tokens.extend_from_slice(chain_tok);
+    }
     tokens.extend_from_slice(&[0u8; ENCRYPTED_ROUTE_TOKEN_BYTES]);
 
     // client_secret_key = relay_secret_key so RouteManager.begin_next_route
@@ -625,14 +696,15 @@ fn setup_relay_route(
 
     // Deliver route update -> RouteManager enters pending state and pre-builds
     // the ROUTE_REQUEST packet (sent on first Tick in the network thread).
-    client.route_update(UPDATE_TYPE_ROUTE, 3, tokens, rs.magic, client_ext);
+    client.route_update(UPDATE_TYPE_ROUTE, num_tokens, tokens, rs.magic, client_ext);
     inner.pump_commands();
 
     log::info!(
-        "relay route pending: session={:016x} relay={} server={}",
+        "relay route pending: session={:016x} relay={} server={} hops={}",
         rs.session_id,
         relay_addr,
-        server_udp_addr
+        server_udp_addr,
+        n
     );
     let _ = rs.session_version; // silence unused field warnings
     let _ = rs.session_private_key;
@@ -924,7 +996,13 @@ async fn main() -> Result<()> {
 
     let mode_label = match &cfg.mode {
         BenchMode::Direct => "direct",
-        BenchMode::Relay { .. } => "relay",
+        BenchMode::Relay { relay_chain, .. } => {
+            if relay_chain.len() > 1 {
+                "relay-multi-hop"
+            } else {
+                "relay"
+            }
+        }
     };
     log::info!(
         "bench_client starting: mode={} pps={} payload={}B duration={}s",
@@ -1005,35 +1083,43 @@ async fn main() -> Result<()> {
         }
 
         BenchMode::Relay {
-            relay_addr,
+            relay_chain,
             backend_admin,
         } => {
+            // relay_addr = first hop (relay-sdk connects to this as the initial relay).
+            let relay_addr = &relay_chain[0];
+
+            // server_relay = last hop (bench_server sends SERVER_PING here to keep
+            // its IP:port whitelisted on the last relay so ROUTE_REQUEST can be
+            // forwarded all the way through to bench_server).
+            // For single-hop this equals relay_addr.
+            let server_relay = relay_chain
+                .last()
+                .expect("relay_chain is non-empty (validated above)");
+
             // 1. Fetch bench_token from relay-backend admin. Backend now also
-            //    derives the per-relay symmetric key and returns a pre-encrypted
-            //    111-byte RouteToken (since bench_client cannot derive the key).
-            let tok = fetch_bench_token(backend_admin, relay_addr, &cfg.bench_server_udp)
+            //    derives the per-relay symmetric key and returns pre-encrypted
+            //    111-byte RouteTokens (since bench_client cannot derive the keys).
+            let tok = fetch_bench_token(backend_admin, relay_chain, &cfg.bench_server_udp)
                 .context("GET /bench_token from relay-backend admin")?;
 
             log::info!(
-                "bench_token: session_id={} version={} relay={}",
+                "bench_token: session_id={} version={} relay={} hops={}",
                 tok.session_id,
                 tok.session_version,
-                tok.relay_address
+                tok.relay_address,
+                relay_chain.len()
             );
 
             // 2. Decode hex fields from JSON response.
             let session_private_key =
                 decode_hex_32(&tok.session_private_key, "session_private_key")?;
 
-            if tok.relay_secret_key.is_empty()
-                || tok.client_route_token.is_empty()
-                || tok.wire_route_token.is_empty()
-            {
+            if tok.relay_secret_key.is_empty() || tok.client_route_token.is_empty() {
                 bail!(
-                    "/bench_token did not return relay_secret_key + client_route_token + \
-                     wire_route_token. Backend likely could not look up the relay or derive \
-                     its per-relay key. Check that {} is a known relay in relays.json on the \
-                     backend.",
+                    "/bench_token did not return relay_secret_key + client_route_token. \
+                     Backend likely could not look up the relay or derive its per-relay key. \
+                     Check that {} is a known relay in relays.json on the backend.",
                     relay_addr
                 );
             }
@@ -1048,13 +1134,40 @@ async fn main() -> Result<()> {
             .try_into()
             .map_err(|_| anyhow::anyhow!("client_route_token: wrong length"))?;
 
-            let wire_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] = decode_hex_n(
-                &tok.wire_route_token,
-                "wire_route_token",
-                ENCRYPTED_ROUTE_TOKEN_BYTES,
-            )?
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("wire_route_token: wrong length"))?;
+            // Normalize wire tokens from the response.
+            // Multi-hop: relay_chain_tokens has N entries (one per relay in chain).
+            // Legacy 1-hop: relay_chain_tokens is empty; use wire_route_token.
+            let relay_chain_tokens: Vec<[u8; ENCRYPTED_ROUTE_TOKEN_BYTES]> =
+                if !tok.relay_chain_tokens.is_empty() {
+                    let mut v = Vec::with_capacity(tok.relay_chain_tokens.len());
+                    for (i, hex) in tok.relay_chain_tokens.iter().enumerate() {
+                        let bytes: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] = decode_hex_n(
+                            hex,
+                            &format!("relay_chain_tokens[{}]", i),
+                            ENCRYPTED_ROUTE_TOKEN_BYTES,
+                        )?
+                        .try_into()
+                        .map_err(|_| anyhow::anyhow!("relay_chain_tokens[{}]: wrong length", i))?;
+                        v.push(bytes);
+                    }
+                    v
+                } else if !tok.wire_route_token.is_empty() {
+                    // Legacy 1-hop: wire_route_token is Token[1].
+                    let bytes: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] = decode_hex_n(
+                        &tok.wire_route_token,
+                        "wire_route_token",
+                        ENCRYPTED_ROUTE_TOKEN_BYTES,
+                    )?
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("wire_route_token: wrong length"))?;
+                    vec![bytes]
+                } else {
+                    bail!(
+                        "/bench_token missing both relay_chain_tokens and wire_route_token. \
+                         Check that {} is a known relay in relays.json on the backend.",
+                        relay_addr
+                    );
+                };
 
             let magic = decode_hex_8(&tok.current_magic, "current_magic")?;
             let ping_key = decode_hex_32(&tok.ping_key, "ping_key")?;
@@ -1071,7 +1184,7 @@ async fn main() -> Result<()> {
                 ),
             };
 
-            // Parse RELAY_ADDR for relay IP / port octets.
+            // Parse RELAY_ADDR (first hop) for relay IP / port octets.
             let relay_sa_for_ping: std::net::SocketAddr = relay_addr
                 .parse()
                 .with_context(|| format!("parse relay addr: {}", relay_addr))?;
@@ -1105,7 +1218,7 @@ async fn main() -> Result<()> {
             // network thread).
             refresh_cfg = Some(Arc::new(RouteRefreshConfig {
                 admin_url: backend_admin.clone(),
-                relay_addr: relay_addr.clone(),
+                relay_chain: relay_chain.clone(),
                 bench_server_http: cfg.bench_server_http.clone(),
                 bench_server_udp: cfg.bench_server_udp.clone(),
                 client_udp_addr: cfg.bench_client_udp.clone(),
@@ -1118,7 +1231,7 @@ async fn main() -> Result<()> {
                 session_private_key,
                 relay_secret_key,
                 client_route_token,
-                wire_route_token,
+                relay_chain_tokens,
                 magic,
             };
 
@@ -1135,15 +1248,16 @@ async fn main() -> Result<()> {
             )?;
 
             // 4. Register session with bench_server. Pass ping_key + magic +
-            //    bench_server's public address so bench_server sends SERVER_PING
-            //    to keep its IP:port whitelisted on the relay (otherwise relay
-            //    drops ROUTE_REQUEST when forwarding to next_hop).
+            //    server_relay (= last relay in chain) so bench_server sends
+            //    SERVER_PING to the last relay, populating that relay's whitelist
+            //    entry for bench_server's IP:port (otherwise the last relay drops
+            //    ROUTE_REQUEST when forwarding to bench_server).
             register_session(
                 &cfg.bench_server_http,
                 tok.session_id,
                 tok.session_version,
                 &session_private_key,
-                relay_addr,
+                server_relay,
                 Some(&tok.ping_key),
                 Some(&tok.current_magic),
                 Some(&cfg.bench_server_udp),
@@ -1151,10 +1265,12 @@ async fn main() -> Result<()> {
             .context("register_session with bench_server")?;
 
             log::info!(
-                "relay mode: session {:016x} registered, relay={} server={}",
+                "relay mode: session {:016x} registered, relay={} server_relay={} server={} hops={}",
                 tok.session_id,
                 relay_addr,
-                cfg.bench_server_http
+                server_relay,
+                cfg.bench_server_http,
+                relay_chain.len()
             );
             // route_active stays false; network thread sets it after receiving
             // ROUTE_RESPONSE from relay-xdp.
@@ -1266,10 +1382,15 @@ async fn main() -> Result<()> {
                         keys.magic = refreshed.magic;
                     }
 
-                    // Build new token vec: [Token[0] client view][Token[1] wire][Token[2] zeros]
-                    let mut tokens = Vec::with_capacity(ENCRYPTED_ROUTE_TOKEN_BYTES * 3);
+                    // Build new token vec:
+                    //   [Token[0] client view] + [Token[1..N] wire tokens] + [Token[N+1] zeros]
+                    let n = refreshed.relay_chain_tokens.len();
+                    let num_tokens = n + 2;
+                    let mut tokens = Vec::with_capacity(ENCRYPTED_ROUTE_TOKEN_BYTES * num_tokens);
                     tokens.extend_from_slice(&refreshed.client_route_token);
-                    tokens.extend_from_slice(&refreshed.wire_route_token);
+                    for chain_tok in &refreshed.relay_chain_tokens {
+                        tokens.extend_from_slice(chain_tok);
+                    }
                     tokens.extend_from_slice(&[0u8; ENCRYPTED_ROUTE_TOKEN_BYTES]);
 
                     // Parse client_ext from the configured UDP bind address.
@@ -1283,7 +1404,7 @@ async fn main() -> Result<()> {
 
                     refresh_client.lock().unwrap().route_update(
                         UPDATE_TYPE_ROUTE,
-                        3,
+                        num_tokens,
                         tokens,
                         refreshed.magic,
                         client_ext,

@@ -758,3 +758,192 @@ async fn test_bench_token_two_token_wire_compat() {
         "Token[1].prev_address must be 0 when no ConnectInfo is present"
     );
 }
+
+// ===================================================================
+// Test 13: GET /bench_token with relay_chain builds N-hop token chain
+//
+// Verifies two-relay chain (relay_chain=10.0.0.1:40000,10.0.0.2:40000
+// &bench_server_addr=10.0.0.3:7777):
+//   relay_secret_key  = key for relay-a (index 0)
+//   client_route_token (Token[0]):
+//     - decryptable with key_a
+//     - next_address = relay-a (10.0.0.1:40000)
+//   relay_chain_tokens[0] (Token[1]):
+//     - decryptable with key_a (relay-a decrypts this)
+//     - next_address = relay-b (10.0.0.2:40000)
+//     - prev_address = 0 (no ConnectInfo in oneshot)
+//   relay_chain_tokens[1] (Token[2]):
+//     - decryptable with key_b (relay-b decrypts this)
+//     - next_address = bench_server (10.0.0.3:7777)
+//     - prev_address = relay-a.ip (10.0.0.1) from relay_data
+// ===================================================================
+
+#[tokio::test]
+async fn test_bench_token_chain_two_relays() {
+    use relay_sdk::crypto::derive_relay_session_key;
+    use relay_sdk::tokens::decrypt_route_token;
+    use x25519_dalek::{PublicKey, StaticSecret};
+
+    // Known relay public keys for relay-a (index 0) and relay-b (index 1).
+    let relay_a_pk = [0x42u8; 32];
+    let relay_b_pk = [0x43u8; 32];
+
+    // Backend key pair (deterministic for this test).
+    let backend_sk_bytes = [0x01u8; 32];
+    let backend_pk_bytes: [u8; 32] = {
+        let sk = StaticSecret::from(backend_sk_bytes);
+        PublicKey::from(&sk).to_bytes()
+    };
+
+    // Expected per-relay symmetric keys.
+    let key_a: [u8; 32] = derive_relay_session_key(
+        &backend_sk_bytes,
+        &relay_a_pk,
+        &relay_a_pk,
+        &backend_pk_bytes,
+    );
+    let key_b: [u8; 32] = derive_relay_session_key(
+        &backend_sk_bytes,
+        &relay_b_pk,
+        &relay_b_pk,
+        &backend_pk_bytes,
+    );
+
+    // Relay data with known public keys at index 0 and 1.
+    let mut rd = test_relay_data();
+    rd.relay_public_keys[0] = relay_a_pk;
+    rd.relay_public_keys[1] = relay_b_pk;
+
+    let state = Arc::new(AppState {
+        config: Arc::new(Config {
+            relay_backend_private_key: backend_sk_bytes.to_vec(),
+            relay_backend_public_key: backend_pk_bytes.to_vec(),
+            ..test_config()
+        }),
+        relay_data: Arc::new(rd),
+        relay_manager: Arc::new(RelayManager::new(false)),
+        relays_csv: RwLock::new(vec![]),
+        cost_matrix_data: RwLock::new(vec![]),
+        route_matrix_data: RwLock::new(vec![]),
+        start_time: SystemTime::now(),
+        delay_completed: AtomicBool::new(true),
+        leader_election: Arc::new(RedisLeaderElection::new("127.0.0.1:6379", "test", 0)),
+        magic_rotator: Arc::new(MagicRotator::new()),
+        last_optimize_ms: AtomicU64::new(0),
+        nonce_cache: relay_backend::replay::NonceCache::new(),
+        relay_update_replay_rejected: AtomicU64::new(0),
+        relay_update_clock_skew_rejected: AtomicU64::new(0),
+    });
+
+    let app = create_router(state);
+
+    // relay_chain = relay-a (10.0.0.1:40000), relay-b (10.0.0.2:40000)
+    // bench_server = 10.0.0.3:7777
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/bench_token?relay_chain=10.0.0.1:40000,10.0.0.2:40000&bench_server_addr=10.0.0.3:7777")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    // Helper: hex-decode + decrypt a RouteToken.
+    let sdk_decrypt = |hex_str: &str, key: &[u8; 32]| -> relay_xdp_common::RouteToken {
+        let blob: [u8; 111] = hex::decode(hex_str)
+            .expect("token hex decode failed")
+            .try_into()
+            .expect("encrypted token must be 111 bytes");
+        decrypt_route_token(&blob, key).expect("decrypt_route_token failed")
+    };
+
+    // relay_secret_key must equal key_a.
+    let relay_secret_key_hex = json["relay_secret_key"].as_str().unwrap();
+    assert!(
+        !relay_secret_key_hex.is_empty(),
+        "relay_secret_key must be present"
+    );
+    let relay_secret_key: [u8; 32] = hex::decode(relay_secret_key_hex)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(relay_secret_key, key_a, "relay_secret_key must equal key_a");
+
+    // Token[0] (client_route_token): decryptable with key_a, next = relay-a.
+    let client_token = sdk_decrypt(json["client_route_token"].as_str().unwrap(), &key_a);
+    let ct_next_addr: u32 = client_token.next_address;
+    let ct_next_port: u16 = client_token.next_port;
+    assert_eq!(
+        u32::from_be(ct_next_addr),
+        u32::from_be_bytes([10, 0, 0, 1]),
+        "Token[0].next_address must be relay-a 10.0.0.1"
+    );
+    assert_eq!(
+        u16::from_be(ct_next_port),
+        40000u16,
+        "Token[0].next_port must be 40000"
+    );
+
+    // relay_chain_tokens must have exactly 2 entries for a 2-relay chain.
+    let chain_tokens = json["relay_chain_tokens"]
+        .as_array()
+        .expect("relay_chain_tokens must be an array");
+    assert_eq!(
+        chain_tokens.len(),
+        2,
+        "relay_chain_tokens must have 2 entries for a 2-relay chain"
+    );
+
+    // Token[1] (relay_chain_tokens[0]): relay-a wire token.
+    // Decryptable with key_a. next = relay-b (10.0.0.2:40000). prev = 0 (no ConnectInfo).
+    let wire_1 = sdk_decrypt(chain_tokens[0].as_str().unwrap(), &key_a);
+    let w1_next_addr: u32 = wire_1.next_address;
+    let w1_next_port: u16 = wire_1.next_port;
+    let w1_prev_addr: u32 = wire_1.prev_address;
+    assert_eq!(
+        u32::from_be(w1_next_addr),
+        u32::from_be_bytes([10, 0, 0, 2]),
+        "relay_chain_tokens[0].next_address must be relay-b 10.0.0.2"
+    );
+    assert_eq!(
+        u16::from_be(w1_next_port),
+        40000u16,
+        "relay_chain_tokens[0].next_port must be 40000"
+    );
+    assert_eq!(
+        w1_prev_addr, 0,
+        "relay_chain_tokens[0].prev_address must be 0 (no ConnectInfo)"
+    );
+
+    // Token[2] (relay_chain_tokens[1]): relay-b wire token.
+    // Decryptable with key_b. next = bench_server (10.0.0.3:7777).
+    // prev = relay-a public IP = 10.0.0.1 (from relay_data.relay_addresses[0]).
+    let wire_2 = sdk_decrypt(chain_tokens[1].as_str().unwrap(), &key_b);
+    let w2_next_addr: u32 = wire_2.next_address;
+    let w2_next_port: u16 = wire_2.next_port;
+    let w2_prev_addr: u32 = wire_2.prev_address;
+    assert_eq!(
+        u32::from_be(w2_next_addr),
+        u32::from_be_bytes([10, 0, 0, 3]),
+        "relay_chain_tokens[1].next_address must be bench_server 10.0.0.3"
+    );
+    assert_eq!(
+        u16::from_be(w2_next_port),
+        7777u16,
+        "relay_chain_tokens[1].next_port must be 7777"
+    );
+    assert_eq!(
+        u32::from_be(w2_prev_addr),
+        u32::from_be_bytes([10, 0, 0, 1]),
+        "relay_chain_tokens[1].prev_address must be relay-a IP 10.0.0.1"
+    );
+}
