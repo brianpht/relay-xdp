@@ -199,23 +199,35 @@ async fn update_relay_backend_instance(state: Arc<AppState>) {
 
     let mut interval = tokio::time::interval(Duration::from_secs(1));
 
+    // Cached connection - created once, re-established only on error.
+    // redis::Client is a lightweight config handle (no socket); connection holds the TCP socket.
+    let client = match redis::Client::open(format!("redis://{}", redis_url)) {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("redis client error (update_relay_backend_instance disabled): {e}");
+            return;
+        }
+    };
+    let mut con: Option<redis::aio::MultiplexedConnection> = None;
+
     loop {
         interval.tick().await;
 
-        let client = match redis::Client::open(format!("redis://{}", redis_url)) {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("redis connect error: {}", e);
-                continue;
+        // Establish (or re-establish) the connection when absent.
+        if con.is_none() {
+            match client.get_multiplexed_async_connection().await {
+                Ok(c) => {
+                    log::debug!("redis connected at {redis_url}");
+                    con = Some(c);
+                }
+                Err(e) => {
+                    log::warn!("redis connection error (will retry): {e}");
+                    continue;
+                }
             }
-        };
-        let mut con = match client.get_multiplexed_async_connection().await {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("redis connection error: {}", e);
-                continue;
-            }
-        };
+        }
+
+        let Some(ref mut conn) = con else { continue };
 
         let minutes = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -226,12 +238,18 @@ async fn update_relay_backend_instance(state: Arc<AppState>) {
         let key = format!("relay-backends-{}", minutes);
         let field = format!("{}:{}", internal_address, internal_port);
 
-        let _: Result<(), _> = redis::cmd("HSET")
+        let result: Result<(), _> = redis::cmd("HSET")
             .arg(&key)
             .arg(&field)
             .arg("1")
-            .query_async(&mut con)
+            .query_async(conn)
             .await;
+
+        if let Err(e) = result {
+            log::warn!("redis HSET error (will reconnect): {e}");
+            con = None;
+            continue;
+        }
 
         log::debug!("updated relay backend instance");
     }
