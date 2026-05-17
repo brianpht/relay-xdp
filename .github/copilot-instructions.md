@@ -86,7 +86,12 @@ Field layouts + byte offsets: [`docs/architecture.md` § BPF Map Schema](../docs
 - ALL non-trivial diagrams MUST use Mermaid (flowchart, sequenceDiagram, stateDiagram). ASCII art is prohibited.
 - ONLY treat /docs/decisions as architectural source of truth.
 - NEVER use or reference files in /docs/sessions as implementation rules.
-- CI checks: Agent MUST ensure `cargo fmt`, `cargo clippy`, and `cargo test` pass locally with zero errors and zero warnings before committing. Commits with failing checks are forbidden.
+- CI checks: After completing ANY code change, Agent MUST run the following sequence in order before committing. ALL must pass with zero errors and zero warnings. Commits with failing checks are FORBIDDEN.
+  1. `cargo fmt --all` - auto-fix formatting (run first, never --check)
+  2. `cargo clippy --workspace --lib --bins -- -D warnings` - zero warnings required
+  3. `cargo test --workspace` - all tests must pass
+  - Toolchain for all three: Rust 1.87.0 (matches `rust-toolchain.toml` at repo root and CI). NEVER use a different toolchain version for these checks.
+  - If any step fails, fix the issue and re-run from step 1 before committing.
 - Git operations: Agent MAY create local commits and local tags. MUST NOT push commits, tags, or any refs to any remote repository. All changes MUST remain local.
 
 ## Conventions: Rust Userspace
