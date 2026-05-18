@@ -64,7 +64,7 @@ relay-xdp/
 |-- Cargo.toml                     Workspace root (resolver v2)
 |
 |-- relay-xdp-common/              Shared types (#[repr(C)], #![no_std])
-|   +-- src/lib.rs                 ~384 lines
+|   +-- src/lib.rs                 ~421 lines (constants, wire structs, MAX_RELAY_HOPS)
 |
 |-- relay-xdp/                     Userspace binary + lib (relay node)
 |   |-- Cargo.toml                 Pure-Rust deps (sha2, crypto_box, x25519-dalek, blake2)
@@ -95,7 +95,7 @@ relay-xdp/
 |   |   |-- config.rs              Env vars -> Config struct (~110 lines)
 |   |   |-- constants.rs           Relay protocol constants + counter name arrays (~289 lines)
 |   |   |-- state.rs               AppState - shared state (~27 lines)
-|   |   |-- handlers.rs            HTTP handlers (axum Router, 16 routes) (~626 lines)
+|   |   |-- handlers.rs            HTTP handlers (axum Router, 16 routes, /bench_token multi-hop) (~1166 lines)
 |   |   |-- encoding.rs            Bitpacked + Simple LE encoding (~867 lines)
 |   |   |-- relay_update.rs        Parse RelayUpdateRequest, build response (~218 lines)
 |   |   |-- relay_manager.rs       In-memory relay pair state tracker (~435 lines)
@@ -139,6 +139,15 @@ relay-xdp/
 |       |-- server/                ServerInner + Server handle (final destination)
 |       |-- platform/              time(), ConnectionType, socket buffer helpers
 |       +-- ffi/                   #[no_mangle] extern "C" exports (15 functions)
+|
+|-- relay-bench/                   Benchmark harness (bench_client + bench_server binaries)
+|   |-- Cargo.toml                 tokio, serde_json, hex, relay-sdk, relay-xdp-common
+|   +-- src/bin/
+|       |-- bench_client.rs        Load generator + RTT measurement. Modes: direct / relay / relay-multi-hop.
+|       |                          Reads /bench_token (relay-backend admin), assembles N+2 token array,
+|       |                          sends CLIENT_PING to keep whitelist alive, refreshes route every 10s.
+|       +-- bench_server.rs        Echo server. Receives ROUTE_REQUEST, sends ROUTE_RESPONSE + SERVER_PING.
+|                                  Accepts /register_session and /bench_token_ack via raw HTTP.
 |
 |-- relay-xdp-ebpf/               eBPF kernel program (NOT a workspace member)
 |   |-- Cargo.toml                 target: bpfel-unknown-none
