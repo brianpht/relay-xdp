@@ -40,7 +40,7 @@ make bench-relay STACK=staging RELAY_CHAIN=52.201.126.193:40000,52.48.191.174:40
 | `BENCH_CLIENT_UDP` | `127.0.0.1:17778` | Client UDP bind address |
 | `BACKEND_ADMIN` | `http://127.0.0.1:81` | relay-backend admin URL (relay mode) |
 | `RELAY_ADDR` | *(required in relay mode unless RELAY_CHAIN set)* | relay-xdp first-hop `IP:PORT` (single-hop) |
-| `RELAY_CHAIN` | *(optional)* | Comma-separated `IP:PORT` list for multi-hop, e.g. `r1:40000,r2:40000`. Supersedes `RELAY_ADDR` when set. Length must be in `[1..=MAX_RELAY_HOPS]` (currently 3). |
+| `RELAY_CHAIN` | *(optional)* | Comma-separated `IP:PORT` list for multi-hop, e.g. `r1:40000,r2:40000`. Supersedes `RELAY_ADDR` when set. Length must be in `[1..=MAX_RELAY_HOPS]` (currently 5). |
 | `TARGET_PPS` | `1000` | Target packets per second |
 | `PAYLOAD_BYTES` | `128` | Payload size in bytes (minimum 8 for timestamp) |
 | `DURATION_SECS` | `30` | Benchmark duration in seconds |
@@ -149,17 +149,20 @@ Each relay strips exactly one 111 B token via `bpf_xdp_adjust_head` and forwards
 the remainder, so by the time the packet reaches bench_server only the trailing
 zeros pad remains after the relay headers.
 
-**Design constraints** (from `relay-xdp-common::MAX_RELAY_HOPS = 3`):
+**Design constraints** (from `relay-xdp-common::MAX_RELAY_HOPS = 5`):
 
 | N (relay count) | num_tokens | ROUTE_REQUEST body (bytes) | Wire MTU headroom |
 |----------------|-----------|--------------------------|------------------|
 | 1 (single-hop) | 3 | 18 + 2 * 111 = 240 | 960 B free |
 | 2 (2-hop) | 4 | 18 + 3 * 111 = 351 | 849 B free |
-| 3 (3-hop = max) | 5 | 18 + 4 * 111 = 462 | 738 B free |
+| 3 (3-hop) | 5 | 18 + 4 * 111 = 462 | 738 B free |
+| 4 (4-hop) | 6 | 18 + 5 * 111 = 573 | 627 B free |
+| 5 (5-hop = max) | 7 | 18 + 6 * 111 = 684 | 516 B free |
 
 `relay-backend` rejects `relay_chain` with more than `MAX_RELAY_HOPS` entries with
-HTTP 400. `relay-sdk` enforces `num_tokens <= MAX_TOKENS = MAX_RELAY_HOPS + 2 = 5` at
-`route_update` time.
+HTTP 400. `relay-sdk` enforces `num_tokens <= MAX_TOKENS = MAX_RELAY_HOPS + 2 = 7` at
+`route_update` time. eBPF is stateless per hop and supports up to 9 relays physically
+(MTU bound); the cap of 5 is a policy/safety bound - see ADR-010.
 
 #### bench_server registration (multi-hop)
 

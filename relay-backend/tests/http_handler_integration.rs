@@ -1151,10 +1151,10 @@ async fn test_bench_token_chain_three_relays() {
     );
 }
 
-/// Test 15: 4-relay chain exceeds MAX_RELAY_HOPS (clamp enforcement test).
-/// The backend must reject a relay_chain with 4 entries with HTTP 400.
+/// Test 15: relay chain that exceeds MAX_RELAY_HOPS must be rejected
+/// (clamp enforcement test). MAX_RELAY_HOPS = 5, so 6-relay chain must HTTP 400.
 #[tokio::test]
-async fn test_bench_token_chain_four_relays_rejected() {
+async fn test_bench_token_chain_exceeds_max_relays_rejected() {
     let state = Arc::new(AppState {
         config: Arc::new(Config {
             relay_backend_private_key: vec![0x01u8; 32],
@@ -1178,12 +1178,12 @@ async fn test_bench_token_chain_four_relays_rejected() {
 
     let app = create_router(state);
 
-    // 4 relays in chain: exceeds MAX_RELAY_HOPS = 3.
+    // 6 relays in chain: exceeds MAX_RELAY_HOPS = 5.
     let response = app
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/bench_token?relay_chain=10.0.0.1:40000,10.0.0.2:40000,10.0.0.3:40000,10.0.0.4:40000&bench_server_addr=10.0.0.5:7777")
+                .uri("/bench_token?relay_chain=10.0.0.1:40000,10.0.0.2:40000,10.0.0.3:40000,10.0.0.4:40000,10.0.0.5:40000,10.0.0.6:40000&bench_server_addr=10.0.0.7:7777")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1193,6 +1193,6 @@ async fn test_bench_token_chain_four_relays_rejected() {
     assert_eq!(
         response.status(),
         StatusCode::BAD_REQUEST,
-        "4-relay chain (> MAX_RELAY_HOPS=3) must return HTTP 400"
+        "6-relay chain (> MAX_RELAY_HOPS=5) must return HTTP 400"
     );
 }

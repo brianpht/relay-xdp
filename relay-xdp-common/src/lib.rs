@@ -15,8 +15,15 @@ pub const MAX_SESSIONS: usize = 100_000;
 /// Maximum number of relay hops in a single route chain.
 /// Shared by eBPF, userspace, relay-backend, and relay-sdk.
 /// num_tokens_max = MAX_RELAY_HOPS + 2 (client_view + zeros_pad).
-/// ROUTE_REQUEST max body = 18 + MAX_RELAY_HOPS * 111 = 351 B - well within MTU 1200.
-pub const MAX_RELAY_HOPS: usize = 3;
+/// ROUTE_REQUEST max body for N=MAX_RELAY_HOPS relays = (N+1) * 111 bytes
+/// (N wire tokens + 1 zeros_pad). With MAX_RELAY_HOPS = 5:
+/// body = 6 * 111 = 666 B; full ROUTE_REQUEST = 18 + 666 = 684 B - well within
+/// RELAY_MTU = 1200. eBPF strips one 111 B token per hop via
+/// bpf_xdp_adjust_head and is stateless w.r.t. chain length, so the cap is a
+/// policy/safety bound rather than a hard data-plane limit. Hard physical
+/// ceiling = (RELAY_MTU - 18) / 111 = 10 wire tokens = 9 relays.
+/// See ADR-010-raise-relay-hops-to-5.md.
+pub const MAX_RELAY_HOPS: usize = 5;
 
 pub const RELAY_HEADER_BYTES: usize = 25;
 pub const RELAY_MTU: usize = 1200;

@@ -28,9 +28,13 @@ pub const PACKET_BODY_OFFSET: usize = 18;
 pub const SESSION_PRIVATE_KEY_BYTES: usize = 32;
 pub const ENCRYPTED_ROUTE_TOKEN_BYTES: usize = 111; // nonce(24) + plaintext(71) + tag(16)
 pub const ENCRYPTED_CONTINUE_TOKEN_BYTES: usize = 57; // nonce(24) + plaintext(17) + tag(16)
-/// Maximum number of tokens in a route update = MAX_RELAY_HOPS(3) + client_view(1) + zeros_pad(1).
-/// Aligned with relay_xdp_common::MAX_RELAY_HOPS to prevent unsupported 5-relay chains.
-pub const MAX_TOKENS: usize = 5;
+/// Maximum number of tokens in a route update = MAX_RELAY_HOPS + client_view(1) + zeros_pad(1).
+/// Must equal `relay_xdp_common::MAX_RELAY_HOPS + 2` so SDK + eBPF + backend stay in lock-step.
+/// Hardcoded as a literal (not an expression) so cbindgen exports
+/// `relay_MAX_TOKENS` to C/C++ FFI consumers. The const-assert below catches drift.
+/// See ADR-010-raise-relay-hops-to-5.md.
+pub const MAX_TOKENS: usize = 7;
+const _: () = assert!(MAX_TOKENS == relay_xdp_common::MAX_RELAY_HOPS + 2);
 // Route update types
 pub const UPDATE_TYPE_DIRECT: u8 = 0;
 pub const UPDATE_TYPE_ROUTE: u8 = 1;
