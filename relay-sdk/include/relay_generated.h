@@ -61,10 +61,13 @@
 #define relay_ENCRYPTED_CONTINUE_TOKEN_BYTES 57
 
 /**
- * Maximum number of tokens in a route update = MAX_RELAY_HOPS(3) + client_view(1) + zeros_pad(1).
- * Aligned with relay_xdp_common::MAX_RELAY_HOPS to prevent unsupported 5-relay chains.
+ * Maximum number of tokens in a route update = MAX_RELAY_HOPS + client_view(1) + zeros_pad(1).
+ * Must equal `relay_xdp_common::MAX_RELAY_HOPS + 2` so SDK + eBPF + backend stay in lock-step.
+ * Hardcoded as a literal (not an expression) so cbindgen exports
+ * `relay_MAX_TOKENS` to C/C++ FFI consumers. The const-assert below catches drift.
+ * See ADR-010-raise-relay-hops-to-5.md.
  */
-#define relay_MAX_TOKENS 5
+#define relay_MAX_TOKENS 7
 
 #define relay_UPDATE_TYPE_DIRECT 0
 
