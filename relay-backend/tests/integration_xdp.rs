@@ -1331,3 +1331,98 @@ fn test_relay_update_request_max_samples() {
         assert_eq!(request.sample_packet_loss[i], sample_losses[i]);
     }
 }
+
+// ===================================================================
+// Test 19: Optimizer 5-node deep path (i -> x -> k -> y -> j)
+//
+// Verifies the optimizer's innermost loop:
+//   for x in indirect[i][k], for y in indirect[k][j]: add i->x->k->y->j
+//
+// Setup (5 relays, indices 0..4):
+//   direct cost[4][0] = 100
+//   cost[4][3] = 20, cost[3][0] = 20  => indirect[4][0] = [3] (40-hop saves 60ms)
+//   cost[4][2] = 8,  cost[2][3] = 8   => indirect[4][3] = [2] (16 < 20)
+//   cost[3][1] = 8,  cost[1][0] = 8   => indirect[3][0] = [1] (16 < 20)
+//   All other pairs = 255
+//
+// Expected best route: [4, 2, 3, 1, 0] with cost 8+8+8+8 = 32 (5 nodes = MAX_ROUTE_RELAYS).
+// ===================================================================
+
+#[test]
+fn test_optimizer_five_node_deep_path() {
+    let num_relays = 5;
+    let cost_size = helpers::tri_matrix_length(num_relays);
+    let mut costs = vec![255u8; cost_size];
+
+    // Pair costs (all symmetric - tri_matrix_index handles i > j ordering).
+    // [1][0] = 8
+    costs[helpers::tri_matrix_index(1, 0)] = 8;
+    // [3][0] = 20
+    costs[helpers::tri_matrix_index(3, 0)] = 20;
+    // [3][1] = 8
+    costs[helpers::tri_matrix_index(3, 1)] = 8;
+    // [3][2] = 8
+    costs[helpers::tri_matrix_index(3, 2)] = 8;
+    // [4][0] = 100  (direct - the expensive pair we want to beat)
+    costs[helpers::tri_matrix_index(4, 0)] = 100;
+    // [4][2] = 8
+    costs[helpers::tri_matrix_index(4, 2)] = 8;
+    // [4][3] = 20
+    costs[helpers::tri_matrix_index(4, 3)] = 20;
+
+    let relay_price = vec![1u8; num_relays];
+    let datacenter_ids = vec![1u64; num_relays];
+    let dest_relays = vec![true; num_relays];
+
+    let entries = helpers::optimize2(
+        num_relays,
+        1,
+        &costs,
+        &relay_price,
+        &datacenter_ids,
+        &dest_relays,
+    );
+
+    let idx = helpers::tri_matrix_index(4, 0);
+    assert_eq!(
+        entries[idx].direct_cost, 100,
+        "direct cost [4][0] should be 100"
+    );
+
+    // The 5-node route [4,2,3,1,0] costs 8+8+8+8 = 32 and must be the best route.
+    assert!(
+        entries[idx].num_routes >= 1,
+        "optimizer must find at least one route for pair (4,0)"
+    );
+    assert_eq!(
+        entries[idx].route_cost[0], 32,
+        "best route cost must be 32 (5-node path [4,2,3,1,0])"
+    );
+    assert_eq!(
+        entries[idx].route_num_relays[0], 5,
+        "best route must traverse 5 relay nodes (i -> x -> k -> y -> j)"
+    );
+
+    // Verify all indirect routes (all but the last direct route entry) beat direct cost.
+    // The direct route [4,0] cost=100 may appear as the final route entry.
+    for r in 0..entries[idx].num_routes as usize - 1 {
+        assert!(
+            entries[idx].route_cost[r] < 100,
+            "indirect route[{}] cost {} must be less than direct cost 100",
+            r,
+            entries[idx].route_cost[r]
+        );
+    }
+
+    // Routes must be in ascending cost order.
+    for r in 1..entries[idx].num_routes as usize {
+        assert!(
+            entries[idx].route_cost[r] >= entries[idx].route_cost[r - 1],
+            "routes must be sorted by cost (route[{}]={} < route[{}]={})",
+            r,
+            entries[idx].route_cost[r],
+            r - 1,
+            entries[idx].route_cost[r - 1]
+        );
+    }
+}
