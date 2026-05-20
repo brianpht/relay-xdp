@@ -29,6 +29,7 @@
     - [Flow 3 - Game Traffic Routing](#flow-3---game-traffic-routing)
     - [Flow 4 - Session Lifecycle](#flow-4---session-lifecycle)
     - [Flow 5 - Game Client and Server via relay-sdk](#flow-5---game-client-and-server-via-relay-sdk)
+    - [Flow 6 - Relay Chain Selection via server_backend](#flow-6---relay-chain-selection-via-server_backend)
 - [Packet Processing Pipeline](#packet-processing-pipeline)
     - [XDP Entry Point](#xdp-entry-point)
     - [DDoS Filter](#ddos-filter)
@@ -732,6 +733,63 @@ sequenceDiagram
 
 Key invariant: **relay-sdk never contacts relay-backend directly**. The only
 network interaction relay-sdk has is UDP datagrams to/from relay-xdp XDP nodes.
+
+### Flow 6 - Relay Chain Selection via server_backend
+
+Explains the role of the external `server_backend` (game matchmaking) in selecting
+the optimal relay chain for each game session. This is the piece that bridges
+relay-backend's route optimization output to the actual route tokens handed to
+game clients.
+
+#### Why server_backend selects the chain
+
+`relay-backend` optimizes **inter-relay** paths: it runs `Optimize2()` every second,
+measures RTT/jitter/loss between relay nodes via 10 Hz ping (Flow 2), and publishes
+a scored route matrix via `GET /route_matrix`. What `relay-backend` does **not** know
+is how far a specific game client or game server is from each relay node - that
+geographic/network proximity information lives in the game matchmaking layer.
+
+`server_backend` combines both signals:
+
+- Inter-relay cost matrix from `relay-backend`
+- Client-to-relay and server-to-relay latency (measured by the game itself or inferred
+  from region/datacenter assignment)
+
+It picks the relay chain that minimizes total end-to-end latency:
+`client -> relay[0] -> ... -> relay[n] -> server`.
+
+#### Full chain selection flow
+
+```mermaid
+sequenceDiagram
+    participant RB as relay-backend
+    participant SB as server_backend (matchmaking)
+    participant GC as Game Client
+    participant RX0 as relay-xdp[0] (XDP)
+
+    RB ->> SB: GET /route_matrix response<br/>(bitpacked binary, polled at ~1 Hz)
+    Note over SB: Parse RouteMatrix<br/>Score each RouteEntry:<br/>client_lat[relay[0]] + route_cost + server_lat[relay[n]]
+    Note over SB: Pick chain with lowest total score<br/>Mint N x RouteToken (XChaCha20 key per hop)
+    SB ->> GC: Relay chain + encrypted RouteTokens<br/>(via game matchmaking response / lobby API)
+    GC ->> RX0: ROUTE_REQUEST (type 1)<br/>contains chained RouteTokens
+    Note over RX0: Decrypt token -> session_map.insert()<br/>XDP_TX to relay[1]
+```
+
+#### How relay-bench differs
+
+`relay-bench` has no `server_backend`. The benchmark tool (`bench_client`) must
+select the relay chain itself. With `RELAY_AUTO=1`, `bench_client` queries
+`GET /optimal_bench_chain` on `relay-backend`, which returns the relay chain with
+the lowest `route_cost[0]` in the current route matrix (global minimum - the best
+inter-relay path according to `Optimize2`). This is a reasonable proxy for "optimal"
+in a benchmark context where client/server proximity to relays is unknown or uniform.
+
+| Aspect | Production (server_backend) | Benchmark (bench_client RELAY_AUTO=1) |
+|--------|----------------------------|---------------------------------------|
+| Chain selector | server_backend (matchmaking) | bench_client itself |
+| Proximity signal | client + server latency to each relay | none (global min) |
+| Route matrix consumer | server_backend polls /route_matrix | bench_client polls /optimal_bench_chain |
+| Token minting | server_backend | bench_client calls /bench_token |
 
 ---
 
