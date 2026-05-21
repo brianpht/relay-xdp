@@ -31,16 +31,19 @@ COPY relay-xdp-common/ relay-xdp-common/
 COPY relay-xdp/ relay-xdp/
 COPY relay-sdk/ relay-sdk/
 
-# Stub crates used only for workspace resolution (relay-backend, xtask, relay-bench)
-RUN mkdir -p relay-backend/src xtask/src relay-bench/src/bin && \
+# Stub crates used only for workspace resolution (relay-backend, xtask, relay-bench, server-backend)
+RUN mkdir -p relay-backend/src xtask/src relay-bench/src/bin server-backend/src && \
     echo 'fn main() {}' > relay-backend/src/main.rs && \
     echo '' > relay-backend/src/lib.rs && \
     echo 'fn main() {}' > xtask/src/main.rs && \
     echo 'fn main() {}' > relay-bench/src/bin/bench_server.rs && \
-    echo 'fn main() {}' > relay-bench/src/bin/bench_client.rs
+    echo 'fn main() {}' > relay-bench/src/bin/bench_client.rs && \
+    echo 'fn main() {}' > server-backend/src/main.rs && \
+    echo '' > server-backend/src/lib.rs
 COPY relay-backend/Cargo.toml relay-backend/Cargo.toml
 COPY xtask/Cargo.toml xtask/Cargo.toml
 COPY relay-bench/Cargo.toml relay-bench/Cargo.toml
+COPY server-backend/Cargo.toml server-backend/Cargo.toml
 
 # Build release binary (no eBPF .o file needed - RELAY_NO_BPF=1 skips loading)
 RUN cargo build --release -p relay-xdp

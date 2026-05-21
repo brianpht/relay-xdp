@@ -27,15 +27,18 @@ COPY relay-sdk/ relay-sdk/
 
 # Create stub crates for workspace members we don't need to build,
 # so Cargo.toml workspace resolution succeeds.
-RUN mkdir -p relay-xdp/src xtask/src relay-bench/src/bin && \
+RUN mkdir -p relay-xdp/src xtask/src relay-bench/src/bin server-backend/src && \
     echo 'fn main() {}' > relay-xdp/src/main.rs && \
     echo '' > relay-xdp/src/lib.rs && \
     echo 'fn main() {}' > xtask/src/main.rs && \
     echo 'fn main() {}' > relay-bench/src/bin/bench_server.rs && \
-    echo 'fn main() {}' > relay-bench/src/bin/bench_client.rs
+    echo 'fn main() {}' > relay-bench/src/bin/bench_client.rs && \
+    echo 'fn main() {}' > server-backend/src/main.rs && \
+    echo '' > server-backend/src/lib.rs
 COPY relay-xdp/Cargo.toml relay-xdp/Cargo.toml
 COPY xtask/Cargo.toml xtask/Cargo.toml
 COPY relay-bench/Cargo.toml relay-bench/Cargo.toml
+COPY server-backend/Cargo.toml server-backend/Cargo.toml
 
 # Build release binary
 RUN cargo build --release -p relay-backend
