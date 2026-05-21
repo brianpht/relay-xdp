@@ -169,10 +169,15 @@ No files changed this session (planning only). Tests will be added during implem
 
 | File | Test | Type | Status |
 |------|------|------|--------|
-| `server-backend/tests/integration.rs` | `test_register_and_list_servers` | Integration | Planned |
-| `server-backend/tests/integration.rs` | `test_select_chain_with_fixture_matrix` | Integration | Planned |
-| `server-backend/tests/integration.rs` | `test_session_reject_unknown_server` | Integration | Planned |
-| `server-backend/tests/integration.rs` | `test_session_refresh_increments_version` | Integration | Planned |
+| `server-backend/src/selector.rs` | `test_select_chain_empty_matrix` | Unit | Done |
+| `server-backend/src/selector.rs` | `test_select_chain_single_relay` | Unit | Done |
+| `server-backend/src/selector.rs` | `test_select_chain_picks_london_as_entry` | Unit | Done |
+| `server-backend/src/selector.rs` | `test_haversine_ms_same_point` | Unit | Done |
+| `server-backend/src/selector.rs` | `test_haversine_ms_capped_at_255` | Unit | Done |
+| `server-backend/tests/integration.rs` | `test_register_and_list_servers` | Integration | Done |
+| `server-backend/tests/integration.rs` | `test_select_chain_with_fixture_matrix` | Integration | Done |
+| `server-backend/tests/integration.rs` | `test_session_reject_unknown_server` | Integration | Done |
+| `server-backend/tests/integration.rs` | `test_session_refresh_increments_version` | Integration | Done |
 
 ## Issues Encountered
 
@@ -184,28 +189,28 @@ No files changed this session (planning only). Tests will be added during implem
 
 ## Next Steps
 
-1. **High:** Create `server-backend/Cargo.toml` and register in workspace `Cargo.toml`
-2. **High:** Implement `config.rs`, `state.rs`, `poller.rs` (1 Hz route matrix fetch)
-3. **High:** Implement `selector.rs` - `select_chain()` with Haversine scoring
-4. **High:** Implement `handlers.rs` - all 8 routes including webhook notify
-5. **High:** Implement `main.rs` - spawn poller + axum server
-6. **High:** Run CI checks: `cargo fmt --all` -> `cargo clippy --workspace --lib --bins -- -D warnings` -> `cargo test --workspace`
-7. **Medium:** Add 4 integration tests in `server-backend/tests/integration.rs`
-8. **Low:** Add `server-backend` to `README.md` workspace layout section
+1. ~~**High:** Create `server-backend/Cargo.toml` and register in workspace `Cargo.toml`~~ **DONE** (2026-05-21)
+2. ~~**High:** Implement `config.rs`, `state.rs`, `poller.rs` (1 Hz route matrix fetch)~~ **DONE** (2026-05-21)
+3. ~~**High:** Implement `selector.rs` - `select_chain()` with Haversine scoring~~ **DONE** (2026-05-21)
+4. ~~**High:** Implement `handlers.rs` - all 8 routes including webhook notify~~ **DONE** (2026-05-21)
+5. ~~**High:** Implement `main.rs` - spawn poller + axum server~~ **DONE** (2026-05-21)
+6. ~~**High:** Run CI checks: `cargo fmt --all` -> `cargo clippy --workspace --lib --bins -- -D warnings` -> `cargo test --workspace`~~ **DONE** (2026-05-21) - all pass, zero warnings
+7. ~~**Medium:** Add 4 integration tests in `server-backend/tests/integration.rs`~~ **DONE** (2026-05-21)
+8. ~~**Low:** Add `server-backend` to `README.md` workspace layout section~~ **DONE** (2026-05-21)
 
 ## Files Changed
 
-No files were changed in this session (planning only).
-
 | Status | File |
 |--------|------|
-| Planned A | `server-backend/Cargo.toml` |
-| Planned A | `server-backend/src/main.rs` |
-| Planned A | `server-backend/src/config.rs` |
-| Planned A | `server-backend/src/state.rs` |
-| Planned A | `server-backend/src/poller.rs` |
-| Planned A | `server-backend/src/selector.rs` |
-| Planned A | `server-backend/src/handlers.rs` |
-| Planned A | `server-backend/tests/integration.rs` |
-| Planned M | `Cargo.toml` (add server-backend to workspace members) |
+| Added | `server-backend/Cargo.toml` |
+| Added | `server-backend/src/lib.rs` |
+| Added | `server-backend/src/main.rs` |
+| Added | `server-backend/src/config.rs` |
+| Added | `server-backend/src/state.rs` |
+| Added | `server-backend/src/poller.rs` |
+| Added | `server-backend/src/selector.rs` |
+| Added | `server-backend/src/handlers.rs` |
+| Added | `server-backend/tests/integration.rs` |
+| Modified | `Cargo.toml` (added server-backend to workspace members) |
+| Modified | `README.md` (added server-backend to workspace layout + configuration sections) |
 

@@ -16,6 +16,7 @@
         - [kfunc Loader](#kfunc-loader-kfuncs)
     - [relay-xdp-ebpf - eBPF Data Plane](#relay-xdp-ebpf---ebpf-data-plane)
     - [relay-backend - Route Optimization Backend](#relay-backend---route-optimization-backend)
+    - [server-backend - Matchmaking / Session Broker](#server-backend---matchmaking--session-broker)
     - [relay-sdk - Game Client/Server SDK](#relay-sdk---game-clientserver-sdk)
     - [module - Kernel Module (C)](#module---kernel-module-c)
     - [xtask - Build Helper](#xtask---build-helper)
@@ -116,6 +117,19 @@ relay-xdp/
 |       |-- pipeline_integration.rs      3 full pipeline tests (~433 lines)
 |       +-- helpers/mod.rs         Test helpers (~548 lines)
 |
+|-- server-backend/                Matchmaking / relay session broker
+|   |-- Cargo.toml                 axum, tokio, reqwest, serde, uuid, relay-backend (path)
+|   +-- src/
+|   |   |-- lib.rs                 Re-exports for integration tests
+|   |   |-- main.rs                Entry point: spawn poller + axum server
+|   |   |-- config.rs              Env vars (HTTP_PORT, RELAY_BACKEND_ADMIN_URL, POLL_INTERVAL_MS, WEBHOOK_TIMEOUT_MS)
+|   |   |-- state.rs               AppState: route_matrix RwLock, server registry, session map
+|   |   |-- poller.rs              1 Hz GET /route_matrix -> RouteMatrix::read() -> state
+|   |   |-- selector.rs            select_chain(): Haversine scoring over relay pairs (1 ms/100 km)
+|   |   +-- handlers.rs            8 HTTP routes (/servers, /sessions, /health, /relay_status)
+|   +-- tests/
+|       +-- integration.rs         4 integration tests (register/list servers, chain selection, session flows)
+|
 |-- relay-sdk/                     Game client/server SDK (rlib + cdylib + staticlib)
 |   |-- Cargo.toml                 sha2, chacha20poly1305, cbindgen
 |   |-- ARCHITECTURE.md            Full SDK architecture, module map, wire compat
@@ -197,7 +211,7 @@ flowchart TB
         MOD["relay_module.ko (kernel module C)\nkfuncs: SHA-256, XChaCha20-Poly1305"]
         EBPF -->|" calls kfuncs "| MOD
     end
-    SB["server_backend\n(external)"]
+    SB["server-backend\n(matchmaking / session broker)"]
     SDK["relay-sdk\n(game client / server SDK)"]
     MT -->|" HTTP POST /relay_update\n(1 Hz, encrypted) "| BH
     BH -->|" HTTP 200\n(relay set, magic, keys) "| MT
@@ -341,7 +355,7 @@ Key helpers:
 
 Route optimization backend. Receives latency data from all
 relay nodes, builds cost matrices, computes optimal routes, and serves results
-to `server_backend`. Runs as a separate async binary (tokio + axum).
+to `server-backend`. Runs as a separate async binary (tokio + axum).
 
 > **Detailed architecture**: see [`relay-backend/ARCHITECTURE.md`](../relay-backend/ARCHITECTURE.md)
 > for wire format specs, encoding details, and full interaction protocol with relay-xdp.
@@ -369,9 +383,57 @@ Key design decisions:
 - **Parallelism**: Optimizer uses `std::thread::scope` with manual segment slicing
   (not rayon) for Phase 1 (indirect matrix) and Phase 2 (route building).
 - **Encoding**: Two separate systems - Simple LE for relay update packets (relay-xdp
-  ↔ relay-backend), Bitpacked for cost/route matrices (relay-backend → server_backend).
+  ↔ relay-backend), Bitpacked for cost/route matrices (relay-backend → server-backend).
 - **Leader election**: Multiple instances can run simultaneously; leader writes to
   Redis, all instances read from leader's data to serve consistent route matrices.
+
+### server-backend - Matchmaking / Session Broker
+
+Matchmaking service that bridges the relay network to game clients. Polls
+`relay-backend` for the route matrix, selects the optimal relay chain per game
+session, delegates token minting to `relay-backend`, notifies the game server via
+webhook, and returns the full `SessionResponse` to the game client.
+Depends on `relay-backend` as a path library to reuse `RouteMatrix::read()` and
+`RouteEntry` without re-implementing the bitpacked parser.
+
+| Module        | Purpose                                                                                              |
+|---------------|------------------------------------------------------------------------------------------------------|
+| `main.rs`     | Entry point: build reqwest client + AppState, spawn poller, bind axum server                        |
+| `config.rs`   | Env vars: `HTTP_PORT` (8180), `RELAY_BACKEND_ADMIN_URL`, `POLL_INTERVAL_MS`, `WEBHOOK_TIMEOUT_MS`   |
+| `state.rs`    | `AppState`: `RwLock<Option<RouteMatrix>>`, server registry `HashMap<Uuid, GameServer>`, session map  |
+| `poller.rs`   | `run_poller()` - async loop: 1 Hz GET `/route_matrix`, parse with `RouteMatrix::read()`, store       |
+| `selector.rs` | `select_chain()` - iterate all relay pairs, score both orientations, return lowest-cost chain        |
+| `handlers.rs` | 8 routes: `POST/DELETE/GET /servers`, `POST/DELETE /sessions`, `POST /sessions/{id}/refresh`, health |
+
+**Chain scoring formula** (per relay pair entry, both entry/exit orientations tried):
+
+```
+score = haversine_ms(client, relay[entry]) + inter_relay_cost + haversine_ms(relay[exit], server)
+```
+
+Proximity model: 1 ms per 100 km (Haversine great-circle distance), capped at 255 ms per leg.
+`inter_relay_cost` comes from `RouteEntry.route_cost[0]` (optimized) or `direct_cost` (fallback).
+
+**Session creation flow**:
+
+1. Look up registered game server by `server_id`
+2. Read route matrix (populated by poller) and call `select_chain()`
+3. Call relay-backend `GET /bench_token?relay_chain=...&bench_server_addr=...` to mint tokens
+4. `POST {callback_url}/notify_session` to game server (must succeed before tokens are returned)
+5. Store session and return `SessionResponse` to game client
+
+**HTTP routes**:
+
+| Route | Method | Response |
+|-------|--------|----------|
+| `/servers` | POST | `201 { server_id }` |
+| `/servers` | GET | `200 [ServerInfo]` |
+| `/servers/{id}` | DELETE | `204` |
+| `/sessions` | POST | `201 SessionResponse` |
+| `/sessions/{id}/refresh` | POST | `200 SessionResponse (version++)` |
+| `/sessions/{id}` | DELETE | `204` |
+| `/health` | GET | `200 "OK"` |
+| `/relay_status` | GET | `200 { num_relays, last_matrix_update_ms, matrix_age_ms }` |
 
 ### relay-sdk - Game Client/Server SDK
 
@@ -736,7 +798,7 @@ network interaction relay-sdk has is UDP datagrams to/from relay-xdp XDP nodes.
 
 ### Flow 6 - Relay Chain Selection via server_backend
 
-Explains the role of the external `server_backend` (game matchmaking) in selecting
+Explains the role of `server-backend` (game matchmaking) in selecting
 the optimal relay chain for each game session. This is the piece that bridges
 relay-backend's route optimization output to the actual route tokens handed to
 game clients.
@@ -749,7 +811,7 @@ a scored route matrix via `GET /route_matrix`. What `relay-backend` does **not**
 is how far a specific game client or game server is from each relay node - that
 geographic/network proximity information lives in the game matchmaking layer.
 
-`server_backend` combines both signals:
+`server-backend` combines both signals:
 
 - Inter-relay cost matrix from `relay-backend`
 - Client-to-relay and server-to-relay latency (measured by the game itself or inferred
@@ -763,13 +825,13 @@ It picks the relay chain that minimizes total end-to-end latency:
 ```mermaid
 sequenceDiagram
     participant RB as relay-backend
-    participant SB as server_backend (matchmaking)
+    participant SB as server-backend (matchmaking)
     participant GC as Game Client
     participant RX0 as relay-xdp[0] (XDP)
 
     RB ->> SB: GET /route_matrix response<br/>(bitpacked binary, polled at ~1 Hz)
-    Note over SB: Parse RouteMatrix<br/>Score each RouteEntry:<br/>client_lat[relay[0]] + route_cost + server_lat[relay[n]]
-    Note over SB: Pick chain with lowest total score<br/>Mint N x RouteToken (XChaCha20 key per hop)
+    Note over SB: Parse RouteMatrix<br/>Score each RouteEntry:<br/>haversine(client, relay[0]) + route_cost + haversine(relay[n], server)
+    Note over SB: Mint N x RouteToken via GET /bench_token
     SB ->> GC: Relay chain + encrypted RouteTokens<br/>(via game matchmaking response / lobby API)
     GC ->> RX0: ROUTE_REQUEST (type 1)<br/>contains chained RouteTokens
     Note over RX0: Decrypt token -> session_map.insert()<br/>XDP_TX to relay[1]
@@ -777,19 +839,19 @@ sequenceDiagram
 
 #### How relay-bench differs
 
-`relay-bench` has no `server_backend`. The benchmark tool (`bench_client`) must
+`relay-bench` has no `server-backend`. The benchmark tool (`bench_client`) must
 select the relay chain itself. With `RELAY_AUTO=1`, `bench_client` queries
 `GET /optimal_bench_chain` on `relay-backend`, which returns the relay chain with
 the lowest `route_cost[0]` in the current route matrix (global minimum - the best
 inter-relay path according to `Optimize2`). This is a reasonable proxy for "optimal"
 in a benchmark context where client/server proximity to relays is unknown or uniform.
 
-| Aspect | Production (server_backend) | Benchmark (bench_client RELAY_AUTO=1) |
+| Aspect | Production (server-backend) | Benchmark (bench_client RELAY_AUTO=1) |
 |--------|----------------------------|---------------------------------------|
-| Chain selector | server_backend (matchmaking) | bench_client itself |
+| Chain selector | server-backend (matchmaking) | bench_client itself |
 | Proximity signal | client + server latency to each relay | none (global min) |
-| Route matrix consumer | server_backend polls /route_matrix | bench_client polls /optimal_bench_chain |
-| Token minting | server_backend | bench_client calls /bench_token |
+| Route matrix consumer | server-backend polls /route_matrix | bench_client polls /optimal_bench_chain |
+| Token minting | server-backend calls /bench_token | bench_client calls /bench_token |
 
 ---
 
@@ -1007,6 +1069,19 @@ All configuration via environment variables (read once at startup):
 DDoS filter parity: `route/mod` pittle/chonkle tests are cross-checked against
 `relay-xdp/src/packet_filter.rs` and the eBPF implementation - any divergence is a bug.
 
+### server-backend tests
+
+9 tests total (5 unit + 4 integration):
+
+| Test File / Module    | Count | Type        | What It Covers                                                                    |
+|-----------------------|-------|-------------|-----------------------------------------------------------------------------------|
+| `selector` (unit)     | 5     | Unit        | `haversine_ms` zero/cap, `select_chain` with empty/single/two-relay fixture matrix |
+| `integration.rs`      | 4     | Integration | Register + list servers, fixture chain selection, session reject unknown server, refresh increments version |
+
+Integration tests use `tower::ServiceExt::oneshot` for in-process router calls.
+Tests 3-4 spawn real mock servers on random loopback ports (relay-backend `/bench_token`
+and game-server `/notify_session`) so no live infrastructure is required.
+
 The 30 integration tests in `integration_xdp.rs` are organized in 18 test groups
 covering: FNV-1a compatibility, relay update request/response wire format, cost
 matrix roundtrip, route matrix roundtrip, relay manager (costs, timeout, history,
@@ -1033,7 +1108,7 @@ cargo test -p relay-backend
 
 ```bash
 # Build userspace binaries (pure Rust, no C deps)
-cargo build --release                # builds relay-xdp + relay-backend
+cargo build --release                # builds relay-xdp + relay-backend + server-backend
 
 # Build eBPF kernel program (requires nightly)
 cargo run -p xtask -- build-ebpf-rust
@@ -1042,8 +1117,9 @@ cargo run -p xtask -- build-ebpf-rust
 cd module && make
 
 # Run all tests
-cargo test                           # relay-xdp + relay-backend unit + integration
+cargo test                           # relay-xdp + relay-backend + server-backend unit + integration
 cargo test -p relay-backend          # relay-backend only
+cargo test -p server-backend         # server-backend only
 cargo xtask func-test                # functional parity (RELAY_NO_BPF=1)
 
 # Deploy relay node (requires root + kernel module loaded)
@@ -1052,6 +1128,9 @@ sudo ./target/release/relay-xdp
 
 # Deploy relay backend (no root required)
 ./target/release/relay-backend
+
+# Deploy matchmaking / session broker (no root required)
+./target/release/server-backend
 ```
 
 Requirements: Linux kernel 6.5+, Ubuntu 22.04+, `relay_module.ko` loaded
@@ -1067,7 +1146,8 @@ flowchart TD
     EBPF -->|" calls kfuncs "| MOD["relay_module.ko\n(C)"]
     US -->|" HTTP POST /relay_update\n(1 Hz) "| RB["relay-backend\n(route optimization)"]
     RB -->|" HTTP 200 response\n(relay set, magic, keys) "| US
-    SB["server_backend\n(external)"] -->|" GET /route_matrix "| RB
+    SB["server-backend\n(matchmaking)"] -->|" GET /route_matrix "| RB
+    SB -->|" GET /bench_token\n(token minting) "| RB
 ```
 
 Any change to shared types or kfunc signatures requires rebuilding across

@@ -109,6 +109,34 @@ Key components:
 For detailed architecture, wire format specs, and the full relay-xdp interaction protocol,
 see [relay-backend/ARCHITECTURE.md](relay-backend/ARCHITECTURE.md).
 
+### server-backend
+
+`server-backend` is the **matchmaking and session broker** for the relay network. Game servers register
+themselves and game clients request relay sessions through it.
+
+1. **Polls route matrix** from `relay-backend` at 1 Hz via `GET /route_matrix`
+2. **Selects optimal relay chain** for each session using Haversine scoring (1 ms / 100 km, capped at 255 ms per leg)
+3. **Mints route tokens** by delegating to `relay-backend GET /bench_token`
+4. **Notifies game servers** via `POST {callback_url}/notify_session` before returning tokens to the client,
+   guaranteeing the server has called `register_session()` before the first `ROUTE_REQUEST` arrives
+
+```mermaid
+sequenceDiagram
+    participant GS as Game Server
+    participant SB as server-backend
+    participant RB as relay-backend
+    participant GC as Game Client
+
+    GS->>SB: POST /servers (register + callback_url)
+    GC->>SB: POST /sessions (server_id, client lat/lng)
+    SB->>RB: GET /route_matrix (cached 1 Hz)
+    SB->>RB: GET /bench_token?relay_chain=...&bench_server_addr=...
+    RB-->>SB: session tokens
+    SB->>GS: POST /notify_session (session_id + keys)
+    GS-->>SB: 200 OK
+    SB-->>GC: SessionResponse (tokens + relay_chain)
+```
+
 ### relay-sdk
 
 `relay-sdk` is the pure Rust client/server SDK for game applications connecting to the relay network. It compiles to `rlib`, `cdylib` (`.so`/`.dll`), and `staticlib` for integration from Rust, C, or any FFI-capable language.
@@ -132,6 +160,7 @@ relay-xdp/
 ├── relay-xdp/            Userspace control plane (pure Rust)
 ├── relay-xdp-ebpf/       eBPF data plane (bpfel-unknown-none, NOT in workspace)
 ├── relay-backend/        Route optimization backend (tokio + axum)
+├── server-backend/       Matchmaking / relay session broker (tokio + axum)
 ├── relay-sdk/            Game client/server SDK (rlib + cdylib + staticlib)
 ├── module/               Linux kernel module (C, GPL)
 └── xtask/                Build helper
@@ -209,6 +238,21 @@ export RELAY_DATA_FILE="/path/to/relays.json"     # JSON relay config (optional)
 When `RELAY_BACKEND_PRIVATE_KEY` is set, the handler decrypts NaCl crypto_box requests
 from relay-xdp directly (no gateway proxy needed). Without it, the handler accepts
 plaintext requests (legacy gateway mode). Both modes return a full binary response.
+
+### server-backend
+
+```bash
+# Required
+export RELAY_BACKEND_ADMIN_URL="http://127.0.0.1:8081"  # relay-backend admin endpoint
+
+# Optional (all have defaults)
+export HTTP_PORT=8180                              # Listen port
+export POLL_INTERVAL_MS=1000                       # Route matrix poll interval (1 Hz)
+export WEBHOOK_TIMEOUT_MS=3000                     # Game server webhook timeout
+
+# Run
+./target/release/server-backend
+```
 
 ## How It Works
 

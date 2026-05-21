@@ -6,6 +6,7 @@ members = [
     "relay-backend",
     "relay-sdk",
     "relay-bench",
+    "server-backend",
     "xtask",
 ]
 exclude = [
