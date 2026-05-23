@@ -12,7 +12,7 @@
 - [x] Decide whether to keep relay-bench or replace with a standalone game-client
 - [x] Plan infra (Pulumi) changes for server-backend port + bench webhook access
 - [x] Plan Ansible role and deploy playbooks for server-backend
-- [ ] Implement relay-bench changes (planned - not yet started)
+- [x] Implement relay-bench changes (completed 2026-05-23)
 - [ ] Implement Pulumi infra changes (planned - not yet started)
 - [ ] Implement Ansible role + deploy changes (planned - not yet started)
 
@@ -177,7 +177,6 @@ A lightweight integration-test client (if needed) belongs in `relay-sdk/examples
 
 ## Tests Added/Modified
 
-No new tests this session (planning only). Tests will be added during implementation:
 
 | File | Test | Type | Status |
 |------|------|------|--------|
@@ -190,13 +189,39 @@ No new tests this session (planning only). Tests will be added during implementa
 |-------|------------|----------|
 | `sg_bench` TCP 18080 only allows `admin_cidr` - server-backend on backend node cannot call webhook | Add second ingress rule from `vpc_cidr` to `sg_bench` TCP 18080 (both are in `backend_net` VPC) | No |
 | bench_server needs a stable `SERVER_CALLBACK_URL` for server-backend webhook | Use bench_node EIP (exported from Pulumi); inject via Ansible `-e server_backend_url=...` at bench-deploy time | No |
+| `insert_edit_into_file` produced duplicate `BenchState` struct in bench_server.rs | Rewrote file completely via shell; all duplicates removed | No |
+
+## Implementation Notes (2026-05-23)
+
+### bench_server.rs - key decisions
+
+- `server_public_addr: Option<String>` stored in `BenchState` at startup from `SERVER_PUBLIC_ADDR` env var.
+  `notify_session_handler` uses this as the `server_public_address` argument to `install_pinger` /
+  `install_responder`. If not set, session is registered (SDK crypto works) but pinger/responder are
+  skipped with a log warning - relay will not whitelist bench_server.
+- `POST /servers` registration is best-effort: failure logs a warning but does not abort startup.
+  bench_server remains reachable for direct/relay mode even if server-backend is down.
+- Graceful shutdown uses `axum::serve(...).with_graceful_shutdown(...)` + `ctrl_c()` signal.
+  Network thread shutdown is signaled via the existing `AtomicBool` inside the same closure.
+- reqwest version `0.12` selected to match `server-backend/Cargo.toml`.
+
+### bench_client.rs - key decisions
+
+- `BenchMode::ServerBackend` flow is structurally identical to `BenchMode::Relay` after session creation:
+  same `setup_relay_route`, same pinger, same network thread. Only session lifecycle differs.
+- `create_session_via_sb` and `do_refresh_via_sb` use `reqwest::blocking` called via `spawn_blocking`
+  to match the existing `do_refresh` pattern (blocking I/O off the async runtime).
+- `do_refresh_via_sb` validates `relay_chain_tokens` is non-empty (server-backend always fills it;
+  the legacy `wire_route_token` fallback from relay mode does not apply here).
+- Both `refresh_cfg` (relay mode) and `sb_refresh_cfg` (server-backend mode) can be `Some` only in
+  their respective modes - the two tasks are never spawned simultaneously.
 
 ## Next Steps
 
-1. **High:** Implement `bench_server` changes - add `POST /notify_session` handler + `POST /servers` self-registration at startup
-2. **High:** Implement `bench_client` changes - add `BenchMode::ServerBackend` with `do_refresh_via_server_backend()`
-3. **High:** Update `relay-bench/Cargo.toml` - add `reqwest` dep
-4. **High:** Run CI checks: `cargo fmt --all` -> `cargo clippy --workspace --lib --bins -- -D warnings` -> `cargo test --workspace`
+1. ~~**High:** Implement `bench_server` changes - add `POST /notify_session` handler + `POST /servers` self-registration at startup~~ **Done 2026-05-23**
+2. ~~**High:** Implement `bench_client` changes - add `BenchMode::ServerBackend` with `do_refresh_via_server_backend()`~~ **Done 2026-05-23**
+3. ~~**High:** Update `relay-bench/Cargo.toml` - add `reqwest` dep~~ **Done 2026-05-23**
+4. ~~**High:** Run CI checks: `cargo fmt --all` -> `cargo clippy --workspace --lib --bins -- -D warnings` -> `cargo test --workspace`~~ **Done 2026-05-23 - all pass, zero warnings**
 5. **High:** Implement Pulumi infra changes - TCP 8180 on `sg_backend`, TCP 18080 from `vpc_cidr` on `sg_bench`, export `server_backend_url`
 6. **High:** Implement Ansible role `server-backend` (tasks, templates, handlers)
 7. **High:** Update `site.yml` + `group_vars/all.yml` + `bench-deploy.yml`
@@ -207,9 +232,9 @@ No new tests this session (planning only). Tests will be added during implementa
 
 | Status | File |
 |--------|------|
-| Planned | `relay-bench/src/bin/bench_client.rs` |
-| Planned | `relay-bench/src/bin/bench_server.rs` |
-| Planned | `relay-bench/Cargo.toml` |
+| Done | `relay-bench/src/bin/bench_client.rs` |
+| Done | `relay-bench/src/bin/bench_server.rs` |
+| Done | `relay-bench/Cargo.toml` |
 | Planned | `infra/network.py` |
 | Planned | `infra/__main__.py` |
 | Planned | `ansible/roles/server-backend/tasks/main.yml` |

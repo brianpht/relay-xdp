@@ -4,8 +4,10 @@
 // via a relay-xdp relay node.
 //
 // Modes:
-//   direct  - bench_client <-> bench_server via loopback/LAN UDP (no relay)
-//   relay   - bench_client -> relay-xdp -> bench_server (requires RELAY_ADDR)
+//   direct          - bench_client <-> bench_server via loopback/LAN UDP (no relay)
+//   relay           - bench_client -> relay-xdp -> bench_server (requires RELAY_ADDR)
+//   server-backend  - full matchmaking via server-backend POST /sessions (requires
+//                     SERVER_BACKEND_URL + SERVER_ID); relay chain auto-selected
 //
 // Architecture:
 //   tokio runtime:
@@ -33,7 +35,13 @@
 //   TARGET_PPS         (default: 1000)
 //   PAYLOAD_BYTES      (default: 128, minimum 8)
 //   DURATION_SECS      (default: 30)
-//   BENCH_MODE         (default: direct | relay)
+//   BENCH_MODE         (default: direct | relay | server-backend)
+//
+// Server-backend mode env vars:
+//   SERVER_BACKEND_URL  (required) - e.g. "http://1.2.3.4:8180"
+//   SERVER_ID           (required) - UUID of the registered game server
+//   CLIENT_LAT          (optional) - decimal latitude; default 0.0
+//   CLIENT_LNG          (optional) - decimal longitude; default 0.0
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpStream, UdpSocket};
@@ -90,6 +98,17 @@ enum BenchMode {
         relay_chain: Vec<String>,
         backend_admin: String,
     },
+    /// Use server-backend POST /sessions to create a session with automatic
+    /// relay chain selection. bench_server receives the session via webhook
+    /// POST /notify_session from server-backend directly - bench_client does
+    /// NOT call /register_session. Route refresh via POST /sessions/{id}/refresh.
+    ServerBackend {
+        server_backend_url: String,
+        /// UUID string of the registered game server (bench_server).
+        server_id: String,
+        client_lat: f64,
+        client_lng: f64,
+    },
 }
 
 fn read_config() -> Result<Config> {
@@ -141,6 +160,26 @@ fn read_config() -> Result<Config> {
             BenchMode::Relay {
                 relay_chain,
                 backend_admin,
+            }
+        }
+        "server-backend" => {
+            let server_backend_url = std::env::var("SERVER_BACKEND_URL")
+                .context("SERVER_BACKEND_URL required in server-backend mode")?;
+            let server_id =
+                std::env::var("SERVER_ID").context("SERVER_ID required in server-backend mode")?;
+            let client_lat: f64 = std::env::var("CLIENT_LAT")
+                .unwrap_or_else(|_| "0.0".into())
+                .parse()
+                .unwrap_or(0.0);
+            let client_lng: f64 = std::env::var("CLIENT_LNG")
+                .unwrap_or_else(|_| "0.0".into())
+                .parse()
+                .unwrap_or(0.0);
+            BenchMode::ServerBackend {
+                server_backend_url,
+                server_id,
+                client_lat,
+                client_lng,
             }
         }
         _ => BenchMode::Direct,
@@ -289,6 +328,162 @@ struct BenchTokenResponse {
     /// Empty in legacy 1-hop mode (use wire_route_token instead).
     #[serde(default)]
     relay_chain_tokens: Vec<String>,
+}
+
+// -- Server-backend session types ---------------------------------------------
+
+/// Full session response from server-backend POST /sessions and
+/// POST /sessions/{id}/refresh. Superset of BenchTokenResponse.
+#[derive(Debug, Deserialize)]
+struct SessionResponse {
+    session_id: u64,
+    session_version: u8,
+    session_private_key: String,
+    relay_secret_key: String,
+    client_route_token: String,
+    relay_chain_tokens: Vec<String>,
+    /// Auto-selected relay chain: relay_chain[0] is the first hop.
+    relay_chain: Vec<String>,
+    /// Game server UDP address returned by server-backend.
+    server_udp_addr: String,
+    current_magic: String,
+    ping_key: String,
+    client_public_address: String,
+}
+
+/// Config shared with the server-backend route refresh tokio task.
+struct ServerBackendRefreshConfig {
+    server_backend_url: String,
+    /// Session ID from initial POST /sessions; used as URL key for refresh.
+    session_id: u64,
+    client_lat: f64,
+    client_lng: f64,
+    client_udp_addr: String,
+    keys: Arc<Mutex<PingerRefreshKeys>>,
+}
+
+// -- Server-backend HTTP helpers (blocking, run via spawn_blocking) -----------
+
+/// POST /sessions to server-backend to create a new relay session.
+/// server-backend selects the relay chain and calls the game server webhook
+/// before returning tokens, so bench_client does not need to call
+/// /register_session on bench_server.
+fn create_session_via_sb(
+    sb_url: &str,
+    server_id: &str,
+    client_lat: f64,
+    client_lng: f64,
+) -> Result<SessionResponse> {
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .post(format!("{}/sessions", sb_url))
+        .json(&serde_json::json!({
+            "server_id": server_id,
+            "client_lat": client_lat,
+            "client_lng": client_lng,
+        }))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .with_context(|| format!("POST /sessions to {}", sb_url))?;
+
+    if !resp.status().is_success() {
+        bail!(
+            "POST /sessions returned HTTP {}: {}",
+            resp.status(),
+            resp.text().unwrap_or_default()
+        );
+    }
+
+    let body = resp.text().context("read /sessions response body")?;
+    serde_json::from_str(&body).with_context(|| format!("parse /sessions response: {}", body))
+}
+
+/// POST /sessions/{id}/refresh to server-backend to get fresh tokens.
+/// server-backend calls the game server webhook automatically, so
+/// bench_client does not call /register_session on bench_server.
+/// Returns RefreshedRouteData (same type as do_refresh for relay mode).
+fn do_refresh_via_sb(cfg: &ServerBackendRefreshConfig) -> Result<RefreshedRouteData> {
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/sessions/{}/refresh",
+            cfg.server_backend_url, cfg.session_id
+        ))
+        .json(&serde_json::json!({
+            "client_lat": cfg.client_lat,
+            "client_lng": cfg.client_lng,
+        }))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .with_context(|| {
+            format!(
+                "POST /sessions/{}/refresh to {}",
+                cfg.session_id, cfg.server_backend_url
+            )
+        })?;
+
+    if !resp.status().is_success() {
+        bail!(
+            "POST /sessions/{}/refresh returned HTTP {}: {}",
+            cfg.session_id,
+            resp.status(),
+            resp.text().unwrap_or_default()
+        );
+    }
+
+    let body = resp.text().context("read refresh response body")?;
+    let tok: SessionResponse =
+        serde_json::from_str(&body).with_context(|| format!("parse refresh response: {}", body))?;
+
+    if tok.relay_secret_key.is_empty() || tok.client_route_token.is_empty() {
+        bail!(
+            "refresh: /sessions/{}/refresh missing relay token fields",
+            cfg.session_id
+        );
+    }
+
+    let session_private_key = decode_hex_32(&tok.session_private_key, "session_private_key")?;
+    let ping_key = decode_hex_32(&tok.ping_key, "ping_key")?;
+    let magic = decode_hex_8(&tok.current_magic, "current_magic")?;
+
+    let client_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] = decode_hex_n(
+        &tok.client_route_token,
+        "client_route_token",
+        ENCRYPTED_ROUTE_TOKEN_BYTES,
+    )?
+    .try_into()
+    .map_err(|_| anyhow::anyhow!("client_route_token: wrong length"))?;
+
+    let relay_chain_tokens: Vec<[u8; ENCRYPTED_ROUTE_TOKEN_BYTES]> = {
+        if tok.relay_chain_tokens.is_empty() {
+            bail!(
+                "refresh: /sessions/{}/refresh returned empty relay_chain_tokens",
+                cfg.session_id
+            );
+        }
+        let mut v = Vec::with_capacity(tok.relay_chain_tokens.len());
+        for (i, hex_str) in tok.relay_chain_tokens.iter().enumerate() {
+            let bytes: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] = decode_hex_n(
+                hex_str,
+                &format!("relay_chain_tokens[{}]", i),
+                ENCRYPTED_ROUTE_TOKEN_BYTES,
+            )?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("relay_chain_tokens[{}]: wrong length", i))?;
+            v.push(bytes);
+        }
+        v
+    };
+
+    Ok(RefreshedRouteData {
+        session_id: tok.session_id,
+        session_version: tok.session_version,
+        session_private_key,
+        client_route_token,
+        relay_chain_tokens,
+        ping_key,
+        magic,
+    })
 }
 
 fn fetch_bench_token(
@@ -1003,6 +1198,7 @@ async fn main() -> Result<()> {
                 "relay"
             }
         }
+        BenchMode::ServerBackend { .. } => "server-backend",
     };
     log::info!(
         "bench_client starting: mode={} pps={} payload={}B duration={}s",
@@ -1030,6 +1226,9 @@ async fn main() -> Result<()> {
     // task that re-fetches /bench_token and calls route_update every
     // ROUTE_REFRESH_INTERVAL_SECS to keep CLIENT_ROUTE_TIMEOUT from firing.
     let mut refresh_cfg: Option<Arc<RouteRefreshConfig>> = None;
+
+    // Server-backend refresh config - only set in server-backend mode.
+    let mut sb_refresh_cfg: Option<Arc<ServerBackendRefreshConfig>> = None;
 
     match &cfg.mode {
         BenchMode::Direct => {
@@ -1275,6 +1474,157 @@ async fn main() -> Result<()> {
             // route_active stays false; network thread sets it after receiving
             // ROUTE_RESPONSE from relay-xdp.
         }
+
+        BenchMode::ServerBackend {
+            server_backend_url,
+            server_id,
+            client_lat,
+            client_lng,
+        } => {
+            // 1. Create session via server-backend.
+            //    server-backend auto-selects the relay chain, mints tokens via
+            //    relay-backend, and calls POST /notify_session on bench_server
+            //    before returning - bench_client does NOT call /register_session.
+            let tok =
+                create_session_via_sb(server_backend_url, server_id, *client_lat, *client_lng)
+                    .context("POST /sessions to server-backend")?;
+
+            log::info!(
+                "server-backend session: session_id={} version={} relay={} hops={}",
+                tok.session_id,
+                tok.session_version,
+                tok.relay_chain
+                    .first()
+                    .map(|s| s.as_str())
+                    .unwrap_or("(none)"),
+                tok.relay_chain.len()
+            );
+
+            if tok.relay_chain.is_empty() {
+                bail!("server-backend returned empty relay_chain");
+            }
+            if tok.relay_secret_key.is_empty() || tok.client_route_token.is_empty() {
+                bail!("server-backend /sessions response missing relay token fields");
+            }
+
+            let relay_addr = &tok.relay_chain[0];
+
+            // 2. Decode keys from SessionResponse.
+            let session_private_key =
+                decode_hex_32(&tok.session_private_key, "session_private_key")?;
+            let relay_secret_key = decode_hex_32(&tok.relay_secret_key, "relay_secret_key")?;
+            let magic = decode_hex_8(&tok.current_magic, "current_magic")?;
+            let ping_key = decode_hex_32(&tok.ping_key, "ping_key")?;
+
+            let client_route_token: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] = decode_hex_n(
+                &tok.client_route_token,
+                "client_route_token",
+                ENCRYPTED_ROUTE_TOKEN_BYTES,
+            )?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("client_route_token: wrong length"))?;
+
+            let relay_chain_tokens: Vec<[u8; ENCRYPTED_ROUTE_TOKEN_BYTES]> = {
+                if tok.relay_chain_tokens.is_empty() {
+                    bail!("server-backend /sessions returned empty relay_chain_tokens");
+                }
+                let mut v = Vec::with_capacity(tok.relay_chain_tokens.len());
+                for (i, hex_str) in tok.relay_chain_tokens.iter().enumerate() {
+                    let bytes: [u8; ENCRYPTED_ROUTE_TOKEN_BYTES] = decode_hex_n(
+                        hex_str,
+                        &format!("relay_chain_tokens[{}]", i),
+                        ENCRYPTED_ROUTE_TOKEN_BYTES,
+                    )?
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("relay_chain_tokens[{}]: wrong length", i))?;
+                    v.push(bytes);
+                }
+                v
+            };
+
+            // 3. Parse client public IPv4.
+            let client_pub_octets: [u8; 4] = match tok.client_public_address.parse::<Ipv4Addr>() {
+                Ok(v4) => v4.octets(),
+                Err(e) => bail!(
+                    "invalid client_public_address '{}': {}",
+                    tok.client_public_address,
+                    e
+                ),
+            };
+
+            // 4. Parse relay addr for pinger.
+            let relay_sa_for_ping: std::net::SocketAddr = relay_addr
+                .parse()
+                .with_context(|| format!("parse relay addr: {}", relay_addr))?;
+            let relay_octets = match relay_sa_for_ping.ip() {
+                std::net::IpAddr::V4(v4) => v4.octets(),
+                _ => bail!("bench only supports IPv4 relay addresses"),
+            };
+            let relay_port_be = relay_sa_for_ping.port().to_be();
+
+            log::info!(
+                "bench_client: client_public_address={} relay_addr={}",
+                tok.client_public_address,
+                relay_addr
+            );
+
+            // 5. Setup pinger (same as relay mode).
+            let keys_arc: Arc<Mutex<PingerRefreshKeys>> =
+                Arc::new(Mutex::new(PingerRefreshKeys { ping_key, magic }));
+
+            pinger = Some(PingerState {
+                relay_addr: relay_sa_for_ping,
+                session_id: tok.session_id,
+                client_ip: client_pub_octets,
+                relay_ip: relay_octets,
+                relay_port_be,
+                interval: Duration::from_secs(3),
+                keys: Arc::clone(&keys_arc),
+            });
+
+            // 6. Store server-backend refresh config.
+            sb_refresh_cfg = Some(Arc::new(ServerBackendRefreshConfig {
+                server_backend_url: server_backend_url.clone(),
+                session_id: tok.session_id,
+                client_lat: *client_lat,
+                client_lng: *client_lng,
+                client_udp_addr: cfg.bench_client_udp.clone(),
+                keys: Arc::clone(&keys_arc),
+            }));
+
+            // 7. Setup relay route (same as relay mode).
+            let rs = RelaySetup {
+                session_id: tok.session_id,
+                session_version: tok.session_version,
+                session_private_key,
+                relay_secret_key,
+                client_route_token,
+                relay_chain_tokens,
+                magic,
+            };
+
+            setup_relay_route(
+                &mut inner,
+                &mut client_arc.lock().unwrap(),
+                &rs,
+                relay_addr,
+                &tok.server_udp_addr,
+                &cfg.bench_client_udp,
+            )?;
+
+            // DO NOT call register_session on bench_server - server-backend
+            // already sent POST /notify_session as part of POST /sessions.
+
+            log::info!(
+                "server-backend mode: session {:016x} ready, relay={} server={} hops={}",
+                tok.session_id,
+                relay_addr,
+                tok.server_udp_addr,
+                tok.relay_chain.len()
+            );
+            // route_active stays false; network thread sets it after receiving
+            // ROUTE_RESPONSE from relay-xdp.
+        }
     }
 
     // Shared counters.
@@ -1311,9 +1661,12 @@ async fn main() -> Result<()> {
             .expect("failed to spawn network thread");
     }
 
-    // In relay mode: wait for the network thread to receive a real ROUTE_RESPONSE
-    // from relay-xdp before starting load generation.
-    if matches!(cfg.mode, BenchMode::Relay { .. }) {
+    // In relay / server-backend mode: wait for the network thread to receive a
+    // real ROUTE_RESPONSE from relay-xdp before starting load generation.
+    if matches!(
+        cfg.mode,
+        BenchMode::Relay { .. } | BenchMode::ServerBackend { .. }
+    ) {
         log::info!("relay mode: waiting for ROUTE_RESPONSE from relay-xdp (timeout 15s)...");
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
@@ -1412,6 +1765,86 @@ async fn main() -> Result<()> {
 
                     log::info!(
                         "bench_client: route refreshed: new_session={:016x} magic={}",
+                        refreshed.session_id,
+                        hex::encode(refreshed.magic),
+                    );
+                }
+            });
+        }
+
+        // Server-backend refresh task: calls POST /sessions/{id}/refresh
+        // every ROUTE_REFRESH_INTERVAL_SECS. server-backend calls the game
+        // server webhook automatically on each refresh (no /register_session).
+        if let Some(sbrf) = sb_refresh_cfg {
+            let refresh_client = Arc::clone(&client_arc);
+            let refresh_shutdown = Arc::clone(&shutdown);
+            tokio::spawn(async move {
+                let mut interval =
+                    tokio::time::interval(Duration::from_secs(ROUTE_REFRESH_INTERVAL_SECS));
+                // Skip first immediate tick - initial route is already confirmed.
+                interval.tick().await;
+
+                while !refresh_shutdown.load(Ordering::Relaxed) {
+                    interval.tick().await;
+                    if refresh_shutdown.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    let sbrc = Arc::clone(&sbrf);
+                    let result =
+                        tokio::task::spawn_blocking(move || do_refresh_via_sb(&sbrc)).await;
+
+                    let refreshed = match result {
+                        Ok(Ok(r)) => r,
+                        Ok(Err(e)) => {
+                            log::warn!("bench_client: server-backend route refresh failed: {}", e);
+                            continue;
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "bench_client: server-backend route refresh task panicked: {}",
+                                e
+                            );
+                            continue;
+                        }
+                    };
+
+                    // Update shared ping/magic keys used by the network thread.
+                    {
+                        let mut keys = sbrf.keys.lock().unwrap();
+                        keys.ping_key = refreshed.ping_key;
+                        keys.magic = refreshed.magic;
+                    }
+
+                    // Build new token vec (same layout as relay mode).
+                    let n = refreshed.relay_chain_tokens.len();
+                    let num_tokens = n + 2;
+                    let mut tokens = Vec::with_capacity(ENCRYPTED_ROUTE_TOKEN_BYTES * num_tokens);
+                    tokens.extend_from_slice(&refreshed.client_route_token);
+                    for chain_tok in &refreshed.relay_chain_tokens {
+                        tokens.extend_from_slice(chain_tok);
+                    }
+                    tokens.extend_from_slice(&[0u8; ENCRYPTED_ROUTE_TOKEN_BYTES]);
+
+                    let client_ext = {
+                        let sa: std::net::SocketAddr = sbrf
+                            .client_udp_addr
+                            .parse()
+                            .unwrap_or_else(|_| "127.0.0.1:17778".parse().unwrap());
+                        Address::from(sa)
+                    };
+
+                    refresh_client.lock().unwrap().route_update(
+                        UPDATE_TYPE_ROUTE,
+                        num_tokens,
+                        tokens,
+                        refreshed.magic,
+                        client_ext,
+                    );
+
+                    log::info!(
+                        "bench_client: server-backend route refreshed: \
+                         new_session={:016x} magic={}",
                         refreshed.session_id,
                         hex::encode(refreshed.magic),
                     );

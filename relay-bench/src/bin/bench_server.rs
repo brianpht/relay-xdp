@@ -5,7 +5,8 @@
 //
 // Architecture:
 //   tokio runtime:
-//     axum  POST /register_session - registers a session with ServerInner
+//     axum  POST /register_session - registers a session with ServerInner (direct / relay mode)
+//     axum  POST /notify_session   - webhook from server-backend (server-backend mode)
 //     stats task  1 Hz -> stdout JSON
 //   std::thread (network):
 //     ServerInner pump_commands + recv_from loop + echo
@@ -13,19 +14,20 @@
 // IPC: Arc<Mutex<Server>> shared between tokio and network thread.
 //
 // Env vars:
-//   BENCH_HTTP_PORT  (default: 18080) - axum listen port
-//   BENCH_UDP_PORT   (default: 17777) - UDP listen port
-
-use std::io::ErrorKind;
-use std::net::{SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
+//   BENCH_HTTP_PORT       (default: 18080)   - axum listen port
+//   BENCH_UDP_PORT        (default: 17777)   - UDP listen port
+//   SERVER_PUBLIC_ADDR    (optional)         - "IP:PORT" server externally visible UDP addr;
+//                                              used for pinger/responder in notify_session
+//   SERVER_BACKEND_URL    (optional)         - base URL of server-backend; when set,
+//                                              bench_server calls POST /servers at startup and
+//                                              DELETE /servers/{id} on graceful shutdown
+//   SERVER_LAT            (optional)         - decimal latitude for server-backend registration
+//   SERVER_LNG            (optional)         - decimal longitude for server-backend registration
+//   SERVER_CALLBACK_URL   (optional)         - base URL server-backend uses to call
+//                                              /notify_session; defaults to
+//                                              http://127.0.0.1:BENCH_HTTP_PORT
 use anyhow::Result;
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
-use serde::Deserialize;
-
 use relay_sdk::address::Address;
 use relay_sdk::constants::{
     MAX_PACKET_BYTES, PACKET_TYPE_ROUTE_RESPONSE, SESSION_PRIVATE_KEY_BYTES,
@@ -33,18 +35,21 @@ use relay_sdk::constants::{
 use relay_sdk::crypto::hash_sha256;
 use relay_sdk::route::{stamp_packet, write_header, HEADER_BYTES};
 use relay_sdk::server::{Server, ServerInner};
-
-// ── Wire-format constants ─────────────────────────────────────────────────────
-
+use serde::{Deserialize, Serialize};
+use std::io::ErrorKind;
+use std::net::{SocketAddr, UdpSocket};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+// -- Wire-format constants ----------------------------------------------------
 const RELAY_SERVER_PING_PACKET: u8 = 13;
 const RELAY_ROUTE_REQUEST_PACKET: u8 = 1;
 const SERVER_PING_BYTES: usize = 66;
 /// ROUTE_RESPONSE: [type 1B][pittle 2B][chonkle 15B][RELAY_HEADER 25B] = 43B
 const ROUTE_RESPONSE_BYTES: usize = 18 + HEADER_BYTES;
 const PING_KEY_BYTES: usize = 32;
-
-// ── HTTP request body ─────────────────────────────────────────────────────────
-
+// -- HTTP request / response types --------------------------------------------
+/// Body for POST /register_session (direct / relay mode - called by bench_client).
 #[derive(Deserialize)]
 struct RegisterSessionBody {
     session_id: u64,
@@ -55,7 +60,7 @@ struct RegisterSessionBody {
     /// In direct mode this is the bench_client UDP bind addr.
     /// In relay mode this is the relay's last-hop address.
     relay_address: String,
-    // ── Relay mode ping params (optional - only set in relay mode) ────────
+    // -- Relay mode ping params (optional - only set in relay mode) ----------
     /// Hex-encoded 32B ping_key from relay-backend (bench_client forwards it).
     ping_key_hex: Option<String>,
     /// Hex-encoded 8B current_magic for pittle/chonkle stamping.
@@ -64,8 +69,35 @@ struct RegisterSessionBody {
     /// PingTokenData.source_address matches the saddr the relay sees post-NAT.
     server_public_address: Option<String>,
 }
-
-// ── SERVER_PING construction (66 bytes) ───────────────────────────────────────
+/// Webhook body posted by server-backend to POST /notify_session.
+/// Mirrors server-backend::handlers::WebhookPayload (server-backend outgoing).
+#[derive(Deserialize)]
+struct NotifySessionBody {
+    session_id: u64,
+    session_version: u8,
+    /// Hex-encoded 32B session private key.
+    session_private_key_hex: String,
+    /// First relay address in the chain ("IP:PORT").
+    relay_address: String,
+    /// Hex-encoded 32B ping_key.
+    ping_key_hex: String,
+    /// Hex-encoded 8B current_magic.
+    current_magic_hex: String,
+}
+/// Request body for POST /servers - self-register bench_server with server-backend.
+#[derive(Serialize)]
+struct SbRegisterServerRequest {
+    udp_addr: String,
+    lat: f64,
+    lng: f64,
+    callback_url: String,
+}
+/// Response body from POST /servers.
+#[derive(Deserialize)]
+struct SbRegisterServerResponse {
+    server_id: String,
+}
+// -- SERVER_PING construction (66 bytes) --------------------------------------
 //
 // Wire layout (matches relay-xdp-ebpf::handle_server_ping):
 //   [0]      packet type = 13 (RELAY_SERVER_PING_PACKET)
@@ -92,7 +124,6 @@ fn build_ping_token(
     td[50..52].copy_from_slice(&dst_port_be.to_le_bytes());
     hash_sha256(&td)
 }
-
 #[allow(clippy::too_many_arguments)]
 fn build_server_ping_packet(
     ping_key: &[u8; PING_KEY_BYTES],
@@ -119,14 +150,12 @@ fn build_server_ping_packet(
     stamp_packet(&mut buf, magic, &server_ip, &relay_ip);
     buf
 }
-
 fn unix_now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
 }
-
 /// Pinger state shared between HTTP handler (writes) and network thread (reads).
 struct ServerPingerState {
     relay_addr: SocketAddr,
@@ -137,7 +166,6 @@ struct ServerPingerState {
     relay_port_be: u16,
     magic: [u8; 8],
 }
-
 /// State required to synthesize a ROUTE_RESPONSE in reply to a relay-forwarded
 /// ROUTE_REQUEST. Populated by /register_session in relay mode.
 ///
@@ -158,9 +186,7 @@ struct RouteResponderState {
     /// strictly increment on every send. Starts at 1.
     next_sequence: u64,
 }
-
-// ── Shared axum state ─────────────────────────────────────────────────────────
-
+// -- Shared axum state --------------------------------------------------------
 struct BenchState {
     server: Arc<Mutex<Server>>,
     /// Populated by register_session in relay mode. Read by network_thread on a
@@ -170,10 +196,13 @@ struct BenchState {
     /// every inbound ROUTE_REQUEST packet to synthesize a ROUTE_RESPONSE back
     /// to the relay (so the relay's session_map entry confirms).
     responder: Arc<Mutex<Option<RouteResponderState>>>,
+    /// Server external UDP "IP:PORT" (SERVER_PUBLIC_ADDR env var).
+    /// Used when installing pinger/responder from notify_session_handler so the
+    /// relay can whitelist bench_server's public address for ROUTE_REQUEST
+    /// forwarding. None if SERVER_PUBLIC_ADDR was not set at startup.
+    server_public_addr: Option<String>,
 }
-
-// ── HTTP handler ──────────────────────────────────────────────────────────────
-
+// -- HTTP handler: POST /register_session -------------------------------------
 async fn register_session_handler(
     State(state): State<Arc<BenchState>>,
     Json(body): Json<RegisterSessionBody>,
@@ -205,7 +234,6 @@ async fn register_session_handler(
                 .into_response();
         }
     };
-
     let relay_addr: Address = match body.relay_address.parse() {
         Ok(a) => a,
         Err(e) => {
@@ -221,12 +249,10 @@ async fn register_session_handler(
                 .into_response();
         }
     };
-
     {
         let mut srv = state.server.lock().unwrap();
         srv.register_session(body.session_id, body.session_version, key_bytes, relay_addr);
     }
-
     // If relay-mode ping params were supplied, install pinger state so the
     // network thread starts sending SERVER_PING. Required for the relay to
     // whitelist this bench_server's IP:port (otherwise relay drops every
@@ -250,7 +276,6 @@ async fn register_session_handler(
             ),
             Err(e) => log::warn!("register_session: pinger install failed: {}", e),
         }
-
         // Also install the responder state so the network thread can synthesize
         // ROUTE_RESPONSE packets in reply to relay-forwarded ROUTE_REQUEST.
         match install_responder(
@@ -268,17 +293,115 @@ async fn register_session_handler(
             Err(e) => log::warn!("register_session: responder install failed: {}", e),
         }
     }
-
     log::info!(
         "registered session {:016x} v={} relay={}",
         body.session_id,
         body.session_version,
         body.relay_address
     );
-
     (StatusCode::OK, "registered").into_response()
 }
-
+// -- HTTP handler: POST /notify_session ---------------------------------------
+//
+// Receives webhook from server-backend after POST /sessions or
+// POST /sessions/{id}/refresh. Routes to the same install_pinger +
+// install_responder + register_session logic as register_session_handler
+// (relay mode path). bench_client in server-backend mode does NOT call
+// /register_session directly - server-backend sends this webhook instead.
+async fn notify_session_handler(
+    State(state): State<Arc<BenchState>>,
+    Json(body): Json<NotifySessionBody>,
+) -> impl IntoResponse {
+    let key_bytes = match hex::decode(&body.session_private_key_hex) {
+        Ok(b) if b.len() == SESSION_PRIVATE_KEY_BYTES => {
+            let mut arr = [0u8; SESSION_PRIVATE_KEY_BYTES];
+            arr.copy_from_slice(&b);
+            arr
+        }
+        Ok(b) => {
+            log::warn!(
+                "notify_session: bad key length {} (expected {})",
+                b.len(),
+                SESSION_PRIVATE_KEY_BYTES
+            );
+            return (
+                StatusCode::BAD_REQUEST,
+                "invalid session_private_key_hex length",
+            )
+                .into_response();
+        }
+        Err(e) => {
+            log::warn!("notify_session: hex decode error: {}", e);
+            return (StatusCode::BAD_REQUEST, "invalid session_private_key_hex").into_response();
+        }
+    };
+    let relay_addr: Address = match body.relay_address.parse() {
+        Ok(a) => a,
+        Err(e) => {
+            log::warn!(
+                "notify_session: bad relay_address '{}': {}",
+                body.relay_address,
+                e
+            );
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("invalid relay_address: {}", e),
+            )
+                .into_response();
+        }
+    };
+    {
+        let mut srv = state.server.lock().unwrap();
+        srv.register_session(body.session_id, body.session_version, key_bytes, relay_addr);
+    }
+    // Install pinger + responder using the server's public address stored at
+    // startup from SERVER_PUBLIC_ADDR env var. Without a public address we
+    // still register the session (SDK-level crypto works) but skip pinger/
+    // responder installation - the relay will not whitelist bench_server and
+    // will drop every forwarded ROUTE_REQUEST + CLIENT_TO_SERVER.
+    if let Some(server_pub) = state.server_public_addr.as_deref() {
+        match install_pinger(
+            &state.pinger,
+            &body.ping_key_hex,
+            &body.current_magic_hex,
+            server_pub,
+            &body.relay_address,
+        ) {
+            Ok(()) => log::info!(
+                "notify_session: pinger installed (server_pub={} relay={})",
+                server_pub,
+                body.relay_address
+            ),
+            Err(e) => log::warn!("notify_session: pinger install failed: {}", e),
+        }
+        match install_responder(
+            &state.responder,
+            body.session_id,
+            body.session_version,
+            &key_bytes,
+            &body.current_magic_hex,
+            server_pub,
+        ) {
+            Ok(()) => log::info!(
+                "notify_session: responder installed (session={:016x})",
+                body.session_id
+            ),
+            Err(e) => log::warn!("notify_session: responder install failed: {}", e),
+        }
+    } else {
+        log::warn!(
+            "notify_session: SERVER_PUBLIC_ADDR not set - pinger/responder not installed. \
+             Set SERVER_PUBLIC_ADDR=<IP>:<UDP_PORT> so the relay whitelists bench_server."
+        );
+    }
+    log::info!(
+        "notify_session: registered session {:016x} v={} relay={}",
+        body.session_id,
+        body.session_version,
+        body.relay_address
+    );
+    (StatusCode::OK, "ok").into_response()
+}
 fn install_pinger(
     slot: &Arc<Mutex<Option<ServerPingerState>>>,
     ping_key_hex: &str,
@@ -292,28 +415,24 @@ fn install_pinger(
     }
     let mut ping_key = [0u8; PING_KEY_BYTES];
     ping_key.copy_from_slice(&ping_key_vec);
-
     let magic_vec = hex::decode(magic_hex)?;
     if magic_vec.len() != 8 {
         anyhow::bail!("magic length");
     }
     let mut magic = [0u8; 8];
     magic.copy_from_slice(&magic_vec);
-
     let server_sa: SocketAddr = server_public_address.parse()?;
     let server_ip = match server_sa.ip() {
         std::net::IpAddr::V4(v4) => v4.octets(),
         _ => anyhow::bail!("server_public_address must be IPv4"),
     };
     let server_port_be = server_sa.port().to_be();
-
     let relay_sa: SocketAddr = relay_address.parse()?;
     let relay_ip = match relay_sa.ip() {
         std::net::IpAddr::V4(v4) => v4.octets(),
         _ => anyhow::bail!("relay_address must be IPv4"),
     };
     let relay_port_be = relay_sa.port().to_be();
-
     *slot.lock().unwrap() = Some(ServerPingerState {
         relay_addr: relay_sa,
         ping_key,
@@ -325,7 +444,6 @@ fn install_pinger(
     });
     Ok(())
 }
-
 fn install_responder(
     slot: &Arc<Mutex<Option<RouteResponderState>>>,
     session_id: u64,
@@ -340,13 +458,11 @@ fn install_responder(
     }
     let mut magic = [0u8; 8];
     magic.copy_from_slice(&magic_vec);
-
     let server_sa: SocketAddr = server_public_address.parse()?;
     let server_ip = match server_sa.ip() {
         std::net::IpAddr::V4(v4) => v4.octets(),
         _ => anyhow::bail!("server_public_address must be IPv4"),
     };
-
     *slot.lock().unwrap() = Some(RouteResponderState {
         session_id,
         session_version,
@@ -357,7 +473,6 @@ fn install_responder(
     });
     Ok(())
 }
-
 /// Build a 43-byte ROUTE_RESPONSE packet (matches relay-xdp-ebpf::handle_route_response).
 ///
 /// Wire layout:
@@ -381,7 +496,6 @@ fn build_route_response_packet(
 ) -> [u8; ROUTE_RESPONSE_BYTES] {
     let mut buf = [0u8; ROUTE_RESPONSE_BYTES];
     buf[0] = PACKET_TYPE_ROUTE_RESPONSE;
-
     // RELAY_HEADER_BYTES = HEADER_BYTES = 25 starts at offset 18.
     let mut header = [0u8; HEADER_BYTES];
     write_header(
@@ -393,13 +507,10 @@ fn build_route_response_packet(
         &mut header,
     );
     buf[18..18 + HEADER_BYTES].copy_from_slice(&header);
-
     stamp_packet(&mut buf, magic, server_ip, relay_ip);
     buf
 }
-
-// ── Network thread ────────────────────────────────────────────────────────────
-
+// -- Network thread -----------------------------------------------------------
 #[allow(clippy::too_many_arguments)]
 fn network_thread(
     mut inner: ServerInner,
@@ -420,17 +531,13 @@ fn network_thread(
     };
     sock.set_read_timeout(Some(Duration::from_millis(1)))
         .expect("set_read_timeout");
-
     log::info!("bench_server: UDP listening on :{}", udp_port);
-
     let mut recv_buf = [0u8; MAX_PACKET_BYTES];
     let mut last_ping = Instant::now() - Duration::from_secs(60);
     let ping_interval = Duration::from_secs(3);
-
     while !shutdown.load(Ordering::Relaxed) {
         // 1. Drain pending commands (RegisterSession, Open, etc.)
         inner.pump_commands();
-
         // 1b. Periodic SERVER_PING refresh. Required so the relay's whitelist
         //     map keeps an entry for our IP:port. Without it the relay drops
         //     every forwarded ROUTE_REQUEST / CLIENT_TO_SERVER destined here.
@@ -457,7 +564,6 @@ fn network_thread(
             }
             last_ping = Instant::now();
         }
-
         // 2. Receive a packet.
         let (n, from) = match sock.recv_from(&mut recv_buf) {
             Ok(r) => r,
@@ -469,7 +575,6 @@ fn network_thread(
                 continue;
             }
         };
-
         // 3. Process incoming: expects CLIENT_TO_SERVER.
         // 3a. ROUTE_REQUEST forwarded by the relay reaches us with type=1 and
         //     one trailing encrypted token. ServerInner does not handle this
@@ -535,12 +640,10 @@ fn network_thread(
             }
             continue;
         }
-
         let Some((session_id, payload)) = inner.process_incoming(&recv_buf[..n]) else {
             continue;
         };
         pkt_recv.fetch_add(1, Ordering::Relaxed);
-
         // 4. Echo payload back to client via session's relay_address.
         //    from_address is used for pittle/chonkle stamping only.
         let from_addr = Address::from(from);
@@ -548,10 +651,8 @@ fn network_thread(
             let mut srv = server_arc.lock().unwrap();
             srv.send_packet(session_id, &payload, [0u8; 8], from_addr);
         }
-
         // 5. Process the SendPacket command just queued.
         inner.pump_commands();
-
         // 6. Dispatch all SendRaw packets.
         loop {
             let outbound = { server_arc.lock().unwrap().pop_send_raw() };
@@ -567,36 +668,94 @@ fn network_thread(
             }
         }
     }
-
     log::info!("bench_server: network thread exiting");
 }
-
-// ── Main ──────────────────────────────────────────────────────────────────────
-
+// -- Main ---------------------------------------------------------------------
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
-
     let http_port: u16 = std::env::var("BENCH_HTTP_PORT")
         .unwrap_or_else(|_| "18080".into())
         .parse()
         .unwrap_or(18080);
-
     let udp_port: u16 = std::env::var("BENCH_UDP_PORT")
         .unwrap_or_else(|_| "17777".into())
         .parse()
         .unwrap_or(17777);
-
+    // -- Server-backend integration env vars ----------------------------------
+    let server_backend_url = std::env::var("SERVER_BACKEND_URL").unwrap_or_default();
+    let server_public_addr: Option<String> = std::env::var("SERVER_PUBLIC_ADDR").ok();
     log::info!(
         "bench_server starting (HTTP:{} UDP:{})",
         http_port,
         udp_port
     );
-
+    // -- Optional startup self-registration with server-backend ---------------
+    // When SERVER_BACKEND_URL is set, register this bench_server as a game
+    // server so bench_client (in server-backend mode) can call POST /sessions
+    // and server-backend will select a relay chain and call POST /notify_session
+    // back here before returning tokens to the client.
+    let mut registered_server_id: Option<String> = None;
+    if !server_backend_url.is_empty() {
+        let server_lat: f64 = std::env::var("SERVER_LAT")
+            .unwrap_or_else(|_| "0.0".into())
+            .parse()
+            .unwrap_or(0.0);
+        let server_lng: f64 = std::env::var("SERVER_LNG")
+            .unwrap_or_else(|_| "0.0".into())
+            .parse()
+            .unwrap_or(0.0);
+        let server_callback_url = std::env::var("SERVER_CALLBACK_URL")
+            .unwrap_or_else(|_| format!("http://127.0.0.1:{}", http_port));
+        // udp_addr: prefer SERVER_PUBLIC_ADDR (game traffic arrives here);
+        // fall back to loopback when not set (local-only testing).
+        let udp_addr = server_public_addr
+            .clone()
+            .unwrap_or_else(|| format!("127.0.0.1:{}", udp_port));
+        let req = SbRegisterServerRequest {
+            udp_addr,
+            lat: server_lat,
+            lng: server_lng,
+            callback_url: server_callback_url,
+        };
+        let http = reqwest::Client::new();
+        match http
+            .post(format!("{}/servers", server_backend_url))
+            .json(&req)
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<SbRegisterServerResponse>().await {
+                    Ok(r) => {
+                        log::info!(
+                            "bench_server: registered with server-backend server_id={}",
+                            r.server_id
+                        );
+                        registered_server_id = Some(r.server_id);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "bench_server: server-backend POST /servers response parse failed: {}",
+                            e
+                        );
+                    }
+                }
+            }
+            Ok(resp) => {
+                log::warn!(
+                    "bench_server: server-backend POST /servers returned HTTP {}",
+                    resp.status()
+                );
+            }
+            Err(e) => {
+                log::warn!("bench_server: server-backend POST /servers failed: {}", e);
+            }
+        }
+    }
     // Create the ServerInner / Server pair.
     let (inner, server) = ServerInner::create();
     let server_arc = Arc::new(Mutex::new(server));
-
     // Open the server - command will be picked up by network thread.
     {
         let mut srv = server_arc.lock().unwrap();
@@ -605,14 +764,12 @@ async fn main() -> Result<()> {
             port: udp_port,
         });
     }
-
     // Atomic counters visible to both network thread and stats task.
     let pkt_recv = Arc::new(AtomicU64::new(0));
     let pkt_sent = Arc::new(AtomicU64::new(0));
     let shutdown = Arc::new(AtomicBool::new(false));
     let pinger: Arc<Mutex<Option<ServerPingerState>>> = Arc::new(Mutex::new(None));
     let responder: Arc<Mutex<Option<RouteResponderState>>> = Arc::new(Mutex::new(None));
-
     // Spawn network thread.
     {
         let server_net = Arc::clone(&server_arc);
@@ -637,7 +794,6 @@ async fn main() -> Result<()> {
             })
             .expect("failed to spawn network thread");
     }
-
     // Stats printer task: 1 Hz -> stdout JSON.
     {
         let pkt_recv_s = Arc::clone(&pkt_recv);
@@ -664,22 +820,44 @@ async fn main() -> Result<()> {
             }
         });
     }
-
     // Start axum server.
     let state = Arc::new(BenchState {
         server: Arc::clone(&server_arc),
         pinger: Arc::clone(&pinger),
         responder: Arc::clone(&responder),
+        server_public_addr,
     });
     let app = Router::new()
         .route("/register_session", post(register_session_handler))
+        .route("/notify_session", post(notify_session_handler))
         .with_state(state);
-
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", http_port)).await?;
     log::info!("bench_server: HTTP listening on :{}", http_port);
-
-    axum::serve(listener, app).await?;
-
-    shutdown.store(true, Ordering::Relaxed);
+    // Graceful shutdown: signal the network thread and optionally deregister
+    // from server-backend (DELETE /servers/{id}) before the process exits.
+    let shutdown_net = Arc::clone(&shutdown);
+    let sb_url_shutdown = server_backend_url.clone();
+    let sb_id_shutdown = registered_server_id.clone();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            tokio::signal::ctrl_c().await.ok();
+            shutdown_net.store(true, Ordering::Relaxed);
+            if !sb_url_shutdown.is_empty() {
+                if let Some(sid) = &sb_id_shutdown {
+                    let http = reqwest::Client::new();
+                    let url = format!("{}/servers/{}", sb_url_shutdown, sid);
+                    match http.delete(&url).send().await {
+                        Ok(_) => log::info!(
+                            "bench_server: deregistered server {} from server-backend",
+                            sid
+                        ),
+                        Err(e) => {
+                            log::warn!("bench_server: DELETE /servers/{} failed: {}", sid, e)
+                        }
+                    }
+                }
+            }
+        })
+        .await?;
     Ok(())
 }
