@@ -5,31 +5,47 @@
 # The bench node simulates a production game server for relay-mode benchmarks:
 #   bench_client -> relay-xdp:40000 -> bench_server:17777 -> relay-xdp -> bench_client
 #
+# server-backend mode:
+#   bench_server self-registers with server-backend at startup when
+#   SERVER_BACKEND_URL is set. bench_client uses BENCH_MODE=server-backend
+#   and the exported server_backend_url stack output.
+#
 # Prerequisites:
 #   - bench node provisioned via `cd infra && pulumi up --stack staging`
 #   - binary built: `cargo build --release -p relay-bench`
 #   - bench_servers group present in inventory (see ansible/inventory/staging.yml)
 #
 # Usage:
-#   ansible-playbook -i inventory/staging.yml playbooks/bench-deploy.yml
+#   ansible-playbook -i inventory/staging.yml playbooks/bench-deploy.yml \
+#     -e server_backend_url=http://<backend-public-ip>:8180
 #
 # After deploy, run the benchmark from your local machine:
 #   eval $(python infra/stack_outputs.py --stack staging --format env)
+#   # relay mode (legacy):
 #   make bench-relay \
 #     RELAY_ADDR=$(echo $RELAY_PUBLIC_IPS | awk '{print $1}'):40000 \
 #     BACKEND_ADMIN=http://${BACKEND_HOST}:8091 \
 #     BENCH_SERVER_HTTP=${BENCH_HOST}:18080 \
 #     BENCH_SERVER_UDP=${BENCH_HOST}:17777
+#   # server-backend mode:
+#   make bench-relay \
+#     BENCH_MODE=server-backend \
+#     SERVER_BACKEND_URL=${SERVER_BACKEND_URL} \
+#     SERVER_ID=<uuid-from-bench_server-log>
 
 - name: Deploy bench_server to bench node
   hosts: bench_servers
-  gather_facts: false
+  gather_facts: true
   become: yes
 
   vars:
     bench_http_port: 18080
     bench_udp_port:  17777
     bench_bin_dir:   /usr/local/bin
+    # server-backend integration - override via -e or leave empty to disable
+    server_backend_url:      "{{ lookup('env', 'SERVER_BACKEND_URL') | default('', true) }}"
+    bench_server_lat:        "{{ lookup('env', 'BENCH_SERVER_LAT')   | default('39.0', true) }}"
+    bench_server_lng:        "{{ lookup('env', 'BENCH_SERVER_LNG')   | default('-77.5', true) }}"
 
   tasks:
     # -- 1. Copy binary -------------------------------------------------------
@@ -55,6 +71,13 @@
           ExecStart={{ bench_bin_dir }}/bench_server
           Environment=BENCH_HTTP_PORT={{ bench_http_port }}
           Environment=BENCH_UDP_PORT={{ bench_udp_port }}
+          {% if server_backend_url %}
+          Environment=SERVER_BACKEND_URL={{ server_backend_url }}
+          Environment=SERVER_LAT={{ bench_server_lat }}
+          Environment=SERVER_LNG={{ bench_server_lng }}
+          Environment=SERVER_PUBLIC_ADDR={{ ansible_default_ipv4.address }}:{{ bench_udp_port }}
+          Environment=SERVER_CALLBACK_URL=http://{{ ansible_host }}:{{ bench_http_port }}
+          {% endif %}
           Restart=on-failure
           RestartSec=2
           User=ubuntu
@@ -88,6 +111,7 @@
           [bench-deploy] {{ inventory_hostname }} PASS:
           bench-server={{ bench_svc.stdout }}
           HTTP=:{{ bench_http_port }} UDP=:{{ bench_udp_port }}
+          server_backend_url={{ server_backend_url | default('(disabled)') }}
 
   handlers:
     - name: Restart bench-server

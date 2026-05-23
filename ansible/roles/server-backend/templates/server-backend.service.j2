@@ -1,0 +1,32 @@
+[Unit]
+Description=server-backend - matchmaking and session management backend
+Documentation=https://github.com/{{ github_repo }}
+After=network.target relay-backend.service
+Wants=relay-backend.service
+
+[Service]
+Type=simple
+User={{ relay_user }}
+Group={{ relay_group }}
+EnvironmentFile={{ relay_conf_dir }}/server-backend.env
+ExecStart={{ relay_bin_dir }}/server-backend
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+
+# Security hardening (identical to relay-backend.service)
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/relay
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=server-backend
+
+[Install]
+WantedBy=multi-user.target
+

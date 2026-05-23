@@ -13,8 +13,8 @@
 - [x] Plan infra (Pulumi) changes for server-backend port + bench webhook access
 - [x] Plan Ansible role and deploy playbooks for server-backend
 - [x] Implement relay-bench changes (completed 2026-05-23)
-- [ ] Implement Pulumi infra changes (planned - not yet started)
-- [ ] Implement Ansible role + deploy changes (planned - not yet started)
+- [x] Implement Pulumi infra changes (completed 2026-05-23)
+- [x] Implement Ansible role + deploy changes (completed 2026-05-23)
 
 ## Work Completed
 
@@ -222,10 +222,10 @@ A lightweight integration-test client (if needed) belongs in `relay-sdk/examples
 2. ~~**High:** Implement `bench_client` changes - add `BenchMode::ServerBackend` with `do_refresh_via_server_backend()`~~ **Done 2026-05-23**
 3. ~~**High:** Update `relay-bench/Cargo.toml` - add `reqwest` dep~~ **Done 2026-05-23**
 4. ~~**High:** Run CI checks: `cargo fmt --all` -> `cargo clippy --workspace --lib --bins -- -D warnings` -> `cargo test --workspace`~~ **Done 2026-05-23 - all pass, zero warnings**
-5. **High:** Implement Pulumi infra changes - TCP 8180 on `sg_backend`, TCP 18080 from `vpc_cidr` on `sg_bench`, export `server_backend_url`
-6. **High:** Implement Ansible role `server-backend` (tasks, templates, handlers)
-7. **High:** Update `site.yml` + `group_vars/all.yml` + `bench-deploy.yml`
-8. **Medium:** Add `bench-server-backend-deploy.yml` playbook
+5. ~~**High:** Implement Pulumi infra changes - TCP 8180 on `sg_backend`, TCP 18080 from `vpc_cidr` on `sg_bench`, export `server_backend_url`~~ **Done 2026-05-23**
+6. ~~**High:** Implement Ansible role `server-backend` (tasks, templates, handlers)~~ **Done 2026-05-23**
+7. ~~**High:** Update `site.yml` + `group_vars/all.yml` + `bench-deploy.yml`~~ **Done 2026-05-23**
+8. ~~**Medium:** Add `bench-server-backend-deploy.yml` playbook~~ **Done 2026-05-23**
 9. **Low:** Update `README.md` bench section with new `BENCH_MODE=server-backend` usage example
 
 ## Files Changed
@@ -235,14 +235,14 @@ A lightweight integration-test client (if needed) belongs in `relay-sdk/examples
 | Done | `relay-bench/src/bin/bench_client.rs` |
 | Done | `relay-bench/src/bin/bench_server.rs` |
 | Done | `relay-bench/Cargo.toml` |
-| Planned | `infra/network.py` |
-| Planned | `infra/__main__.py` |
-| Planned | `ansible/roles/server-backend/tasks/main.yml` |
-| Planned | `ansible/roles/server-backend/templates/server-backend.service.j2` |
-| Planned | `ansible/roles/server-backend/templates/server-backend.env.j2` |
-| Planned | `ansible/roles/server-backend/handlers/main.yml` |
-| Planned | `ansible/playbooks/site.yml` |
-| Planned | `ansible/playbooks/group_vars/all.yml` |
-| Planned | `ansible/playbooks/bench-deploy.yml` |
-| Planned | `ansible/playbooks/bench-server-backend-deploy.yml` (new) |
+| Done | `infra/network.py` |
+| Done | `infra/__main__.py` |
+| Done | `ansible/roles/server-backend/tasks/main.yml` |
+| Done | `ansible/roles/server-backend/templates/server-backend.service.j2` |
+| Done | `ansible/roles/server-backend/templates/server-backend.env.j2` |
+| Done | `ansible/roles/server-backend/handlers/main.yml` |
+| Done | `ansible/playbooks/site.yml` |
+| Done | `ansible/playbooks/group_vars/all.yml` |
+| Done | `ansible/playbooks/bench-deploy.yml` |
+| Done | `ansible/playbooks/bench-server-backend-deploy.yml` (new) |
 

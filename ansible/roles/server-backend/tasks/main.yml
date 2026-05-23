@@ -1,0 +1,64 @@
+---
+# roles/server-backend/tasks/main.yml
+# Deploy server-backend binary, environment file, and systemd unit.
+# server-backend depends on relay-backend being available (polls /route_matrix).
+# The play order in site.yml ensures relay-backend is already running when
+# this role executes.
+
+- name: Download server-backend binary
+  ansible.builtin.get_url:
+    url: "{{ artifact_base_url }}/server-backend"
+    dest: "{{ relay_bin_dir }}/server-backend"
+    mode: "0755"
+    owner: root
+    group: root
+  notify: restart server-backend
+
+- name: Deploy server-backend environment file
+  ansible.builtin.template:
+    src: server-backend.env.j2
+    dest: "{{ relay_conf_dir }}/server-backend.env"
+    owner: "{{ relay_user }}"
+    group: "{{ relay_group }}"
+    mode: "0640"
+  notify: restart server-backend
+
+- name: Deploy server-backend systemd unit
+  ansible.builtin.template:
+    src: server-backend.service.j2
+    dest: /etc/systemd/system/server-backend.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - reload systemd
+    - restart server-backend
+
+- name: Enable and start server-backend
+  ansible.builtin.systemd:
+    name: server-backend
+    enabled: true
+    state: started
+    daemon_reload: true
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Flush handlers to apply any pending restarts before healthcheck
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for server-backend to finish startup
+  ansible.builtin.pause:
+    seconds: "{{ relay_startup_wait_s }}"
+  when: not ansible_check_mode
+
+- name: Wait for server-backend healthcheck
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ server_backend_http_port }}/health"
+    method: GET
+    status_code: 200
+    timeout: 5
+  register: sb_health_check
+  retries: "{{ relay_verify_retries }}"
+  delay: "{{ relay_verify_delay_s }}"
+  until: sb_health_check.status == 200
+  when: not ansible_check_mode
+

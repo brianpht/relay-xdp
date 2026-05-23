@@ -178,6 +178,7 @@ def create_regional_network(
     #   - TCP 8090 open to internet (relay nodes POST /relay_update + health)
     #   - TCP 8091 from admin_cidr only (admin / data plane: cost matrix,
     #     route matrix, /metrics, /relays, /relay_counters - see audit P1-14)
+    #   - TCP 8180 open to internet (server-backend matchmaking API)
     #   - TCP 6379 from VPC CIDR only (Redis - never expose to internet)
     #   - TCP 22   from admin_cidr only
     #   - All outbound allowed
@@ -202,6 +203,14 @@ def create_regional_network(
                 from_port=8091,
                 to_port=8091,
                 cidr_blocks=[admin_cidr],
+            ),
+            aws.ec2.SecurityGroupIngressArgs(
+                description="server-backend matchmaking API - public",
+                protocol="tcp",
+                from_port=8180,
+                to_port=8180,
+                cidr_blocks=["0.0.0.0/0"],
+                ipv6_cidr_blocks=["::/0"],
             ),
             aws.ec2.SecurityGroupIngressArgs(
                 description="Redis - internal VPC only",
@@ -234,7 +243,9 @@ def create_regional_network(
 
     # ------------------------------------------------------------------
     # Security Group: bench node (game server simulator)
-    #   - TCP 18080 from admin_cidr only (bench_client POST /register_session)
+    #   - TCP 18080 from admin_cidr only (bench_client POST /register_session,
+    #     direct/relay mode) AND from vpc_cidr (server-backend POST /notify_session
+    #     webhook - server-backend is on backend_node, same VPC as bench_node)
     #   - UDP 17777 open to internet (relay-xdp forwards CLIENT_TO_SERVER here)
     #   - TCP 22    from admin_cidr only
     # ------------------------------------------------------------------
@@ -250,6 +261,13 @@ def create_regional_network(
                 from_port=18080,
                 to_port=18080,
                 cidr_blocks=[admin_cidr],
+            ),
+            aws.ec2.SecurityGroupIngressArgs(
+                description="bench_server HTTP webhook from server-backend (VPC internal)",
+                protocol="tcp",
+                from_port=18080,
+                to_port=18080,
+                cidr_blocks=[vpc_cidr],
             ),
             aws.ec2.SecurityGroupIngressArgs(
                 description="bench_server UDP echo (relay-xdp forwards here)",

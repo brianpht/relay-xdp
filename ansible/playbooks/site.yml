@@ -28,6 +28,12 @@
   roles:
     - relay-backend
 
+- name: server-backend - backend servers
+  hosts: backend_servers
+  gather_facts: false
+  roles:
+    - server-backend
+
 - name: Kernel module - relay servers
   hosts: relay_servers
   gather_facts: true

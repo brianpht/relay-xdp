@@ -15,10 +15,12 @@ relay_user:       relay
 relay_group:      relay
 
 # ---- Network -----------------------------------------------------------
-relay_udp_port:    40000
-relay_http_port:   8080
-backend_http_port: 8090
-redis_port:        6379
+relay_udp_port:         40000
+relay_http_port:        8080
+backend_http_port:      8090
+backend_admin_http_port: 8091
+server_backend_http_port: 8180
+redis_port:             6379
 
 # ---- NIC tuning for native XDP on AWS ENA ------------------------------
 # ENA native XDP requires:

@@ -1,0 +1,14 @@
+---
+# roles/server-backend/handlers/main.yml
+
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: restart server-backend
+  ansible.builtin.systemd:
+    name: server-backend
+    state: restarted
+  ignore_errors: "{{ ansible_check_mode }}"
+

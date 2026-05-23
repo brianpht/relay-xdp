@@ -145,6 +145,13 @@ pulumi.export(
 
 pulumi.export("stack", stack_name)
 
+# server_backend_url: consumed by stack_outputs.py and bench deploy workflow
+# so bench_client knows SERVER_BACKEND_URL in server-backend mode.
+pulumi.export(
+    "server_backend_url",
+    backend.public_ip.apply(lambda ip: f"http://{ip}:8180"),
+)
+
 # ---------------------------------------------------------------------------
 # Bench node - optional, staging only (game server simulator for bench-relay)
 # Placed in backend_net (same VPC/region as backend) for low relay->bench latency.

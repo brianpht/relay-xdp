@@ -1,0 +1,73 @@
+---
+# playbooks/bench-server-backend-deploy.yml
+# Deploy a locally-built server-backend binary to the backend node.
+#
+# Mirrors bench-backend-deploy.yml: rapid iteration for server-backend changes
+# alongside bench_server changes, without running the full site.yml deploy.
+#
+# Prerequisites:
+#   - server-backend already deployed via site.yml (systemd unit present)
+#   - binary built: `cargo build --release -p server-backend`
+#   - backend node reachable (see ansible/inventory/<stack>.yml)
+#
+# Usage:
+#   ansible-playbook -i inventory/staging.yml playbooks/bench-server-backend-deploy.yml
+
+- name: Deploy server-backend binary to backend node
+  hosts: backend_servers
+  gather_facts: false
+  become: yes
+
+  vars:
+    relay_bin_dir: /usr/local/bin
+    server_backend_http_port: "{{ hostvars[inventory_hostname].server_backend_http_port | default(8180) }}"
+
+  tasks:
+    # -- 1. Copy binary -------------------------------------------------------
+    - name: Copy server-backend binary
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../target/release/server-backend"
+        dest: "{{ relay_bin_dir }}/server-backend"
+        mode: "0755"
+        owner: root
+        group: root
+      notify: Restart server-backend
+
+    # -- 2. Flush handlers (restart only if binary changed) -------------------
+    - name: Flush handlers
+      ansible.builtin.meta: flush_handlers
+
+    # -- 3. Verify active -----------------------------------------------------
+    - name: Verify server-backend is active
+      ansible.builtin.command:
+        cmd: systemctl is-active server-backend
+      register: sb_svc
+      changed_when: false
+      failed_when: sb_svc.stdout != "active"
+
+    # -- 4. Healthcheck -------------------------------------------------------
+    - name: Healthcheck server-backend
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ server_backend_http_port }}/health"
+        method: GET
+        status_code: 200
+        timeout: 5
+      register: sb_health
+      retries: 3
+      delay: 2
+      until: sb_health.status == 200
+
+    - name: Report server-backend state
+      ansible.builtin.debug:
+        msg: >
+          [bench-server-backend-deploy] {{ inventory_hostname }} PASS:
+          server-backend={{ sb_svc.stdout }}
+          health={{ sb_health.status }}
+
+  handlers:
+    - name: Restart server-backend
+      ansible.builtin.systemd:
+        name: server-backend
+        daemon_reload: false
+        state: restarted
+
