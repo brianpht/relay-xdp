@@ -59,6 +59,9 @@ pub struct StoredSession {
     /// Retained for future session timeout/eviction logic.
     #[allow(dead_code)]
     pub created_at: u64,
+    /// Game client's public IPv4. Stored so refresh calls can forward the same
+    /// IP to relay-backend /bench_token (prev_address in RouteToken).
+    pub client_ip: Option<String>,
 }
 
 // -------------------------------------------------------

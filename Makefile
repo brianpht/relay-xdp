@@ -434,8 +434,17 @@ bench-deploy:
 	cargo build --release -p relay-bench -p relay-backend
 	ansible-playbook -i $(INVENTORY) ansible/playbooks/bench-backend-deploy.yml \
 	$(_VAULT_FLAG)
+	@$(_PULUMI_ENV_STAGING); \
+	_sb_url="$(SERVER_BACKEND_URL)"; \
+	if [ -z "$$_sb_url" ]; then \
+		echo "[bench-deploy] resolving SERVER_BACKEND_URL from stack=$(STACK) via stack_outputs.py..."; \
+		eval $$($(INFRA_PYTHON) infra/stack_outputs.py --stack $(STACK) --format env); \
+		_sb_url=$$SERVER_BACKEND_URL; \
+	fi; \
+	echo "[bench-deploy] bench_server server_backend_url=$$_sb_url"; \
 	ansible-playbook -i $(INVENTORY) ansible/playbooks/bench-deploy.yml \
-	$(_VAULT_FLAG)
+		$(_VAULT_FLAG) \
+		$$([ -n "$$_sb_url" ] && echo "-e server_backend_url=$$_sb_url" || true)
 
 bench-server-backend-deploy:
 	cargo build --release -p server-backend

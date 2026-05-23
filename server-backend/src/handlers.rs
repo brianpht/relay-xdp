@@ -10,12 +10,13 @@
 //!   GET    /health                 - liveness probe
 //!   GET    /relay_status           - relay matrix health summary
 
+use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
-    extract::{Path, State},
+    extract::{connect_info::ConnectInfo, Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -84,10 +85,10 @@ pub struct CreateSessionRequest {
     pub server_id: Uuid,
     pub client_lat: f64,
     pub client_lng: f64,
-    /// Optional hint: client post-NAT public IP (used in token prev_address).
-    /// If omitted relay-backend will record server-backend's IP instead.
-    /// Retained as API surface for future bench_token extension.
-    #[allow(dead_code)]
+    /// Optional client post-NAT public IPv4. When provided, forwarded to
+    /// relay-backend as the prev_address in the RouteToken so the relay's
+    /// eBPF data plane can validate ROUTE_REQUEST packets from the real client
+    /// IP. If omitted, ConnectInfo (peer IP) is used as fallback.
     pub client_ip: Option<String>,
 }
 
@@ -272,18 +273,26 @@ async fn list_servers(State(state): State<Arc<AppState>>) -> Response {
 // -------------------------------------------------------
 
 /// Call relay-backend GET /bench_token to mint route tokens for the given chain.
+/// `client_ip` - optional IPv4 of the game client; forwarded as `client_ip`
+/// query param so relay-backend can embed the real client address in the
+/// RouteToken instead of the backend's loopback IP.
 async fn mint_tokens(
     state: &AppState,
     relay_chain: &[String],
     server_udp_addr: &str,
+    client_ip: Option<&str>,
 ) -> anyhow::Result<BenchTokenResponse> {
     let relay_chain_param = relay_chain.join(",");
-    let url = format!(
+    let mut url = format!(
         "{}/bench_token?relay_chain={}&bench_server_addr={}",
         state.config.relay_backend_admin_url,
         urlencoding_simple(&relay_chain_param),
         urlencoding_simple(server_udp_addr),
     );
+    if let Some(ip) = client_ip {
+        url.push_str("&client_ip=");
+        url.push_str(&urlencoding_simple(ip));
+    }
 
     let resp = state
         .http_client
@@ -355,8 +364,31 @@ async fn notify_game_server(
 
 async fn create_session(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateSessionRequest>,
+    // ConnectInfo is read as an optional extension so the handler works both
+    // in production (into_make_service_with_connect_info) and in tests that
+    // use tower::oneshot without ConnectInfo support.
+    raw_req: axum::extract::Request,
 ) -> Response {
+    // Extract JSON body manually after consuming the raw request.
+    let (parts, body) = raw_req.into_parts();
+    let bytes = match axum::body::to_bytes(body, 1024 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return err(StatusCode::BAD_REQUEST, "failed to read request body"),
+    };
+    let req: CreateSessionRequest = match serde_json::from_slice(&bytes) {
+        Ok(r) => r,
+        Err(e) => {
+            return err(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                &format!("invalid JSON: {e}"),
+            )
+        }
+    };
+    // Extract caller IPv4 from ConnectInfo extension (absent in tests).
+    let peer_addr: Option<SocketAddr> = parts
+        .extensions
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(sa)| *sa);
     // 1. Look up registered server.
     let server = {
         let guard = state.servers.read().expect("servers lock poisoned");
@@ -401,7 +433,24 @@ async fn create_session(
     };
 
     // 3. Mint tokens via relay-backend /bench_token.
-    let token_resp = match mint_tokens(&state, &relay_chain, &server.udp_addr).await {
+    //    Pass the game client's IP so relay-backend embeds it as prev_address
+    //    in the RouteToken instead of this backend's loopback address.
+    //    client_ip from the request body takes priority; ConnectInfo is used
+    //    as fallback when the caller did not supply an explicit IP.
+    let client_ipv4_str: Option<String> = req.client_ip.filter(|s| !s.is_empty()).or_else(|| {
+        peer_addr.and_then(|sa| match sa.ip() {
+            std::net::IpAddr::V4(v4) => Some(v4.to_string()),
+            std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped().map(|v| v.to_string()),
+        })
+    });
+    let token_resp = match mint_tokens(
+        &state,
+        &relay_chain,
+        &server.udp_addr,
+        client_ipv4_str.as_deref(),
+    )
+    .await
+    {
         Ok(r) => r,
         Err(e) => {
             log::warn!("mint_tokens failed: {}", e);
@@ -448,6 +497,7 @@ async fn create_session(
         relay_chain: relay_chain.clone(),
         session_version,
         created_at: now,
+        client_ip: client_ipv4_str.clone(),
     };
     state
         .sessions
@@ -513,7 +563,14 @@ async fn refresh_session(
     };
 
     // 3. Mint fresh tokens using the same relay chain.
-    let token_resp = match mint_tokens(&state, &stored.relay_chain, &server.udp_addr).await {
+    let token_resp = match mint_tokens(
+        &state,
+        &stored.relay_chain,
+        &server.udp_addr,
+        stored.client_ip.as_deref(),
+    )
+    .await
+    {
         Ok(r) => r,
         Err(e) => {
             log::warn!(

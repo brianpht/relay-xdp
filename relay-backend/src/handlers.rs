@@ -418,6 +418,12 @@ struct BenchTokenQuery {
     /// Must not exceed relay_xdp_common::MAX_RELAY_HOPS entries.
     /// Example: "1.2.3.4:40000,5.6.7.8:40000"
     relay_chain: Option<String>,
+    /// Optional client public IPv4 override. When provided, used as
+    /// RouteToken.prev_address instead of ConnectInfo (peer IP). Required
+    /// when the caller is a backend proxy (e.g. server-backend) that does
+    /// not connect from the game client's IP.
+    /// Example: "203.0.113.42"
+    client_ip: Option<String>,
 }
 
 /// Generate session materials for relay-bench client/server.
@@ -472,23 +478,34 @@ async fn bench_token_handler(
     let relay_address = q.relay_addr.clone().unwrap_or_default();
 
     // Extract caller's public IPv4 (post-NAT) for CLIENT_PING source_address.
+    // If client_ip is provided in the query, it takes precedence over ConnectInfo
+    // (used when a backend proxy like server-backend calls on behalf of the client).
     let peer_ip = req
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ConnectInfo(sa)| sa.ip());
-    let client_public_address = match peer_ip {
-        Some(std::net::IpAddr::V4(v4)) => v4.to_string(),
-        Some(std::net::IpAddr::V6(v6)) => match v6.to_ipv4_mapped() {
-            Some(v4) => v4.to_string(),
-            None => v6.to_string(),
-        },
-        None => String::new(),
+    // client_ip query param overrides ConnectInfo when the caller is a backend proxy.
+    let client_ip_override: Option<std::net::Ipv4Addr> = q
+        .client_ip
+        .as_deref()
+        .and_then(|s| s.parse::<std::net::Ipv4Addr>().ok());
+    let client_public_address = if let Some(v4) = client_ip_override {
+        v4.to_string()
+    } else {
+        match peer_ip {
+            Some(std::net::IpAddr::V4(v4)) => v4.to_string(),
+            Some(std::net::IpAddr::V6(v6)) => match v6.to_ipv4_mapped() {
+                Some(v4) => v4.to_string(),
+                None => v6.to_string(),
+            },
+            None => String::new(),
+        }
     };
     // Extract IPv4 variant for token prev_address population.
-    let client_pub_v4 = match peer_ip {
+    let client_pub_v4 = client_ip_override.or(match peer_ip {
         Some(std::net::IpAddr::V4(v4)) => Some(v4),
         _ => None,
-    };
+    });
 
     // ── Derive per-relay symmetric key + encrypt RouteToken pair ────────────
     //

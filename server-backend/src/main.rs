@@ -7,6 +7,7 @@
 //!   - Delegate token minting to relay-backend GET /bench_token.
 //!   - Notify the game server via webhook before returning tokens to the client.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -49,9 +50,12 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     log::info!("server-backend listening on {}", addr);
 
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
 
     log::info!("server-backend shutdown complete");
     Ok(())

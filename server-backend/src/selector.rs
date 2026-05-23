@@ -34,7 +34,12 @@ fn haversine_ms(lat1: f64, lng1: f64, lat2: f64, lng2: f64) -> f64 {
 /// Build the ordered relay address list for a (entry, exit) pair using route 0
 /// from the RouteEntry. The route_entry is always stored for the canonical (i = larger, j = smaller)
 /// index pair, so when the entry/exit orientation is reversed we reverse the
-/// intermediate relay list so traffic flows in the correct direction.
+/// relay list so traffic flows in the correct direction.
+///
+/// IMPORTANT: route_relays stores the FULL path including the entry and exit relays
+/// (e.g. optimizer produces [i, k, j] for a 3-hop i->k->j path). Do NOT prepend
+/// entry or append exit separately - use the route_relays array directly as the
+/// complete ordered list.
 fn build_chain(
     matrix: &RouteMatrix,
     entry: usize,
@@ -42,11 +47,10 @@ fn build_chain(
     route_entry: &RouteEntry,
     forward: bool,
 ) -> Vec<SocketAddrV4> {
-    let mut chain = vec![matrix.relay_addresses[entry]];
-
+    // Optimized route: route_relays[0..num] is the full ordered path (entry + intermediates + exit).
     if route_entry.num_routes > 0 && route_entry.route_num_relays[0] > 0 {
         let num = route_entry.route_num_relays[0] as usize;
-        let intermediates: Vec<SocketAddrV4> = if forward {
+        let chain: Vec<SocketAddrV4> = if forward {
             (0..num)
                 .filter_map(|k| {
                     let idx = route_entry.route_relays[0][k] as usize;
@@ -62,9 +66,14 @@ fn build_chain(
                 })
                 .collect()
         };
-        chain.extend(intermediates);
+        if !chain.is_empty() {
+            return chain;
+        }
     }
 
+    // Direct route (no optimized path): just entry -> exit.
+    let mut chain = Vec::with_capacity(2);
+    chain.push(matrix.relay_addresses[entry]);
     if let Some(&exit_addr) = matrix.relay_addresses.get(exit) {
         chain.push(exit_addr);
     }
@@ -282,5 +291,64 @@ mod tests {
         // Cap: artificially passing same values is 0 ms; use formula limit check.
         let capped = haversine_ms(90.0, 0.0, -90.0, 0.0); // north/south poles, ~20015 km
         assert!(capped <= 255.0);
+    }
+
+    /// Verify that build_chain does NOT duplicate entry/exit when route_relays
+    /// already contains the full path (entry + intermediates + exit).
+    /// The optimizer stores the full ordered path in route_relays, e.g. [i, k, j]
+    /// for a 3-hop i->k->j route. A naive implementation that prepends entry and
+    /// appends exit would produce [i, i, k, j, j] = 5 hops with duplicates.
+    #[test]
+    fn test_build_chain_no_duplicate_endpoints() {
+        let mut matrix = make_matrix_two_relays();
+        // Add a third relay so we can express a 3-hop path.
+        matrix
+            .relay_addresses
+            .push("10.0.0.1:40000".parse().unwrap());
+        matrix.relay_latitudes.push(10.0f32);
+        matrix.relay_longitudes.push(10.0f32);
+        matrix.relay_ids.push(2);
+        matrix.relay_names.push("mid".into());
+        matrix.relay_datacenter_ids.push(0);
+        matrix.dest_relays.push(false);
+        matrix.relay_price.push(0);
+
+        // Simulate the optimizer output for pair (i=2, j=0):
+        // full path = [2, 1, 0] stored in route_relays.
+        let mut entry = relay_backend::optimizer::RouteEntry::default();
+        entry.num_routes = 1;
+        entry.route_cost[0] = 50;
+        entry.route_num_relays[0] = 3; // full path length
+        entry.route_relays[0][0] = 2; // relay index 2 (entry)
+        entry.route_relays[0][1] = 1; // relay index 1 (intermediate)
+        entry.route_relays[0][2] = 0; // relay index 0 (exit)
+                                      // tri_matrix_index(2, 0) = 1, tri_matrix_index(1, 0) = 0
+                                      // Extend route_entries to size 3 (indices 0..=2).
+        matrix.route_entries.push(entry);
+        matrix.costs.push(50);
+
+        // forward=true: entry=2, exit=0 -> expect [relay[2], relay[1], relay[0]] = 3 addrs, no dups
+        let chain_fwd = build_chain(&matrix, 2, 0, &matrix.route_entries[1], true);
+        assert_eq!(
+            chain_fwd.len(),
+            3,
+            "forward chain should have exactly 3 hops, got {:?}",
+            chain_fwd
+        );
+        assert_eq!(chain_fwd[0], matrix.relay_addresses[2]);
+        assert_eq!(chain_fwd[1], matrix.relay_addresses[1]);
+        assert_eq!(chain_fwd[2], matrix.relay_addresses[0]);
+
+        // forward=false: entry=0, exit=2 -> reversed: [relay[0], relay[1], relay[2]]
+        let chain_rev = build_chain(&matrix, 0, 2, &matrix.route_entries[1], false);
+        assert_eq!(
+            chain_rev.len(),
+            3,
+            "reverse chain should have exactly 3 hops, got {:?}",
+            chain_rev
+        );
+        assert_eq!(chain_rev[0], matrix.relay_addresses[0]);
+        assert_eq!(chain_rev[1], matrix.relay_addresses[1]);
+        assert_eq!(chain_rev[2], matrix.relay_addresses[2]);
     }
 }

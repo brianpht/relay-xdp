@@ -71,12 +71,13 @@
           ExecStart={{ bench_bin_dir }}/bench_server
           Environment=BENCH_HTTP_PORT={{ bench_http_port }}
           Environment=BENCH_UDP_PORT={{ bench_udp_port }}
+          Environment=RUST_LOG=info
           {% if server_backend_url %}
           Environment=SERVER_BACKEND_URL={{ server_backend_url }}
           Environment=SERVER_LAT={{ bench_server_lat }}
           Environment=SERVER_LNG={{ bench_server_lng }}
           Environment=SERVER_PUBLIC_ADDR={{ ansible_default_ipv4.address }}:{{ bench_udp_port }}
-          Environment=SERVER_CALLBACK_URL=http://{{ ansible_host }}:{{ bench_http_port }}
+          Environment=SERVER_CALLBACK_URL=http://{{ ansible_default_ipv4.address }}:{{ bench_http_port }}
           {% endif %}
           Restart=on-failure
           RestartSec=2
