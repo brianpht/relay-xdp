@@ -3,6 +3,7 @@
 # Artifacts produced per release:
 #   relay-backend              - x86_64 Linux binary (Rust stable)
 #   relay-xdp                  - x86_64 Linux binary (Rust stable)
+#   server-backend             - x86_64 Linux binary (Rust stable)
 #   relay_xdp_rust.o           - eBPF object (Rust nightly, bpfel-unknown-none)
 #   relay_module-<kver>.ko     - Kernel module, one per supported kernel version
 #
@@ -77,6 +78,9 @@ jobs:
       - name: Build relay-xdp
         run: cargo build --release -p relay-xdp
 
+      - name: Build server-backend
+        run: cargo build --release -p server-backend
+
       - name: Upload relay-backend artifact
         uses: actions/upload-artifact@v4
         with:
@@ -89,6 +93,13 @@ jobs:
         with:
           name: relay-xdp
           path: target/release/relay-xdp
+          retention-days: 1
+
+      - name: Upload server-backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-backend
+          path: target/release/server-backend
           retention-days: 1
 
   # ------------------------------------------------------------------
@@ -234,6 +245,12 @@ jobs:
           name: relay-xdp
           path: dist/
 
+      - name: Download server-backend
+        uses: actions/download-artifact@v4
+        with:
+          name: server-backend
+          path: dist/
+
       - name: Download relay_xdp_rust.o
         uses: actions/download-artifact@v4
         with:
@@ -256,7 +273,7 @@ jobs:
           fi
 
       - name: Mark binaries executable
-        run: chmod +x dist/relay-backend dist/relay-xdp
+        run: chmod +x dist/relay-backend dist/relay-xdp dist/server-backend
 
       - name: List release artifacts
         run: ls -lh dist/
