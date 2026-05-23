@@ -26,6 +26,16 @@ make bench-relay RELAY_CHAIN=10.0.0.1:40000,10.0.0.2:40000 DURATION_SECS=60
 # Auto-resolve all addresses from the Pulumi staging stack
 make bench-relay STACK=staging DURATION_SECS=60
 make bench-relay STACK=staging RELAY_CHAIN=52.201.126.193:40000,52.48.191.174:40000 DURATION_SECS=60
+
+# Server-backend mode - full matchmaking via server-backend (relay chain auto-selected)
+# bench_server must be deployed with SERVER_BACKEND_URL set and registered.
+# The SERVER_ID is printed in bench_server logs at startup.
+BENCH_MODE=server-backend \
+  SERVER_BACKEND_URL=http://54.198.0.1:8180 \
+  SERVER_ID=550e8400-e29b-41d4-a716-446655440000 \
+  CLIENT_LAT=37.77 \
+  CLIENT_LNG=-122.42 \
+  cargo run --release -p relay-bench --bin bench_client
 ```
 
 ## Environment Variables
@@ -34,8 +44,8 @@ make bench-relay STACK=staging RELAY_CHAIN=52.201.126.193:40000,52.48.191.174:40
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BENCH_MODE` | `direct` | `direct` or `relay` |
-| `BENCH_SERVER_HTTP` | `127.0.0.1:18080` | bench_server HTTP provisioning address |
+| `BENCH_MODE` | `direct` | `direct`, `relay`, or `server-backend` |
+| `BENCH_SERVER_HTTP` | `127.0.0.1:18080` | bench_server HTTP provisioning address (direct/relay mode) |
 | `BENCH_SERVER_UDP` | `127.0.0.1:17777` | bench_server UDP bind address (direct mode) |
 | `BENCH_CLIENT_UDP` | `127.0.0.1:17778` | Client UDP bind address |
 | `BACKEND_ADMIN` | `http://127.0.0.1:81` | relay-backend admin URL (relay mode) |
@@ -45,12 +55,29 @@ make bench-relay STACK=staging RELAY_CHAIN=52.201.126.193:40000,52.48.191.174:40
 | `PAYLOAD_BYTES` | `128` | Payload size in bytes (minimum 8 for timestamp) |
 | `DURATION_SECS` | `30` | Benchmark duration in seconds |
 
+**server-backend mode env vars** (`BENCH_MODE=server-backend`):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SERVER_BACKEND_URL` | *(required)* | Base URL of server-backend, e.g. `http://54.198.0.1:8180` |
+| `SERVER_ID` | *(required)* | UUID of the bench_server game server registered with server-backend |
+| `CLIENT_LAT` | `0.0` | Client geographic latitude (decimal degrees) - used for relay chain selection |
+| `CLIENT_LNG` | `0.0` | Client geographic longitude (decimal degrees) - used for relay chain selection |
+
+In server-backend mode `BACKEND_ADMIN`, `RELAY_ADDR`, `RELAY_CHAIN`, `BENCH_SERVER_HTTP`, and
+`BENCH_SERVER_UDP` are not used - relay chain and server address come from the `SessionResponse`.
+
 ### bench_server
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BENCH_HTTP_PORT` | `18080` | axum HTTP listen port (`POST /register_session`) |
+| `BENCH_HTTP_PORT` | `18080` | axum HTTP listen port (`POST /register_session`, `POST /notify_session`) |
 | `BENCH_UDP_PORT` | `17777` | UDP listen port |
+| `SERVER_PUBLIC_ADDR` | *(optional)* | Externally visible `IP:PORT` of bench_server UDP socket. Required for pinger/responder installation in server-backend mode so the relay whitelists bench_server. |
+| `SERVER_BACKEND_URL` | *(optional)* | Base URL of server-backend. When set, bench_server calls `POST /servers` at startup to register itself and `DELETE /servers/{id}` on graceful shutdown. |
+| `SERVER_LAT` | `0.0` | Geographic latitude for relay chain selection (used with `SERVER_BACKEND_URL`). |
+| `SERVER_LNG` | `0.0` | Geographic longitude for relay chain selection (used with `SERVER_BACKEND_URL`). |
+| `SERVER_CALLBACK_URL` | `http://127.0.0.1:BENCH_HTTP_PORT` | URL server-backend calls for `POST /notify_session` webhook. Must be reachable from server-backend host (use EIP in AWS). |
 
 ## Architecture
 
@@ -59,7 +86,7 @@ make bench-relay STACK=staging RELAY_CHAIN=52.201.126.193:40000,52.48.191.174:40
 ```mermaid
 flowchart LR
   subgraph tokio["tokio runtime"]
-    AX["axum\nPOST /register_session\n0.0.0.0:BENCH_HTTP_PORT"]
+    AX["axum\nPOST /register_session (direct/relay mode)\nPOST /notify_session (server-backend webhook)\n0.0.0.0:BENCH_HTTP_PORT"]
     SP["stats printer\n1 Hz - stdout JSON"]
   end
   subgraph net["std::thread (network)"]
@@ -73,6 +100,13 @@ The HTTP handler pushes a `Command::AddSession` onto the queue.
 The network thread drains the queue on each iteration, then calls `recv_from`
 (1 ms timeout) and echoes every CLIENT_TO_SERVER packet back as
 SERVER_TO_CLIENT via `relay_address` from the session record.
+
+In **server-backend mode**, bench_server also:
+
+1. Registers itself with server-backend at startup via `POST /servers` (if `SERVER_BACKEND_URL` set).
+2. Receives the `POST /notify_session` webhook from server-backend (instead of a direct
+   `/register_session` call from bench_client) - same pinger + responder + session registration logic.
+3. Deregisters via `DELETE /servers/{id}` on graceful shutdown (Ctrl-C).
 
 ### bench_client (direct mode)
 
@@ -276,6 +310,104 @@ sequenceDiagram
   end
 ```
 
+### bench_client (server-backend mode)
+
+In server-backend mode bench_client delegates all session management (relay chain selection,
+token minting, bench_server provisioning) to server-backend. This exercises the real
+matchmaking path including Haversine geo-scoring (`select_chain`) instead of a
+manually-configured `RELAY_CHAIN`.
+
+Key differences from relay mode:
+
+| | Relay mode | Server-backend mode |
+|---|---|---|
+| Session create | `GET /bench_token` direct to relay-backend | `POST /sessions` to server-backend |
+| bench_server setup | `POST /register_session` from bench_client | `POST /notify_session` webhook from server-backend |
+| Relay chain source | `RELAY_CHAIN` / `RELAY_ADDR` env vars | `relay_chain[]` in `SessionResponse` (auto-selected) |
+| Refresh | `GET /bench_token` + `POST /register_session` | `POST /sessions/{id}/refresh` (webhook auto-sent) |
+
+#### Sequence diagram (server-backend mode)
+
+```mermaid
+sequenceDiagram
+  participant BC as bench_client
+  participant SB as server-backend (:8180)
+  participant BS as bench_server (:18080)
+  participant R1 as relay[0] (:40000)
+  participant RN as relay[N-1] (:40000)
+  participant CI as ClientInner (net thread)
+  participant RT as refresh task (tokio)
+
+  Note over BS: startup: POST /servers {udp_addr, lat, lng, callback_url}
+  SB -->> BS: 201 {server_id}
+  Note over BS: stores server_id for DELETE on shutdown
+
+  BC ->> SB: POST /sessions {server_id, client_lat, client_lng}
+  Note over SB: select_chain(client, server) -> relay_chain
+  Note over SB: GET /bench_token?relay_chain=...&bench_server_addr=...
+  SB ->> BS: POST /notify_session {session_id, keys, relay_address=RN, ping_key, magic}
+  Note over BS: installs session + pinger (targeting RN) + responder
+  SB -->> BC: 201 SessionResponse {session_id, relay_chain, tokens, keys, ...}
+
+  BC ->> CI: open_session(relay_secret_key)
+  BC ->> CI: route_update(tokens, magic, client_ext)
+  CI ->> R1: ROUTE_REQUEST
+  R1 ->> RN: ROUTE_REQUEST (forwarded)
+  RN ->> BS: ROUTE_REQUEST (forwarded)
+  BS -->> RN: ROUTE_RESPONSE (synthesized)
+  RN -->> R1: ROUTE_RESPONSE (relayed)
+  R1 -->> CI: ROUTE_RESPONSE
+  Note over CI: confirm_pending_route() - route ACTIVE
+
+  loop every ROUTE_REFRESH_INTERVAL_SECS (10 s)
+    RT ->> SB: POST /sessions/{id}/refresh {client_lat, client_lng}
+    Note over SB: GET /bench_token (fresh tokens)
+    SB ->> BS: POST /notify_session (new session)
+    Note over BS: installs refreshed session
+    SB -->> RT: SessionResponse (new tokens)
+    RT ->> CI: route_update(new tokens, new magic)
+    Note over CI: resets last_route_update_time, prevents CLIENT_ROUTE_TIMEOUT
+  end
+
+  loop TARGET_PPS x DURATION_SECS
+    CI ->> R1: CLIENT_TO_SERVER
+    R1 ->> RN: CLIENT_TO_SERVER (forwarded)
+    RN ->> BS: CLIENT_TO_SERVER (forwarded)
+    BS -->> RN: SERVER_TO_CLIENT (echo)
+    RN -->> R1: SERVER_TO_CLIENT (relayed)
+    R1 -->> CI: SERVER_TO_CLIENT (relayed)
+    Note over CI: RTT = now_us - ts_us
+  end
+
+  Note over BC: shutdown: bench_client exits
+  Note over BS: Ctrl-C: DELETE /servers/{server_id}
+```
+
+#### Deploy workflow (staging)
+
+```bash
+# 1. Deploy server-backend to backend node (first time or after binary change)
+cargo build --release -p server-backend
+ansible-playbook -i inventory/staging.yml playbooks/bench-server-backend-deploy.yml
+
+# 2. Deploy bench_server with server-backend registration
+eval $(python infra/stack_outputs.py --stack staging --format env)
+cargo build --release -p relay-bench
+ansible-playbook -i inventory/staging.yml playbooks/bench-deploy.yml \
+  -e "server_backend_url=${SERVER_BACKEND_URL}"
+
+# 3. Get the server_id from bench_server logs
+ssh ubuntu@${BENCH_HOST} journalctl -u bench-server -n 20 | grep registered
+
+# 4. Run bench_client in server-backend mode
+BENCH_MODE=server-backend \
+  SERVER_BACKEND_URL=${SERVER_BACKEND_URL} \
+  SERVER_ID=<uuid-from-step-3> \
+  CLIENT_LAT=37.77 CLIENT_LNG=-122.42 \
+  DURATION_SECS=60 \
+  cargo run --release -p relay-bench --bin bench_client
+```
+
 ### Route lifetime and refresh
 
 The SDK's `RouteManager` has two expiry mechanisms:
@@ -347,14 +479,19 @@ stateDiagram-v2
   ServerSynthesizesResponse --> RouteActive : relay forwards ROUTE_RESPONSE to bench_client
   RouteActive --> LoadGeneration : confirm_pending_route()
   LoadGeneration --> RefreshLoop : ROUTE_REFRESH_INTERVAL_SECS (10 s)
-  RefreshLoop --> WaitingForRouteRequest : new /bench_token + route_update
+  RefreshLoop --> WaitingForRouteRequest : relay mode: new /bench_token + route_update\nserver-backend mode: POST /sessions/{id}/refresh + route_update
   LoadGeneration --> [*] : DURATION_SECS elapsed
 ```
 
-No additional provisioning API call is needed. bench_client only needs to
-POST `/register_session` to bench_server before sending the first
-ROUTE_REQUEST so that bench_server has the session key ready to:
+No additional provisioning API call is needed. In **relay mode** bench_client
+POSTs `/register_session` to bench_server before sending the first ROUTE_REQUEST
+so that bench_server has the session key ready to:
 - Synthesize ROUTE_RESPONSE (signed with session_private_key)
 - Decrypt incoming CLIENT_TO_SERVER packets and echo them back
 - Send periodic SERVER_PING packets (keeps bench_server's IP:port whitelisted)
+
+In **server-backend mode** server-backend sends `POST /notify_session` to
+bench_server as part of `POST /sessions` processing, so bench_client never
+calls `/register_session` directly. The same session key installation and
+pinger/responder setup happens - only the caller differs.
 

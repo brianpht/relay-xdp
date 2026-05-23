@@ -226,7 +226,7 @@ A lightweight integration-test client (if needed) belongs in `relay-sdk/examples
 6. ~~**High:** Implement Ansible role `server-backend` (tasks, templates, handlers)~~ **Done 2026-05-23**
 7. ~~**High:** Update `site.yml` + `group_vars/all.yml` + `bench-deploy.yml`~~ **Done 2026-05-23**
 8. ~~**Medium:** Add `bench-server-backend-deploy.yml` playbook~~ **Done 2026-05-23**
-9. **Low:** Update `README.md` bench section with new `BENCH_MODE=server-backend` usage example
+9. ~~**Low:** Update `README.md` bench section with new `BENCH_MODE=server-backend` usage example~~ **Done 2026-05-23**
 
 ## Files Changed
 
@@ -245,4 +245,5 @@ A lightweight integration-test client (if needed) belongs in `relay-sdk/examples
 | Done | `ansible/playbooks/group_vars/all.yml` |
 | Done | `ansible/playbooks/bench-deploy.yml` |
 | Done | `ansible/playbooks/bench-server-backend-deploy.yml` (new) |
+| Done | `relay-bench/README.md` |
 
