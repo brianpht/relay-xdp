@@ -463,7 +463,14 @@ async fn create_session(
     // 4. Notify game server via webhook BEFORE returning tokens to client.
     //    Required: game server must call register_session() before the client
     //    sends ROUTE_REQUEST or the relay's eBPF drops the packet.
-    let relay_address = relay_chain.first().cloned().unwrap_or_default();
+    //
+    //    relay_address MUST be the LAST hop in the chain - that is the relay
+    //    directly forwarding packets to the game server. The game server pings
+    //    this relay so its IP:port is whitelisted there; otherwise the last
+    //    relay drops every forwarded ROUTE_REQUEST + CLIENT_TO_SERVER. Mirrors
+    //    bench_client relay-mode behaviour (see bench_client.rs: server_relay
+    //    = relay_chain.last()).
+    let relay_address = relay_chain.last().cloned().unwrap_or_default();
     let webhook = WebhookPayload {
         session_id: token_resp.session_id,
         session_version,
@@ -585,7 +592,9 @@ async fn refresh_session(
     let new_version = stored.session_version.saturating_add(1);
 
     // 4. Notify game server of refreshed session (new relay session_id in tokens).
-    let relay_address = stored.relay_chain.first().cloned().unwrap_or_default();
+    //    relay_address = LAST hop (the relay that forwards to the game server);
+    //    see create_session for rationale.
+    let relay_address = stored.relay_chain.last().cloned().unwrap_or_default();
     let webhook = WebhookPayload {
         session_id: token_resp.session_id,
         session_version: new_version,

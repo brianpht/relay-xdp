@@ -1217,7 +1217,7 @@ async fn main() -> Result<()> {
     // In relay mode main waits on it with a 15 s timeout.
     let route_active = Arc::new(AtomicBool::new(false));
 
-    // Pinger state - only set in relay mode. The network_thread sends
+    // Pinger state - only set in relay mode. The network thread sends
     // CLIENT_PING packets at a steady cadence so the relay's whitelist_map
     // accepts our IP:port for ROUTE_REQUEST and CLIENT_TO_SERVER traffic.
     let mut pinger: Option<PingerState> = None;
@@ -1903,4 +1903,140 @@ async fn main() -> Result<()> {
 
     log::info!("bench_client done");
     Ok(())
+}
+
+// -- Tests --------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // Global mutex - read_config() touches process-wide env vars, so the tests
+    // below must not run in parallel.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn clear_bench_env() {
+        for k in [
+            "BENCH_MODE",
+            "SERVER_BACKEND_URL",
+            "SERVER_ID",
+            "CLIENT_LAT",
+            "CLIENT_LNG",
+            "RELAY_CHAIN",
+            "RELAY_ADDR",
+            "BACKEND_ADMIN",
+            "BENCH_SERVER_HTTP",
+            "BENCH_SERVER_UDP",
+            "BENCH_CLIENT_UDP",
+            "TARGET_PPS",
+            "PAYLOAD_BYTES",
+            "DURATION_SECS",
+        ] {
+            std::env::remove_var(k);
+        }
+    }
+
+    #[test]
+    fn read_config_server_backend_mode_parses_required_env_vars() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_bench_env();
+        std::env::set_var("BENCH_MODE", "server-backend");
+        std::env::set_var("SERVER_BACKEND_URL", "http://127.0.0.1:8180");
+        std::env::set_var("SERVER_ID", "11111111-2222-3333-4444-555555555555");
+        std::env::set_var("CLIENT_LAT", "37.7749");
+        std::env::set_var("CLIENT_LNG", "-122.4194");
+
+        let cfg = read_config().expect("read_config should succeed");
+        match cfg.mode {
+            BenchMode::ServerBackend {
+                server_backend_url,
+                server_id,
+                client_lat,
+                client_lng,
+            } => {
+                assert_eq!(server_backend_url, "http://127.0.0.1:8180");
+                assert_eq!(server_id, "11111111-2222-3333-4444-555555555555");
+                assert!((client_lat - 37.7749).abs() < 1e-9);
+                assert!((client_lng - (-122.4194)).abs() < 1e-9);
+            }
+            _ => panic!("expected ServerBackend mode"),
+        }
+        clear_bench_env();
+    }
+
+    #[test]
+    fn read_config_server_backend_mode_missing_url_errors() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_bench_env();
+        std::env::set_var("BENCH_MODE", "server-backend");
+        // Intentionally do not set SERVER_BACKEND_URL.
+        std::env::set_var("SERVER_ID", "id");
+
+        let err = match read_config() {
+            Err(e) => e,
+            Ok(_) => panic!("missing SERVER_BACKEND_URL must error"),
+        };
+        let msg = format!("{:#}", err);
+        assert!(
+            msg.contains("SERVER_BACKEND_URL"),
+            "error must mention SERVER_BACKEND_URL: {}",
+            msg
+        );
+        clear_bench_env();
+    }
+
+    #[test]
+    fn read_config_server_backend_mode_missing_server_id_errors() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_bench_env();
+        std::env::set_var("BENCH_MODE", "server-backend");
+        std::env::set_var("SERVER_BACKEND_URL", "http://127.0.0.1:8180");
+        // Intentionally do not set SERVER_ID.
+
+        let err = match read_config() {
+            Err(e) => e,
+            Ok(_) => panic!("missing SERVER_ID must error"),
+        };
+        let msg = format!("{:#}", err);
+        assert!(
+            msg.contains("SERVER_ID"),
+            "error must mention SERVER_ID: {}",
+            msg
+        );
+        clear_bench_env();
+    }
+
+    #[test]
+    fn read_config_server_backend_mode_lat_lng_default_zero() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_bench_env();
+        std::env::set_var("BENCH_MODE", "server-backend");
+        std::env::set_var("SERVER_BACKEND_URL", "http://x:1");
+        std::env::set_var("SERVER_ID", "s");
+        // Omit CLIENT_LAT / CLIENT_LNG - should default to 0.0.
+
+        let cfg = read_config().expect("read_config should succeed");
+        match cfg.mode {
+            BenchMode::ServerBackend {
+                client_lat,
+                client_lng,
+                ..
+            } => {
+                assert_eq!(client_lat, 0.0);
+                assert_eq!(client_lng, 0.0);
+            }
+            _ => panic!("expected ServerBackend mode"),
+        }
+        clear_bench_env();
+    }
+
+    #[test]
+    fn read_config_unknown_mode_falls_back_to_direct() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_bench_env();
+        std::env::set_var("BENCH_MODE", "totally-bogus");
+        let cfg = read_config().expect("direct fallback should not error");
+        assert!(matches!(cfg.mode, BenchMode::Direct));
+        clear_bench_env();
+    }
 }

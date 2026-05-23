@@ -861,3 +861,98 @@ async fn main() -> Result<()> {
         .await?;
     Ok(())
 }
+
+// -- Tests --------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh_state(server_public_addr: Option<&str>) -> Arc<BenchState> {
+        let (_inner, server) = ServerInner::create();
+        Arc::new(BenchState {
+            server: Arc::new(Mutex::new(server)),
+            pinger: Arc::new(Mutex::new(None)),
+            responder: Arc::new(Mutex::new(None)),
+            server_public_addr: server_public_addr.map(|s| s.to_string()),
+        })
+    }
+
+    fn valid_body() -> NotifySessionBody {
+        NotifySessionBody {
+            session_id: 0x1234_5678_9abc_def0,
+            session_version: 1,
+            session_private_key_hex: "11".repeat(SESSION_PRIVATE_KEY_BYTES),
+            relay_address: "10.0.0.1:40000".to_string(),
+            ping_key_hex: "22".repeat(PING_KEY_BYTES),
+            current_magic_hex: "33".repeat(8),
+        }
+    }
+
+    async fn status_of(resp: axum::response::Response) -> StatusCode {
+        resp.status()
+    }
+
+    #[tokio::test]
+    async fn notify_session_valid_body_installs_pinger_and_responder() {
+        let state = fresh_state(Some("203.0.113.5:17777"));
+        let body = valid_body();
+        let resp = notify_session_handler(State(Arc::clone(&state)), Json(body))
+            .await
+            .into_response();
+        assert_eq!(status_of(resp).await, StatusCode::OK);
+        assert!(
+            state.pinger.lock().unwrap().is_some(),
+            "pinger should be installed when server_public_addr is set"
+        );
+        assert!(
+            state.responder.lock().unwrap().is_some(),
+            "responder should be installed when server_public_addr is set"
+        );
+    }
+
+    #[tokio::test]
+    async fn notify_session_valid_body_without_public_addr_skips_pinger() {
+        let state = fresh_state(None);
+        let body = valid_body();
+        let resp = notify_session_handler(State(Arc::clone(&state)), Json(body))
+            .await
+            .into_response();
+        // Session still registered (200 OK) but pinger/responder skipped.
+        assert_eq!(status_of(resp).await, StatusCode::OK);
+        assert!(state.pinger.lock().unwrap().is_none());
+        assert!(state.responder.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn notify_session_bad_key_hex_returns_400() {
+        let state = fresh_state(Some("203.0.113.5:17777"));
+        let mut body = valid_body();
+        body.session_private_key_hex = "zz".repeat(SESSION_PRIVATE_KEY_BYTES);
+        let resp = notify_session_handler(State(state), Json(body))
+            .await
+            .into_response();
+        assert_eq!(status_of(resp).await, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn notify_session_bad_key_length_returns_400() {
+        let state = fresh_state(Some("203.0.113.5:17777"));
+        let mut body = valid_body();
+        body.session_private_key_hex = "11".repeat(SESSION_PRIVATE_KEY_BYTES - 1);
+        let resp = notify_session_handler(State(state), Json(body))
+            .await
+            .into_response();
+        assert_eq!(status_of(resp).await, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn notify_session_bad_relay_address_returns_400() {
+        let state = fresh_state(Some("203.0.113.5:17777"));
+        let mut body = valid_body();
+        body.relay_address = "not-an-address".to_string();
+        let resp = notify_session_handler(State(state), Json(body))
+            .await
+            .into_response();
+        assert_eq!(status_of(resp).await, StatusCode::BAD_REQUEST);
+    }
+}

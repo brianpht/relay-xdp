@@ -76,7 +76,20 @@
           Environment=SERVER_BACKEND_URL={{ server_backend_url }}
           Environment=SERVER_LAT={{ bench_server_lat }}
           Environment=SERVER_LNG={{ bench_server_lng }}
-          Environment=SERVER_PUBLIC_ADDR={{ ansible_default_ipv4.address }}:{{ bench_udp_port }}
+          # SERVER_PUBLIC_ADDR MUST be the bench node's public EIP, not the
+          # private IP. Relays sit in per-region VPCs separate from backend_net,
+          # so traffic from bench_server reaches them via the public internet
+          # (NAT'd to the EIP). PingTokenData.source_address baked into
+          # SERVER_PING must match what the relay sees as the UDP source IP
+          # (= EIP). Using the private IP causes SHA-256 verification to fail
+          # and the relay never whitelists bench_server -> ROUTE_REQUEST gets
+          # dropped on the last hop and the client never receives ROUTE_RESPONSE.
+          Environment=SERVER_PUBLIC_ADDR={{ ansible_host }}:{{ bench_udp_port }}
+          # SERVER_CALLBACK_URL: server-backend on backend_node calls this URL
+          # to deliver the /notify_session webhook. backend_node + bench_node
+          # are co-located in backend_net (same VPC), so private IP works and
+          # avoids the EIP hairpin. sg_bench TCP 18080 ingress from vpc_cidr
+          # gates this; see infra/network.py.
           Environment=SERVER_CALLBACK_URL=http://{{ ansible_default_ipv4.address }}:{{ bench_http_port }}
           {% endif %}
           Restart=on-failure
