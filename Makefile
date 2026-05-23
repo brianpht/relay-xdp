@@ -1,7 +1,7 @@
 .PHONY: deploy-production deploy-staging infra-preview-production infra-preview-staging preflight test-infra \
         e2e-deployed e2e-teardown venv update-admin-cidr \
-        bench-local bench-relay \
-        bench-deploy
+        bench-local bench-relay bench-server-backend \
+        bench-deploy bench-server-backend-deploy
 
 # Process substitution <(echo ...) requires bash.
 SHELL := /bin/bash
@@ -286,6 +286,39 @@ e2e-teardown:
 #     BENCH_CLIENT_UDP  (default 0.0.0.0:17778)
 #     TARGET_PPS        (default 500)
 #     DURATION_SECS     (default 60 - long enough to exercise route refresh)
+#
+# bench-server-backend: server-backend mode - full matchmaking via server-backend.
+#   Exercises the real matchmaking path including Haversine geo-scoring (select_chain).
+#   bench_server MUST be deployed and registered with server-backend beforehand.
+#   relay chain is auto-selected by server-backend; no RELAY_CHAIN/RELAY_ADDR needed.
+#
+#   Workflow:
+#     Step 1 - deploy server-backend + bench_server:
+#       make bench-deploy STACK=staging          # deploys bench_server + relay-backend
+#       make bench-server-backend-deploy STACK=staging  # deploys server-backend binary
+#
+#     Step 2 - get SERVER_ID from bench_server logs:
+#       ssh ubuntu@${BENCH_HOST} journalctl -u bench-server -n 20 | grep registered
+#
+#     Step 3 - run bench_client in server-backend mode:
+#       make bench-server-backend STACK=staging SERVER_ID=<uuid> CLIENT_LAT=37.77 CLIENT_LNG=-122.42
+#
+#   SERVER_BACKEND_URL is auto-resolved from Pulumi stack outputs when not set.
+#   SERVER_ID is always required (printed by bench_server at startup).
+#
+#   Optional overrides:
+#     STACK              (default: staging)   Pulumi stack to resolve addresses from
+#     SERVER_BACKEND_URL auto: from stack output server_backend_url (http://IP:8180)
+#     SERVER_ID          (required) UUID of the bench_server registered with server-backend
+#     CLIENT_LAT         (default: 0.0) Client geographic latitude for relay chain selection
+#     CLIENT_LNG         (default: 0.0) Client geographic longitude for relay chain selection
+#     BENCH_CLIENT_UDP   (default 0.0.0.0:17778)
+#     TARGET_PPS         (default 500)
+#     DURATION_SECS      (default 60)
+#
+# bench-server-backend-deploy: build + deploy server-backend binary to the backend node.
+#   Use for rapid iteration after server-backend code changes without full site.yml.
+#   Prerequisites: server-backend already deployed once via make bench-deploy / site.yml.
 # ---------------------------------------------------------------------------
 RELAY_ADDR        ?=
 RELAY_CHAIN       ?=
@@ -295,6 +328,10 @@ BENCH_SERVER_UDP  ?=
 BENCH_CLIENT_UDP  ?= 0.0.0.0:17778
 TARGET_PPS        ?= 500
 DURATION_SECS     ?= 60
+SERVER_BACKEND_URL ?=
+SERVER_ID         ?=
+CLIENT_LAT        ?= 0.0
+CLIENT_LNG        ?= 0.0
 
 bench-local:
 	cargo build --release -p relay-bench
@@ -346,6 +383,35 @@ bench-relay:
 		./target/release/bench_client; \
 	fi
 
+bench-server-backend:
+	cargo build --release -p relay-bench
+	@$(_PULUMI_ENV_STAGING); \
+	_sb_url="$(SERVER_BACKEND_URL)"; \
+	if [ -z "$$_sb_url" ]; then \
+		echo "[bench-server-backend] resolving SERVER_BACKEND_URL from stack=$(STACK) via stack_outputs.py..."; \
+		eval $$($(INFRA_PYTHON) infra/stack_outputs.py --stack $(STACK) --format env); \
+		_sb_url=$$SERVER_BACKEND_URL; \
+	fi; \
+	if [ -z "$$_sb_url" ]; then \
+		echo "ERROR: SERVER_BACKEND_URL could not be resolved. Set it explicitly or run 'make bench-deploy STACK=$(STACK)' first."; \
+		exit 1; \
+	fi; \
+	if [ -z "$(SERVER_ID)" ]; then \
+		echo "ERROR: SERVER_ID is required (printed by bench_server at startup)."; \
+		echo "       Run: ssh ubuntu@\$${BENCH_HOST} journalctl -u bench-server -n 20 | grep registered"; \
+		exit 1; \
+	fi; \
+	echo "[bench-server-backend] server_backend_url=$$_sb_url server_id=$(SERVER_ID) lat=$(CLIENT_LAT) lng=$(CLIENT_LNG) duration=$(DURATION_SECS)s pps=$(TARGET_PPS)"; \
+	BENCH_MODE=server-backend \
+	SERVER_BACKEND_URL=$$_sb_url \
+	SERVER_ID=$(SERVER_ID) \
+	CLIENT_LAT=$(CLIENT_LAT) \
+	CLIENT_LNG=$(CLIENT_LNG) \
+	DURATION_SECS=$(DURATION_SECS) \
+	TARGET_PPS=$(TARGET_PPS) \
+	BENCH_CLIENT_UDP=$(BENCH_CLIENT_UDP) \
+	./target/release/bench_client
+
 # bench-deploy: build and deploy ALL bench-related services to the staging stack.
 #   Deploys relay-backend (backend node) AND bench_server (bench node).
 #   bench_client is NOT deployed - it always runs from the local machine.
@@ -370,3 +436,9 @@ bench-deploy:
 	$(_VAULT_FLAG)
 	ansible-playbook -i $(INVENTORY) ansible/playbooks/bench-deploy.yml \
 	$(_VAULT_FLAG)
+
+bench-server-backend-deploy:
+	cargo build --release -p server-backend
+	ansible-playbook -i $(INVENTORY) ansible/playbooks/bench-server-backend-deploy.yml \
+	$(_VAULT_FLAG)
+

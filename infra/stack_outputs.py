@@ -15,6 +15,8 @@ Output (--format env):
   export ADMIN_BACKEND_PORT=8091
   export RELAY_PUBLIC_IPS="10.x.x.x 10.y.y.y 10.z.z.z"
   export RELAY_IDS="relay-staging-1 relay-staging-2 relay-staging-3"
+  export BENCH_HOST=1.2.3.5          (only when bench node is provisioned)
+  export SERVER_BACKEND_URL=http://1.2.3.4:8180  (only when exported by stack)
 
 Output (--format json):
   {
@@ -22,7 +24,9 @@ Output (--format json):
     "backend_port": 8090,
     "admin_backend_port": 8091,
     "relay_public_ips": ["10.x.x.x", ...],
-    "relay_ids": ["relay-staging-1", ...]
+    "relay_ids": ["relay-staging-1", ...],
+    "bench_host": "1.2.3.5",
+    "server_backend_url": "http://1.2.3.4:8180"
   }
 
 Requirements:
@@ -59,6 +63,8 @@ class StackEnv:
     relay_ids: List[str]
     # Empty string when bench node is not provisioned (bench_enabled: false).
     bench_host: str = ""
+    # server-backend public URL (http://IP:8180). Empty string when not exported.
+    server_backend_url: str = ""
 
 
 def get_stack_outputs(stack: str) -> dict:
@@ -147,6 +153,9 @@ def parse_e2e_env(outputs: dict) -> StackEnv:
     bench: dict = outputs.get("bench") or {}
     bench_host: str = bench.get("public_ip", "") if bench else ""
 
+    # server_backend_url - exported by infra/__main__.py as a top-level string.
+    server_backend_url: str = outputs.get("server_backend_url", "")
+
     return StackEnv(
         backend_host=backend["public_ip"],
         backend_port=BACKEND_PUBLIC_PORT,
@@ -154,6 +163,7 @@ def parse_e2e_env(outputs: dict) -> StackEnv:
         relay_public_ips=[relay_nodes[r]["public_ip"] for r in sorted_ids],
         relay_ids=sorted_ids,
         bench_host=bench_host,
+        server_backend_url=server_backend_url,
     )
 
 
@@ -173,6 +183,8 @@ def format_env(env: StackEnv) -> str:
     ]
     if env.bench_host:
         lines.append(f'export BENCH_HOST={env.bench_host}')
+    if env.server_backend_url:
+        lines.append(f'export SERVER_BACKEND_URL={env.server_backend_url}')
     return "\n".join(lines)
 
 
@@ -186,6 +198,7 @@ def format_json(env: StackEnv) -> str:
             "relay_public_ips": env.relay_public_ips,
             "relay_ids": env.relay_ids,
             "bench_host": env.bench_host,
+            "server_backend_url": env.server_backend_url,
         },
         indent=2,
     )
