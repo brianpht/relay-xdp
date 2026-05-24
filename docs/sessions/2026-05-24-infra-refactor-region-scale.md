@@ -112,8 +112,12 @@ after implementation to ensure they still pass with the new `NetworkResult` type
 ~~6. **Medium:** Update `infra/README.md` - remove `relay_count` row, add supported regions
    table (region | CIDR | AZ), document 2-variant network API.~~ Done
 
-7. **Low:** Before running `pulumi up` after implementation, run `pulumi preview` to confirm
-   only the 6 dead SGs (2 per relay region) are destroyed - no other resources affected.
+~~7. **Low:** Before running `pulumi up` after implementation, run `pulumi preview` to confirm
+   only the 6 dead SGs (2 per relay region) are destroyed - no other resources affected.~~ Done
+   - Added `infra-sg-cleanup-preview-staging` + `infra-sg-cleanup-preview-production` Makefile targets
+     that run `pulumi preview` and grep for SecurityGroup lines, making the diff trivial to verify.
+   - Added "Network Refactor - SG Cleanup Migration" section to `infra/README.md` documenting
+     the expected 6-deletion diff and the verification workflow.
 
 <!-- Mark completed steps with strikethrough: ~~**High:** description~~ Done -->
 
@@ -130,3 +134,4 @@ after implementation to ensure they still pass with the new `NetworkResult` type
 | done | `infra/Pulumi.staging.yaml` |
 | done | `infra/Pulumi.production.yaml` |
 | done | `infra/README.md` |
+| done | `Makefile` |

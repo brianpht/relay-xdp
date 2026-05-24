@@ -1,4 +1,5 @@
 .PHONY: deploy-production deploy-staging infra-preview-production infra-preview-staging preflight test-infra \
+        infra-sg-cleanup-preview-staging infra-sg-cleanup-preview-production \
         e2e-deployed e2e-teardown venv update-admin-cidr \
         bench-local bench-relay bench-server-backend \
         bench-deploy bench-server-backend-deploy
@@ -157,6 +158,30 @@ infra-preview-production:
 infra-preview-staging:
 	@$(_PULUMI_ENV_STAGING); \
 	pulumi preview --stack staging --cwd infra/
+
+# ---------------------------------------------------------------------------
+# SG cleanup preview - verify the network refactor produces only the 6
+# expected sg-backend / sg-bench deletions on relay-region VPCs.
+# Run this BEFORE the first `pulumi up` after the create_regional_network()
+# -> create_relay_network() / create_backend_network() split.
+#
+# Expected output: exactly 6 "delete" lines for sg-backend-* and sg-bench-*
+# on relay regions (us-east-1, eu-west-1, ap-southeast-1).
+# Zero VPCs, subnets, IGWs, EIPs, or EC2 instances should appear.
+# See infra/README.md "Network Refactor - SG Cleanup Migration" for details.
+# ---------------------------------------------------------------------------
+infra-sg-cleanup-preview-staging:
+	@echo "[sg-cleanup-preview] running pulumi preview --stack staging (SG lines only)..."
+	@$(_PULUMI_ENV_STAGING); \
+	pulumi preview --stack staging --cwd infra/ 2>&1 \
+		| grep -E "(SecurityGroup|sg-backend|sg-bench)" || \
+		echo "[sg-cleanup-preview] no SecurityGroup changes found in preview output"
+
+infra-sg-cleanup-preview-production:
+	@echo "[sg-cleanup-preview] running pulumi preview --stack production (SG lines only)..."
+	pulumi preview --stack production --cwd infra/ 2>&1 \
+		| grep -E "(SecurityGroup|sg-backend|sg-bench)" || \
+		echo "[sg-cleanup-preview] no SecurityGroup changes found in preview output"
 
 # ---------------------------------------------------------------------------
 # Destroy (staging only - production requires manual pulumi destroy)

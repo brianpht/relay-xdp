@@ -211,6 +211,57 @@ Both functions share `_create_vpc_base()` for VPC/IGW/subnet/route-table creatio
 The typed result dataclasses make it a compile-time error to pass a relay network
 to `BackendNode` or a backend network to `RelayNode`.
 
+## Network Refactor - SG Cleanup Migration
+
+This section documents the one-time diff produced by the `create_regional_network()`
+-> `create_relay_network()` / `create_backend_network()` split.
+
+### What changed
+
+Before the refactor, `create_regional_network()` was called for every region (relay +
+backend). It always created three SGs per region: `sg_relay`, `sg_backend`, `sg_bench`.
+Relay regions have no backend or bench node, so `sg_backend` and `sg_bench` on each relay
+VPC were dead AWS resources that cost nothing but added noise.
+
+After the split, relay regions call `create_relay_network()` which creates `sg_relay`
+only. The 6 orphan SGs are removed.
+
+### Expected `pulumi preview` diff
+
+Running `pulumi preview` after this change will show **exactly 6 deletions** and **zero
+other changes**:
+
+```
+- aws:ec2:SecurityGroup  sg-backend-<stack>-us-east-1      delete
+- aws:ec2:SecurityGroup  sg-bench-<stack>-us-east-1        delete
+- aws:ec2:SecurityGroup  sg-backend-<stack>-eu-west-1      delete
+- aws:ec2:SecurityGroup  sg-bench-<stack>-eu-west-1        delete
+- aws:ec2:SecurityGroup  sg-backend-<stack>-ap-southeast-1 delete
+- aws:ec2:SecurityGroup  sg-bench-<stack>-ap-southeast-1   delete
+```
+
+No VPCs, subnets, IGWs, route tables, EIPs, or EC2 instances are affected.
+
+### Verify before applying
+
+Use the dedicated Makefile targets to confirm the diff before running `pulumi up`:
+
+```bash
+# Staging - filter preview output to SG-only changes
+make infra-sg-cleanup-preview-staging
+
+# Production
+make infra-sg-cleanup-preview-production
+
+# If the output shows only the 6 expected SG deletions, proceed:
+make deploy-staging  RELAY_VERSION=v1.0.0
+make deploy-production RELAY_VERSION=v1.0.0
+```
+
+The `infra-sg-cleanup-preview-*` targets run `pulumi preview` and pipe through `grep`
+for `SecurityGroup` lines so the operator can verify at a glance without reading the
+full preview output.
+
 ## Instance Type Rationale
 
 - `c6in.8xlarge` (production) - 6th-gen Intel network-optimised. ENA driver
