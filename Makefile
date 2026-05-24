@@ -2,7 +2,8 @@
         infra-sg-cleanup-preview-staging infra-sg-cleanup-preview-production \
         e2e-deployed e2e-teardown venv update-admin-cidr \
         bench-local bench-relay bench-server-backend \
-        bench-deploy bench-server-backend-deploy
+        bench-deploy bench-server-backend-deploy \
+        vault-add-staging vault-add-production
 
 # Process substitution <(echo ...) requires bash.
 SHELL := /bin/bash
@@ -148,6 +149,48 @@ deploy-staging: preflight
 		playbooks/site.yml \
 		-e relay_version=$(RELAY_VERSION) \
 		$(_VAULT_FLAG)
+
+# ---------------------------------------------------------------------------
+# vault-add-staging / vault-add-production
+# Append X25519 keypairs for new relay nodes to an existing vault without
+# touching keys for already-deployed relays.
+#
+# Usage:
+#   make vault-add-staging  RELAY_NAMES="relay-staging-4 relay-staging-5"
+#   make vault-add-production RELAY_NAMES="relay-production-4 relay-production-5"
+#
+# Vault password resolution (staging):
+#   1. VAULT_PASS_STAGING env var
+#   2. ansible/.vault-pass-staging file
+#   3. Literal "staging" (dev default)
+# Production always prompts interactively.
+# ---------------------------------------------------------------------------
+RELAY_NAMES ?=
+
+vault-add-staging:
+	@if [ -z "$(RELAY_NAMES)" ]; then \
+		echo "Usage: make vault-add-staging RELAY_NAMES=\"relay-staging-4 relay-staging-5\""; \
+		exit 1; \
+	fi
+	@_TMPPASS=$$(mktemp /tmp/.vault_pass_XXXXXX); \
+	trap "shred -ufv $$_TMPPASS 2>/dev/null || rm -f $$_TMPPASS" EXIT; \
+	if [ -n "$${VAULT_PASS_STAGING:-}" ]; then \
+		echo "$$VAULT_PASS_STAGING" > $$_TMPPASS; \
+	elif [ -f ansible/.vault-pass-staging ]; then \
+		cp ansible/.vault-pass-staging $$_TMPPASS; \
+	else \
+		echo "staging" > $$_TMPPASS; \
+	fi; \
+	cd ansible && VAULT_PASSWORD_FILE=$$_TMPPASS \
+		./scripts/gen-vault-keys.sh staging --add $(RELAY_NAMES)
+
+vault-add-production:
+	@if [ -z "$(RELAY_NAMES)" ]; then \
+		echo "Usage: make vault-add-production RELAY_NAMES=\"relay-production-4 relay-production-5\""; \
+		exit 1; \
+	fi
+	@echo "Production vault: enter vault password when prompted."; \
+	cd ansible && ./scripts/gen-vault-keys.sh production --add $(RELAY_NAMES)
 
 # ---------------------------------------------------------------------------
 # Dry-run previews (no changes applied, no preflight check)

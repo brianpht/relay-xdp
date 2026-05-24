@@ -3,11 +3,13 @@ config:
     - us-east-1
     - eu-west-1
     - ap-southeast-1
+    - ap-northeast-1
+    - us-west-2
   relay-xdp-infra:relay_instance_type: c5n.2xlarge
   relay-xdp-infra:backend_region: us-east-1
   relay-xdp-infra:backend_instance_type: t3.medium
   relay-xdp-infra:bench_enabled: "true"
-  relay-xdp-infra:bench_instance_type: t3.micro
+  relay-xdp-infra:bench_instance_type: c5.large
   relay-xdp-infra:key_pub_path: ~/.ssh/personal-key.pub
   relay-xdp-infra:admin_cidr: 42.113.219.237/32
   aws:profile: relay-xdp-infra

@@ -156,10 +156,12 @@ aws configure --profile relay-xdp-infra
 
 | Key | Production | Staging | Description |
 |-----|-----------|---------|-------------|
-| `relay_regions` | `[us-east-1, eu-west-1, ap-southeast-1]` | `[us-east-1, eu-west-1, ap-southeast-1]` | AWS regions for relay nodes |
+| `relay_regions` | `[us-east-1, eu-west-1, ap-southeast-1, ap-northeast-1, us-west-2]` | `[us-east-1, eu-west-1, ap-southeast-1, ap-northeast-1, us-west-2]` | AWS regions for relay nodes |
 | `relay_instance_type` | `c6in.8xlarge` | `c5n.2xlarge` | EC2 type for relay nodes |
 | `backend_region` | `us-east-1` | `us-east-1` | Region for backend node |
 | `backend_instance_type` | `c5.large` | `t3.medium` | EC2 type for backend |
+| `bench_enabled` | *(not set)* | `"true"` | Provision bench node (staging only) |
+| `bench_instance_type` | *(not set)* | `c5.large` | EC2 type for bench node; must be fixed-performance (not burstable t3) to avoid CPU credit exhaustion under sustained load |
 | `key_pub_path` | `~/.ssh/personal-key.pub` | same | Local SSH public key path |
 | `admin_cidr` | your IPv4/32 (**required**) | your IPv4/32 (**required**) | SSH whitelist CIDR; ships as `REPLACE_ME/32`; must be set before first deploy (see step 4) |
 
@@ -174,12 +176,12 @@ instead of silently assigning an order-dependent CIDR.
 
 | Region | VPC CIDR | Pinned AZ | Notes |
 |--------|----------|-----------|-------|
-| `us-east-1` | `10.1.0.0/16` | `us-east-1a` | Current relay + backend region |
-| `eu-west-1` | `10.2.0.0/16` | `eu-west-1b` | Current relay region |
-| `ap-southeast-1` | `10.3.0.0/16` | `ap-southeast-1a` | Current relay region |
-| `ap-northeast-1` | `10.4.0.0/16` | `ap-northeast-1a` | Available (not yet deployed) |
+| `us-east-1` | `10.1.0.0/16` | `us-east-1a` | Relay + backend region (staging + production) |
+| `eu-west-1` | `10.2.0.0/16` | `eu-west-1b` | Relay region (staging + production) |
+| `ap-southeast-1` | `10.3.0.0/16` | `ap-southeast-1a` | Relay region (staging + production) |
+| `ap-northeast-1` | `10.4.0.0/16` | `ap-northeast-1a` | Relay region (staging + production) |
 | `eu-central-1` | `10.5.0.0/16` | `eu-central-1a` | Available (not yet deployed) |
-| `us-west-2` | `10.6.0.0/16` | `us-west-2b` | Available (not yet deployed) |
+| `us-west-2` | `10.6.0.0/16` | `us-west-2b` | Relay region (staging + production) |
 | `sa-east-1` | `10.7.0.0/16` | `sa-east-1a` | Available (not yet deployed) |
 | `ap-south-1` | `10.8.0.0/16` | `ap-south-1a` | Available (not yet deployed) |
 | `ca-central-1` | `10.9.0.0/16` | `ca-central-1a` | Available (not yet deployed) |
@@ -224,20 +226,26 @@ Relay regions have no backend or bench node, so `sg_backend` and `sg_bench` on e
 VPC were dead AWS resources that cost nothing but added noise.
 
 After the split, relay regions call `create_relay_network()` which creates `sg_relay`
-only. The 6 orphan SGs are removed.
+only. Two orphan SGs per relay region (`sg_backend` + `sg_bench`) are removed.
 
 ### Expected `pulumi preview` diff
 
-Running `pulumi preview` after this change will show **exactly 6 deletions** and **zero
-other changes**:
+Running `pulumi preview` after this change will show **exactly 2 deletions per relay
+region** and **zero other changes**. For N relay regions the total is 2*N deletions.
+With the current 5-region deployment (us-east-1, eu-west-1, ap-southeast-1,
+ap-northeast-1, us-west-2) that is **10 deletions**:
 
 ```
-- aws:ec2:SecurityGroup  sg-backend-<stack>-us-east-1      delete
-- aws:ec2:SecurityGroup  sg-bench-<stack>-us-east-1        delete
-- aws:ec2:SecurityGroup  sg-backend-<stack>-eu-west-1      delete
-- aws:ec2:SecurityGroup  sg-bench-<stack>-eu-west-1        delete
-- aws:ec2:SecurityGroup  sg-backend-<stack>-ap-southeast-1 delete
-- aws:ec2:SecurityGroup  sg-bench-<stack>-ap-southeast-1   delete
+- aws:ec2:SecurityGroup  sg-backend-<stack>-us-east-1       delete
+- aws:ec2:SecurityGroup  sg-bench-<stack>-us-east-1         delete
+- aws:ec2:SecurityGroup  sg-backend-<stack>-eu-west-1       delete
+- aws:ec2:SecurityGroup  sg-bench-<stack>-eu-west-1         delete
+- aws:ec2:SecurityGroup  sg-backend-<stack>-ap-southeast-1  delete
+- aws:ec2:SecurityGroup  sg-bench-<stack>-ap-southeast-1    delete
+- aws:ec2:SecurityGroup  sg-backend-<stack>-ap-northeast-1  delete
+- aws:ec2:SecurityGroup  sg-bench-<stack>-ap-northeast-1    delete
+- aws:ec2:SecurityGroup  sg-backend-<stack>-us-west-2       delete
+- aws:ec2:SecurityGroup  sg-bench-<stack>-us-west-2         delete
 ```
 
 No VPCs, subnets, IGWs, route tables, EIPs, or EC2 instances are affected.
@@ -253,7 +261,7 @@ make infra-sg-cleanup-preview-staging
 # Production
 make infra-sg-cleanup-preview-production
 
-# If the output shows only the 6 expected SG deletions, proceed:
+# If the output shows only the expected SG deletions (10 for current 5-region deployment), proceed:
 make deploy-staging  RELAY_VERSION=v1.0.0
 make deploy-production RELAY_VERSION=v1.0.0
 ```
@@ -264,13 +272,17 @@ full preview output.
 
 ## Instance Type Rationale
 
-- `c6in.8xlarge` (production) - 6th-gen Intel network-optimised. ENA driver
+- `c6in.8xlarge` (production relay) - 6th-gen Intel network-optimised. ENA driver
   supports XDP native mode (driver-level packet processing). Higher network
   bandwidth ceiling vs c5n.xlarge. Required for the sub-microsecond packet
   forwarding budget. Not available in all AZs - see `config.py:RELAY_AZ_MAP`.
-- `c5n.2xlarge` (staging) - Same ENA driver family as c6in; supports XDP native
+- `c5n.2xlarge` (staging relay) - Same ENA driver family as c6in; supports XDP native
   mode. Staging now validates the same XDP code path as production.
   Not available in all AZs - see `config.py:RELAY_AZ_MAP`.
+- `c5.large` (staging bench) - Fixed-performance compute. Required for bench_client
+  and bench_server: t3 (burstable) instances exhaust CPU credits under sustained
+  500 pkt/s load, causing artificial latency inflation that masks real relay overhead.
+  c5.large has no burst budget to deplete.
 
 ## WARNING: EIP Cost
 
@@ -278,8 +290,8 @@ Each node (relay + backend) has an Elastic IP. AWS charges $0.005/hr per EIP
 when the associated instance is stopped (but not terminated).
 
 Current EIP count per stack:
-- Staging:    4 EIPs (3 relay + 1 backend) = ~$0.02/hr when all instances stopped
-- Production: 4 EIPs (3 relay + 1 backend) = ~$0.02/hr when all instances stopped
+- Staging:    7 EIPs (5 relay + 1 backend + 1 bench) = ~$0.035/hr when all instances stopped
+- Production: 6 EIPs (5 relay + 1 backend)           = ~$0.03/hr when all instances stopped
 
 Run `pulumi destroy --stack staging` when staging is not in use to avoid idle charges.
 Production EIPs are intentionally persistent - destroying them invalidates game client
@@ -316,8 +328,8 @@ python infra/stack_outputs.py --stack staging --format env
 # export BACKEND_HOST=1.2.3.4
 # export BACKEND_PORT=8090
 # export ADMIN_BACKEND_PORT=8091
-# export RELAY_PUBLIC_IPS="10.x.x.x 10.y.y.y 10.z.z.z"
-# export RELAY_IDS="relay-staging-1 relay-staging-2 relay-staging-3"
+# export RELAY_PUBLIC_IPS="10.x.x.x 10.y.y.y 10.z.z.z 10.a.a.a 10.b.b.b"
+# export RELAY_IDS="relay-staging-1 relay-staging-2 relay-staging-3 relay-staging-4 relay-staging-5"
 
 # JSON output for machine parsing
 python infra/stack_outputs.py --stack production --format json

@@ -24,6 +24,9 @@ ansible/
     module-only.yml         - Update kernel module only
     rollback.yml            - Manual rollback to previous version
     e2e-verify.yml          - Post-deploy E2E verification (systemd, bpftool, lsmod, ss, journal)
+    bench-deploy.yml        - Deploy bench_server + bench_client (staging only)
+    bench-backend-deploy.yml    - Deploy relay-backend to bench backend node
+    bench-server-backend-deploy.yml - Deploy server-backend to bench backend node
     group_vars/             - Adjacent to playbooks for auto-discovery
       all.yml               - Shared defaults
       staging/
@@ -39,7 +42,7 @@ ansible/
     relay-xdp/              - Binary + eBPF obj + systemd + env (with backup)
     redis/                  - Install + configure Redis 7
   scripts/
-    gen-vault-keys.sh       - Generate X25519 keypairs, output plaintext YAML for vault
+    gen-vault-keys.sh       - Generate X25519 keypairs; first-time (stdout) or --add mode (append to vault)
     encrypt-vault.sh        - Encrypt vault files with ansible-vault
 ```
 
@@ -47,11 +50,13 @@ ansible/
 
 ### 1. Set up vault secrets
 
+**First-time setup** (generates all keypairs from scratch):
+
 ```bash
 cd ansible
 
-# Generate keypairs (staging: 3 relay nodes, production: 3 relay nodes)
-# and encrypt immediately - plaintext file is shredded after encryption.
+# Generate keypairs (5 relay nodes per stack) and encrypt immediately.
+# Plaintext file is shredded after encryption.
 ./scripts/gen-vault-keys.sh staging > /tmp/vault_staging_plain.yml
 ansible-vault encrypt --output playbooks/group_vars/staging/vault.yml /tmp/vault_staging_plain.yml
 shred -u /tmp/vault_staging_plain.yml
@@ -62,9 +67,26 @@ ansible-vault encrypt --output playbooks/group_vars/production/vault.yml /tmp/va
 shred -u /tmp/vault_production_plain.yml
 ```
 
+**Adding new relay nodes** to an existing vault (safe - keeps already-deployed keys):
+
+```bash
+cd ansible
+
+# Interactive (prompts for vault password):
+./scripts/gen-vault-keys.sh staging --add relay-staging-4 relay-staging-5
+
+# Non-interactive (vault password from file):
+VAULT_PASSWORD_FILE=~/.vault_pass_staging \
+  ./scripts/gen-vault-keys.sh staging --add relay-staging-4 relay-staging-5
+
+# Production:
+VAULT_PASSWORD_FILE=~/.vault_pass_production \
+  ./scripts/gen-vault-keys.sh production --add relay-production-4 relay-production-5
+```
+
 Note: relay node names in the vault MUST match Pulumi output names:
-- Staging:    `relay-staging-1`, `relay-staging-2`, `relay-staging-3`
-- Production: `relay-production-1`, `relay-production-2`, `relay-production-3`
+- Staging:    `relay-staging-1` .. `relay-staging-5`
+- Production: `relay-production-1` .. `relay-production-5`
 
 ### 2. Full deploy to staging
 
@@ -113,16 +135,19 @@ auto-discovers all vars and vault files without any `-e @group_vars/...` flags.
 - `playbooks/group_vars/production/vars.yml` + `vault.yml` - loaded for the `production` group
 
 The inventories define a `staging` / `production` parent group that contains
-`relay_servers` and `backend_servers`, triggering the correct group_vars load.
+`relay_servers`, `backend_servers`, and (staging only) `bench_servers`,
+triggering the correct group_vars load.
 
 ## Environment Differences
 
-| Setting            | Staging  | Production |
-|--------------------|----------|------------|
-| `rust_log`         | info     | warn       |
-| `relay_dedicated`  | false    | true       |
-| `redis_maxmemory`  | 256mb    | 1gb        |
-| `relay_serial`     | all      | 1 (rolling)|
+| Setting                    | Staging        | Production  |
+|----------------------------|----------------|-------------|
+| `rust_log`                 | info           | warn        |
+| `relay_dedicated`          | false          | true        |
+| `redis_maxmemory`          | 256mb          | 1gb         |
+| `relay_serial`             | all            | 1 (rolling) |
+| Relay node count           | 5              | 5           |
+| Bench node (`bench_servers`) | yes (c5.large) | no        |
 
 ## Secrets
 

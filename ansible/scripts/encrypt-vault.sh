@@ -22,6 +22,10 @@
 #   3. Shred plaintext:
 #        shred -u /tmp/vault_staging_plain.yml /tmp/vault_production_plain.yml
 #   4. Commit encrypted vault files.
+#
+# Workflow for adding new relay nodes to an existing vault (safe - keeps existing keys):
+#   ./scripts/gen-vault-keys.sh staging --add relay-staging-4 relay-staging-5
+#   # VAULT_PASSWORD_FILE=~/.vault_pass_staging ./scripts/gen-vault-keys.sh staging --add relay-staging-4 relay-staging-5
 
 set -euo pipefail
 
