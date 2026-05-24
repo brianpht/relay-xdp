@@ -3,7 +3,6 @@ config:
     - us-east-1
     - eu-west-1
     - ap-southeast-1
-  relay-xdp-infra:relay_count: "3"
   relay-xdp-infra:relay_instance_type: c6in.8xlarge
   relay-xdp-infra:backend_region: us-east-1
   relay-xdp-infra:backend_instance_type: c5.large

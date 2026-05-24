@@ -21,7 +21,7 @@ import pulumi
 import pulumi_aws as aws
 
 from config import CANONICAL_OWNER_ID, AMI_NAME_FILTER
-from network import NetworkResult
+from network import BackendNetworkResult
 
 
 _USER_DATA = dedent("""\
@@ -67,7 +67,7 @@ class BackendNode(pulumi.ComponentResource):
         instance_type: str,
         public_key_text: str,
         stack_name: str,
-        net: NetworkResult,
+        net: BackendNetworkResult,
         provider: aws.Provider,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
@@ -79,7 +79,7 @@ class BackendNode(pulumi.ComponentResource):
         instance_type:    EC2 instance type, e.g. "c5.large".
         public_key_text:  Contents of ~/.ssh/id_ed25519.pub.
         stack_name:       Pulumi stack name.
-        net:              NetworkResult from create_regional_network().
+        net:              BackendNetworkResult from create_backend_network().
         provider:         Regional aws.Provider.
         opts:             Optional Pulumi resource options.
         """

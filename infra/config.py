@@ -48,11 +48,20 @@ AMI_NAME_FILTER = "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-*"
 # Network constants
 # ---------------------------------------------------------------------------
 
-# VPC CIDR per relay region. Non-overlapping /16 blocks.
+# VPC CIDR per region. Non-overlapping /16 blocks.
+# All supported relay regions are listed explicitly - adding a new region
+# requires an entry here. No fallback is provided; missing entries raise
+# pulumi.RunError at deploy time to prevent silent CIDR reassignment.
 REGION_CIDR_MAP: dict[str, str] = {
     "us-east-1":       "10.1.0.0/16",
     "eu-west-1":       "10.2.0.0/16",
     "ap-southeast-1":  "10.3.0.0/16",
+    "ap-northeast-1":  "10.4.0.0/16",
+    "eu-central-1":    "10.5.0.0/16",
+    "us-west-2":       "10.6.0.0/16",
+    "sa-east-1":       "10.7.0.0/16",
+    "ap-south-1":      "10.8.0.0/16",
+    "ca-central-1":    "10.9.0.0/16",
 }
 
 # Backend VPC uses us-east-1 CIDR (backend is always in us-east-1).
@@ -63,23 +72,22 @@ BACKEND_CIDR = "10.10.0.0/16"
 # Neither c5n nor c6in is available in all AZs within a region.
 # These are known-good AZs verified for both instance families.
 # Subnets are pinned to these AZs.
+#
+# Adding a new region requires an explicit entry here. After expanding this map
+# to cover all supported regions the fallback is removed - a missing entry raises
+# ValueError in InfraConfig.__post_init__ so misconfigured deployments fail fast.
 # ---------------------------------------------------------------------------
 RELAY_AZ_MAP: dict[str, str] = {
     "us-east-1":       "us-east-1a",
     "eu-west-1":       "eu-west-1b",
     "ap-southeast-1":  "ap-southeast-1a",
+    "ap-northeast-1":  "ap-northeast-1a",
+    "eu-central-1":    "eu-central-1a",
+    "us-west-2":       "us-west-2b",
+    "sa-east-1":       "sa-east-1a",
+    "ap-south-1":      "ap-south-1a",
+    "ca-central-1":    "ca-central-1a",
 }
-
-# Fallback AZ for regions not in RELAY_AZ_MAP (e.g. backend region when
-# backend_region == us-east-1 and instance is not a relay node).
-DEFAULT_AZ_SUFFIX = "a"
-
-
-def _az_for_region(region: str) -> str:
-    """Return the preferred AZ for a given region."""
-    if region in RELAY_AZ_MAP:
-        return RELAY_AZ_MAP[region]
-    return region + DEFAULT_AZ_SUFFIX
 
 
 # ---------------------------------------------------------------------------
@@ -92,9 +100,6 @@ class InfraConfig:
 
     # List of AWS regions to deploy relay nodes into.
     relay_regions: List[str]
-
-    # Number of relay nodes (must match len(relay_regions) for production).
-    relay_count: int
 
     # EC2 instance type for relay nodes.
     # Production: c6in.8xlarge (ena driver, XDP native, high network bandwidth).
@@ -124,13 +129,28 @@ class InfraConfig:
     bench_enabled: bool = False
     bench_instance_type: str = "t3.micro"
 
-    # Derived: preferred AZ per relay region.
+    # Derived: preferred AZ per relay region (and backend region).
     relay_azs: dict = field(init=False)
 
     def __post_init__(self) -> None:
-        self.relay_azs = {r: _az_for_region(r) for r in self.relay_regions}
-        # Also include backend region.
-        self.relay_azs[self.backend_region] = _az_for_region(self.backend_region)
+        for r in self.relay_regions:
+            if r not in RELAY_AZ_MAP:
+                raise ValueError(
+                    f"Relay region '{r}' has no entry in RELAY_AZ_MAP. "
+                    "Add an explicit AZ entry in infra/config.py before deploying."
+                )
+        if self.backend_region not in RELAY_AZ_MAP:
+            raise ValueError(
+                f"backend_region '{self.backend_region}' has no entry in RELAY_AZ_MAP. "
+                "Add an explicit AZ entry in infra/config.py before deploying."
+            )
+        self.relay_azs = {r: RELAY_AZ_MAP[r] for r in self.relay_regions}
+        self.relay_azs[self.backend_region] = RELAY_AZ_MAP[self.backend_region]
+
+    @property
+    def relay_count(self) -> int:
+        """Derived relay node count - always equals len(relay_regions)."""
+        return len(self.relay_regions)
 
     @property
     def stack_name(self) -> str:
@@ -220,7 +240,6 @@ def load() -> InfraConfig:
     cfg = pulumi.Config()
 
     relay_regions: List[str] = cfg.require_object("relay_regions")
-    relay_count: int = int(cfg.require("relay_count"))
     relay_instance_type: str = cfg.require("relay_instance_type")
     backend_region: str = cfg.require("backend_region")
     backend_instance_type: str = cfg.require("backend_instance_type")
@@ -232,7 +251,6 @@ def load() -> InfraConfig:
 
     return InfraConfig(
         relay_regions=relay_regions,
-        relay_count=relay_count,
         relay_instance_type=relay_instance_type,
         backend_region=backend_region,
         backend_instance_type=backend_instance_type,

@@ -10,7 +10,7 @@
 - [x] Identify REGION_CIDR_MAP hardcode limitation for 4th+ relay region
 - [x] Plan split of `create_regional_network()` into relay vs backend variants
 - [x] Plan removal of `relay_count` dead config field
-- [ ] Implement all planned changes (deferred - plan approved, implementation pending)
+- [x] Implement all planned changes
 
 ## Work Completed
 
@@ -91,26 +91,26 @@ after implementation to ensure they still pass with the new `NetworkResult` type
 
 ## Next Steps
 
-1. **High:** Implement `config.py` changes - expand `REGION_CIDR_MAP` to 9 regions (add
+~~1. **High:** Implement `config.py` changes - expand `REGION_CIDR_MAP` to 9 regions (add
    ap-northeast-1 `10.4.0.0/16`, eu-central-1 `10.5.0.0/16`, us-west-2 `10.6.0.0/16`,
    sa-east-1 `10.7.0.0/16`, ap-south-1 `10.8.0.0/16`, ca-central-1 `10.9.0.0/16`).
    Expand `RELAY_AZ_MAP` with verified AZs. Remove `DEFAULT_AZ_SUFFIX` + `_az_for_region`.
-   Remove `relay_count` field, add `@property relay_count`. Update `__post_init__` guard.
+   Remove `relay_count` field, add `@property relay_count`. Update `__post_init__` guard.~~ Done
 
-2. **High:** Implement `network.py` split - `_create_vpc_base()`, `RelayNetworkResult`,
+~~2. **High:** Implement `network.py` split - `_create_vpc_base()`, `RelayNetworkResult`,
    `BackendNetworkResult`, `create_relay_network()`, `create_backend_network()`.
-   Remove `create_regional_network()` and `NetworkResult`.
+   Remove `create_regional_network()` and `NetworkResult`.~~ Done
 
-3. **High:** Update `__main__.py` - use `create_relay_network()` / `create_backend_network()`,
-   replace CIDR fallback with `raise pulumi.RunError`.
+~~3. **High:** Update `__main__.py` - use `create_relay_network()` / `create_backend_network()`,
+   replace CIDR fallback with `raise pulumi.RunError`.~~ Done
 
-4. **High:** Update node type hints - `relay_node.py` (`RelayNetworkResult`, set
-   `associate_public_ip_address=False`), `backend_node.py` + `bench_node.py` (`BackendNetworkResult`).
+~~4. **High:** Update node type hints - `relay_node.py` (`RelayNetworkResult`, set
+   `associate_public_ip_address=False`), `backend_node.py` + `bench_node.py` (`BackendNetworkResult`).~~ Done
 
-5. **High:** Remove `relay_count` from `Pulumi.staging.yaml` and `Pulumi.production.yaml`.
+~~5. **High:** Remove `relay_count` from `Pulumi.staging.yaml` and `Pulumi.production.yaml`.~~ Done
 
-6. **Medium:** Update `infra/README.md` - remove `relay_count` row, add supported regions
-   table (region | CIDR | AZ), document 2-variant network API.
+~~6. **Medium:** Update `infra/README.md` - remove `relay_count` row, add supported regions
+   table (region | CIDR | AZ), document 2-variant network API.~~ Done
 
 7. **Low:** Before running `pulumi up` after implementation, run `pulumi preview` to confirm
    only the 6 dead SGs (2 per relay region) are destroyed - no other resources affected.
@@ -121,13 +121,12 @@ after implementation to ensure they still pass with the new `NetworkResult` type
 
 | Status | File |
 |--------|------|
-| - (planned) | `infra/config.py` |
-| - (planned) | `infra/network.py` |
-| - (planned) | `infra/__main__.py` |
-| - (planned) | `infra/relay_node.py` |
-| - (planned) | `infra/backend_node.py` |
-| - (planned) | `infra/bench_node.py` |
-| - (planned) | `infra/Pulumi.staging.yaml` |
-| - (planned) | `infra/Pulumi.production.yaml` |
-| - (planned) | `infra/README.md` |
-
+| done | `infra/config.py` |
+| done | `infra/network.py` |
+| done | `infra/__main__.py` |
+| done | `infra/relay_node.py` |
+| done | `infra/backend_node.py` |
+| done | `infra/bench_node.py` |
+| done | `infra/Pulumi.staging.yaml` |
+| done | `infra/Pulumi.production.yaml` |
+| done | `infra/README.md` |

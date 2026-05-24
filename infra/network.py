@@ -4,6 +4,12 @@ security groups for relay-xdp infrastructure.
 
 Each relay region gets an independent VPC. There is no VPC Peering between
 regions - relay-to-relay UDP traffic flows over the public internet via EIPs.
+
+Two public API functions:
+  create_relay_network()   - Used by relay regions. Creates sg_relay only.
+  create_backend_network() - Used by the backend region. Creates sg_backend + sg_bench.
+
+Both share the _create_vpc_base() private helper for VPC/subnet/IGW/RT creation.
 """
 
 from __future__ import annotations
@@ -15,51 +21,36 @@ import pulumi_aws as aws
 
 
 @dataclass
-class NetworkResult:
-    """Outputs from create_regional_network()."""
+class RelayNetworkResult:
+    """Outputs from create_relay_network()."""
     vpc: aws.ec2.Vpc
     subnet: aws.ec2.Subnet
     sg_relay: aws.ec2.SecurityGroup
+
+
+@dataclass
+class BackendNetworkResult:
+    """Outputs from create_backend_network()."""
+    vpc: aws.ec2.Vpc
+    subnet: aws.ec2.Subnet
     sg_backend: aws.ec2.SecurityGroup
     sg_bench: aws.ec2.SecurityGroup
 
 
-def create_regional_network(
+def _create_vpc_base(
+    name: str,
     stack_name: str,
     region: str,
     az: str,
     vpc_cidr: str,
-    admin_cidr: str,
-    provider: aws.Provider,
-) -> NetworkResult:
+    opts: pulumi.ResourceOptions,
+) -> tuple[aws.ec2.Vpc, aws.ec2.Subnet]:
     """
-    Create networking resources for one AWS region.
+    Create the shared VPC skeleton: VPC, IGW, public subnet, route table.
 
-    Resources created:
-      - VPC with DNS support enabled
-      - Public subnet (pinned to az)
-      - Internet Gateway + Route Table + Association
-      - sg_relay:   UDP 40000 open, TCP 8080 open, TCP 22 from admin_cidr
-      - sg_backend: TCP 8090 open, TCP 6379 from VPC only, TCP 22 from admin_cidr
-      - sg_bench:   TCP 18080 from admin_cidr, UDP 17777 open, TCP 22 from admin_cidr
-
-    Parameters
-    ----------
-    stack_name:  Pulumi stack name (e.g. "production"), used in resource names.
-    region:      AWS region string (e.g. "us-east-1").
-    az:          Availability zone to pin the subnet to (e.g. "us-east-1a").
-                  Must support the intended instance type. c5n and c6in require
-                  specific AZs - see config.py:RELAY_AZ_MAP.
-    vpc_cidr:    VPC IPv4 CIDR block (e.g. "10.1.0.0/16").
-    admin_cidr:  CIDR allowed to reach SSH port 22 (e.g. "203.0.113.5/32").
-    provider:    Regional aws.Provider instance.
+    Returns (vpc, subnet). Called by both create_relay_network() and
+    create_backend_network() - DRY base for the two variants.
     """
-    opts = pulumi.ResourceOptions(provider=provider)
-    name = f"{stack_name}-{region}"
-
-    # ------------------------------------------------------------------
-    # VPC
-    # ------------------------------------------------------------------
     vpc = aws.ec2.Vpc(
         f"vpc-{name}",
         cidr_block=vpc_cidr,
@@ -69,9 +60,6 @@ def create_regional_network(
         opts=opts,
     )
 
-    # ------------------------------------------------------------------
-    # Internet Gateway
-    # ------------------------------------------------------------------
     igw = aws.ec2.InternetGateway(
         f"igw-{name}",
         vpc_id=vpc.id,
@@ -79,12 +67,6 @@ def create_regional_network(
         opts=opts,
     )
 
-    # ------------------------------------------------------------------
-    # Public subnet - uses first /24 of the VPC CIDR.
-    # AZ is passed in via the subnet_cidr parameter from the caller
-    # (relay_node / backend_node), so the subnet CIDR is derived here
-    # as the .0.0/24 of the VPC block.
-    # ------------------------------------------------------------------
     # Derive subnet CIDR: replace last two octets with 0.0/24.
     # e.g. "10.1.0.0/16" -> "10.1.0.0/24"
     subnet_cidr = vpc_cidr.rsplit(".", 2)[0] + ".0.0/24"
@@ -99,9 +81,6 @@ def create_regional_network(
         opts=opts,
     )
 
-    # ------------------------------------------------------------------
-    # Route table - default route via IGW
-    # ------------------------------------------------------------------
     rt = aws.ec2.RouteTable(
         f"rt-{name}",
         vpc_id=vpc.id,
@@ -121,6 +100,42 @@ def create_regional_network(
         route_table_id=rt.id,
         opts=opts,
     )
+
+    return vpc, subnet
+
+
+def create_relay_network(
+    stack_name: str,
+    region: str,
+    az: str,
+    vpc_cidr: str,
+    admin_cidr: str,
+    provider: aws.Provider,
+) -> RelayNetworkResult:
+    """
+    Create networking resources for one relay AWS region.
+
+    Resources created:
+      - VPC with DNS support enabled
+      - Public subnet (pinned to az)
+      - Internet Gateway + Route Table + Association
+      - sg_relay: UDP 40000 open, TCP 8080 open, TCP 22 from admin_cidr
+
+    Parameters
+    ----------
+    stack_name:  Pulumi stack name (e.g. "production"), used in resource names.
+    region:      AWS region string (e.g. "us-east-1").
+    az:          Availability zone to pin the subnet to (e.g. "us-east-1a").
+                  Must support the intended instance type. c5n and c6in require
+                  specific AZs - see config.py:RELAY_AZ_MAP.
+    vpc_cidr:    VPC IPv4 CIDR block (e.g. "10.1.0.0/16").
+    admin_cidr:  CIDR allowed to reach SSH port 22 (e.g. "203.0.113.5/32").
+    provider:    Regional aws.Provider instance.
+    """
+    opts = pulumi.ResourceOptions(provider=provider)
+    name = f"{stack_name}-{region}"
+
+    vpc, subnet = _create_vpc_base(name, stack_name, region, az, vpc_cidr, opts)
 
     # ------------------------------------------------------------------
     # Security Group: relay nodes
@@ -172,6 +187,41 @@ def create_regional_network(
         tags={"Name": f"relay-sg-relay-{name}", "Stack": stack_name},
         opts=opts,
     )
+
+    return RelayNetworkResult(vpc=vpc, subnet=subnet, sg_relay=sg_relay)
+
+
+def create_backend_network(
+    stack_name: str,
+    region: str,
+    az: str,
+    vpc_cidr: str,
+    admin_cidr: str,
+    provider: aws.Provider,
+) -> BackendNetworkResult:
+    """
+    Create networking resources for the backend AWS region.
+
+    Resources created:
+      - VPC with DNS support enabled
+      - Public subnet (pinned to az)
+      - Internet Gateway + Route Table + Association
+      - sg_backend: TCP 8090/8091/8180 open, TCP 6379 from VPC, TCP 22 from admin_cidr
+      - sg_bench:   TCP 18080 from admin_cidr + VPC, UDP 17777 open, TCP 22 from admin_cidr
+
+    Parameters
+    ----------
+    stack_name:  Pulumi stack name (e.g. "production"), used in resource names.
+    region:      AWS region string (e.g. "us-east-1").
+    az:          Availability zone to pin the subnet to.
+    vpc_cidr:    VPC IPv4 CIDR block (e.g. "10.10.0.0/16").
+    admin_cidr:  CIDR allowed to reach SSH port 22 (e.g. "203.0.113.5/32").
+    provider:    Regional aws.Provider instance.
+    """
+    opts = pulumi.ResourceOptions(provider=provider)
+    name = f"{stack_name}-{region}"
+
+    vpc, subnet = _create_vpc_base(name, stack_name, region, az, vpc_cidr, opts)
 
     # ------------------------------------------------------------------
     # Security Group: backend node
@@ -299,10 +349,9 @@ def create_regional_network(
         opts=opts,
     )
 
-    return NetworkResult(
+    return BackendNetworkResult(
         vpc=vpc,
         subnet=subnet,
-        sg_relay=sg_relay,
         sg_backend=sg_backend,
         sg_bench=sg_bench,
     )

@@ -21,7 +21,7 @@ import pulumi
 import pulumi_aws as aws
 
 import config as cfg_module
-from network import create_regional_network
+from network import create_relay_network, create_backend_network
 from relay_node import RelayNode
 from backend_node import BackendNode
 from bench_node import BenchNode
@@ -44,14 +44,20 @@ relay_nodes: dict[str, RelayNode] = {}
 for i, region in enumerate(cfg.relay_regions):
     node_name = f"relay-{stack_name}-{i + 1}"
     az = cfg.relay_azs[region]
-    vpc_cidr = cidr_map.get(region, f"10.{i + 1}.0.0/16")
+
+    if region not in cidr_map:
+        raise pulumi.RunError(
+            f"Region '{region}' has no entry in REGION_CIDR_MAP. "
+            "Add an explicit /16 CIDR entry in infra/config.py before deploying."
+        )
+    vpc_cidr = cidr_map[region]
 
     provider = aws.Provider(
         f"aws-{region}",
         region=region,
     )
 
-    net = create_regional_network(
+    net = create_relay_network(
         stack_name=stack_name,
         region=region,
         az=az,
@@ -83,9 +89,9 @@ backend_provider = aws.Provider(
 )
 
 backend_vpc_cidr = cfg_module.BACKEND_CIDR
-backend_az = cfg.relay_azs.get(backend_region, backend_region + "a")
+backend_az = cfg.relay_azs[backend_region]
 
-backend_net = create_regional_network(
+backend_net = create_backend_network(
     stack_name=f"{stack_name}-backend",
     region=backend_region,
     az=backend_az,
@@ -180,4 +186,3 @@ pulumi.export(
         name=bench_node.name,
     ) if bench_node is not None else pulumi.Output.from_input(None),
 )
-

@@ -21,7 +21,7 @@ import pulumi
 import pulumi_aws as aws
 
 from config import CANONICAL_OWNER_ID, AMI_NAME_FILTER
-from network import NetworkResult
+from network import RelayNetworkResult
 
 
 # cloud-init user_data script applied to every relay node.
@@ -83,7 +83,7 @@ class RelayNode(pulumi.ComponentResource):
         instance_type: str,
         public_key_text: str,
         stack_name: str,
-        net: NetworkResult,
+        net: RelayNetworkResult,
         provider: aws.Provider,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
@@ -96,7 +96,7 @@ class RelayNode(pulumi.ComponentResource):
         instance_type:    EC2 instance type, e.g. "c6in.8xlarge".
         public_key_text:  Contents of ~/.ssh/id_ed25519.pub.
         stack_name:       Pulumi stack name.
-        net:              NetworkResult from create_regional_network().
+        net:              RelayNetworkResult from create_relay_network().
         provider:         Regional aws.Provider.
         opts:             Optional Pulumi resource options.
         """
@@ -140,7 +140,7 @@ class RelayNode(pulumi.ComponentResource):
             subnet_id=net.subnet.id,
             vpc_security_group_ids=[net.sg_relay.id],
             key_name=key_pair.key_name,
-            associate_public_ip_address=True,
+            associate_public_ip_address=False,
             user_data=_USER_DATA,
             user_data_replace_on_change=False,
             root_block_device=aws.ec2.InstanceRootBlockDeviceArgs(

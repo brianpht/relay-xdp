@@ -157,12 +157,59 @@ aws configure --profile relay-xdp-infra
 | Key | Production | Staging | Description |
 |-----|-----------|---------|-------------|
 | `relay_regions` | `[us-east-1, eu-west-1, ap-southeast-1]` | `[us-east-1, eu-west-1, ap-southeast-1]` | AWS regions for relay nodes |
-| `relay_count` | `3` | `3` | Number of relay nodes |
 | `relay_instance_type` | `c6in.8xlarge` | `c5n.2xlarge` | EC2 type for relay nodes |
 | `backend_region` | `us-east-1` | `us-east-1` | Region for backend node |
 | `backend_instance_type` | `c5.large` | `t3.medium` | EC2 type for backend |
 | `key_pub_path` | `~/.ssh/personal-key.pub` | same | Local SSH public key path |
 | `admin_cidr` | your IPv4/32 (**required**) | your IPv4/32 (**required**) | SSH whitelist CIDR; ships as `REPLACE_ME/32`; must be set before first deploy (see step 4) |
+
+> `relay_count` has been removed. The relay node count is always derived from
+> `len(relay_regions)` - there is no separate counter that can get out of sync.
+
+## Supported Regions
+
+All relay regions must have an explicit entry in both `REGION_CIDR_MAP` and
+`RELAY_AZ_MAP` in `config.py`. Missing entries raise an error at deploy time
+instead of silently assigning an order-dependent CIDR.
+
+| Region | VPC CIDR | Pinned AZ | Notes |
+|--------|----------|-----------|-------|
+| `us-east-1` | `10.1.0.0/16` | `us-east-1a` | Current relay + backend region |
+| `eu-west-1` | `10.2.0.0/16` | `eu-west-1b` | Current relay region |
+| `ap-southeast-1` | `10.3.0.0/16` | `ap-southeast-1a` | Current relay region |
+| `ap-northeast-1` | `10.4.0.0/16` | `ap-northeast-1a` | Available (not yet deployed) |
+| `eu-central-1` | `10.5.0.0/16` | `eu-central-1a` | Available (not yet deployed) |
+| `us-west-2` | `10.6.0.0/16` | `us-west-2b` | Available (not yet deployed) |
+| `sa-east-1` | `10.7.0.0/16` | `sa-east-1a` | Available (not yet deployed) |
+| `ap-south-1` | `10.8.0.0/16` | `ap-south-1a` | Available (not yet deployed) |
+| `ca-central-1` | `10.9.0.0/16` | `ca-central-1a` | Available (not yet deployed) |
+| backend (any) | `10.10.0.0/16` | per `RELAY_AZ_MAP` | Always `BACKEND_CIDR` regardless of region |
+
+The pinned AZ is required because c5n and c6in instance families are not available
+in every AZ within a region. Adding a new region: add entries to both maps in
+`config.py`, then add the region to `relay_regions` in the appropriate YAML.
+
+## Network API
+
+`network.py` exposes two functions. Each creates only the security groups its
+node type actually needs - relay regions do not get backend/bench SGs.
+
+```
+create_relay_network(stack_name, region, az, vpc_cidr, admin_cidr, provider)
+  -> RelayNetworkResult(vpc, subnet, sg_relay)
+     Used by: RelayNode
+     SGs:     sg_relay (UDP 40000 open, TCP 8080 open, TCP 22 from admin_cidr)
+
+create_backend_network(stack_name, region, az, vpc_cidr, admin_cidr, provider)
+  -> BackendNetworkResult(vpc, subnet, sg_backend, sg_bench)
+     Used by: BackendNode, BenchNode
+     SGs:     sg_backend (TCP 8090/8091/8180 open, TCP 6379 VPC-only, TCP 22 admin)
+              sg_bench   (TCP 18080 admin+VPC, UDP 17777 open, TCP 22 admin)
+```
+
+Both functions share `_create_vpc_base()` for VPC/IGW/subnet/route-table creation.
+The typed result dataclasses make it a compile-time error to pass a relay network
+to `BackendNode` or a backend network to `RelayNode`.
 
 ## Instance Type Rationale
 
@@ -197,7 +244,7 @@ infra/
 ├── requirements.txt                 # pulumi>=3, pulumi-aws>=6, PyYAML>=6
 ├── __main__.py                      # entrypoint - orchestrates all resources
 ├── config.py                        # InfraConfig, _validate_admin_cidr, constants
-├── network.py                       # create_regional_network() -> VPC + SGs
+├── network.py                       # create_relay_network() / create_backend_network() -> VPC + SGs
 ├── relay_node.py                    # RelayNode ComponentResource
 ├── backend_node.py                  # BackendNode ComponentResource
 ├── inventory_gen.py                 # CLI: pulumi output -> ansible/inventory/<stack>.yml
