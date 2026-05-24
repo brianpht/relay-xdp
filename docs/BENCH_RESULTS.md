@@ -1,7 +1,7 @@
 # relay-bench: Benchmark Results and Evaluation
 
 > Run date: 2026-05-24  
-> Stack: staging (us-east-1, 5x relay nodes, 1x backend, 1x bench)  
+> Stack: staging (5x relay nodes across 5 AWS regions, 1x backend us-east-1, 1x bench us-east-1)  
 > Relay version: see `ansible/playbooks/group_vars/all.yml`  
 > Benchmark harness: `relay-bench` (bench_client + bench_server)
 
@@ -25,15 +25,23 @@
 
 ## Infrastructure
 
-| Component | Host | AWS region | Instance |
-|-----------|------|-----------|----------|
-| relay-xdp nodes | relay-staging-1..5 | us-east-1 | dedicated relay nodes |
-| relay-backend | backend-staging-1 | us-east-1 | `54.205.185.157` |
-| server-backend | backend-staging-1 | us-east-1 | `54.205.185.157` |
-| bench_server | bench-staging-1 | us-east-1 | `3.211.102.253` |
-| bench_client | local laptop | - | runs on operator machine |
+| Component | Host | AWS region | Location | Public IP | Instance type |
+|-----------|------|-----------|----------|-----------|---------------|
+| relay-staging-1 | relay-staging-1 | us-east-1 | N. Virginia | `44.194.204.240` | c5n.2xlarge |
+| relay-staging-2 | relay-staging-2 | eu-west-1 | Ireland | `54.229.160.49` | c5n.2xlarge |
+| relay-staging-3 | relay-staging-3 | ap-southeast-1 | Singapore | `18.136.67.102` | c5n.2xlarge |
+| relay-staging-4 | relay-staging-4 | ap-northeast-1 | Tokyo | `3.112.148.59` | c5n.2xlarge |
+| relay-staging-5 | relay-staging-5 | us-west-2 | Oregon | `54.190.195.217` | c5n.2xlarge |
+| relay-backend | backend-staging-1 | us-east-1 | N. Virginia | `54.205.185.157` | t3.medium |
+| server-backend | backend-staging-1 | us-east-1 | N. Virginia | `54.205.185.157` | t3.medium |
+| bench_server | bench-staging-1 | us-east-1 | N. Virginia | `3.211.102.253` | c5.large |
+| bench_client | local laptop | - | operator machine | - | - |
 
-First relay in chain used for single-hop bench: `44.194.204.240:40000`  
+Relay nodes use Elastic IPs (stable, fixed across stop/start). Each node is in its own
+regional VPC (non-overlapping /16 CIDRs defined in `infra/config.py`) with an ENA driver
+supporting XDP native mode.
+
+First relay in chain used for single-hop bench: `44.194.204.240:40000` (us-east-1)  
 server-backend URL: `http://54.205.185.157:8180`
 
 ---
@@ -147,7 +155,7 @@ make bench-relay STACK=staging DURATION_SECS=60
 
 **What it tests:** Real single-hop relay path:
 ```
-bench_client (laptop) -> relay-xdp eBPF (XDP, us-east-1) -> bench_server (us-east-1) -> back
+bench_client (laptop) -> relay-xdp eBPF (XDP, relay-staging-1, us-east-1) -> bench_server (us-east-1) -> back
 ```
 Token encryption via relay-backend `/bench_token`. Route refresh every 10s via
 background refresh task.
@@ -299,14 +307,21 @@ be needed (e.g., running bench from a c5.large in us-east-1 co-located with the 
 
 ### 2. Geo-scoring adds ~25 ms (server-backend mode)
 
-The relay chain selected by `select_chain()` for a San Francisco client resulted in ~280 ms
-vs. ~255 ms for the manually-picked relay. This indicates the auto-selected chain routes
-through a relay node that is not the geographically closest one from the laptop's location.
-Possible reasons:
-- The staging stack has all 5 relays in the same AWS region (us-east-1). Haversine scoring
-  between co-located relays defaults to the relay with the lowest internal ID, which may
-  not match the relay with the best internet path from the laptop's ISP.
-- In production with multi-region relays the geo-scoring benefit will be visible.
+The relay chain selected by `select_chain()` for a San Francisco client (lat=37.77, lng=-122.42)
+resulted in ~280 ms vs. ~255 ms for the manually-picked relay-staging-1 (us-east-1).
+
+The staging stack has 5 relay nodes spread across 5 AWS regions:
+`us-east-1`, `eu-west-1`, `ap-southeast-1`, `ap-northeast-1`, `us-west-2`.
+
+The Haversine geo-scoring for a San Francisco client should ideally select us-west-2
+(Oregon) or us-east-1 as the best entry point. The observed +25 ms suggests the chain
+went through us-east-1 (same as relay mode) but via a different internal route, or the
+scoring selected an intermediate hop that adds a transatlantic leg.
+
+In a real multi-region production deployment the geo-scoring benefit will be more
+pronounced: a Tokyo client would route through ap-northeast-1, a Frankfurt client through
+eu-west-1 or eu-central-1, reducing RTT by hundreds of milliseconds compared to a single
+us-east-1 entry point.
 
 ### 3. Route refresh spike (~4s, server-backend mode only)
 
@@ -348,8 +363,8 @@ True packet loss (packets that never arrive) was 0% in stable windows.
 
 | Limitation | Impact | Notes |
 |------------|--------|-------|
-| bench_client runs on laptop (cross-region) | RTT includes ~127 ms network one-way | Does not measure eBPF processing latency |
-| Single-hop only tested (bench-relay) | Multi-hop chain not validated | Use `RELAY_CHAIN=r1:40000,r2:40000` for multi-hop |
+| bench_client runs on laptop (cross-region, ~127 ms to us-east-1) | RTT includes network one-way latency | Does not measure eBPF processing latency |
+| Single-hop only tested (bench-relay, relay-staging-1) | Multi-hop chain across 5 regions not validated | Use `RELAY_CHAIN=r1:40000,r2:40000,...` for multi-hop |
 | TARGET_PPS = 500 (below production load) | Does not stress-test session_map / LRU eviction | Use TARGET_PPS=10000+ for load testing |
 | PAYLOAD_BYTES = 128 (default) | Small packet, best-case eBPF path | Test with PAYLOAD_BYTES=1200 for near-MTU |
 | Staging relay_dedicated = false | XDP_PASS used for non-relay traffic | Production uses relay_dedicated=true (XDP_DROP) |
@@ -383,13 +398,32 @@ in the same AWS region as the relay and runs bench_client remotely. Expected p50
 
 ### P3 - Multi-hop bench-relay test
 
-**Problem:** bench-relay only tested single-hop (`RELAY_ADDR`). Multi-hop routing
-(up to 5 hops per ADR-010) not exercised in this run.  
+**Problem:** bench-relay only tested single-hop (relay-staging-1, us-east-1). Multi-hop routing
+(up to 5 hops per ADR-010) across the 5 staging regions not exercised in this run.
+
+Multi-hop chain candidates (staging regions: us-east-1, eu-west-1, ap-southeast-1, ap-northeast-1, us-west-2):
+```
+relay-staging-1 (us-east-1)    44.194.204.240
+relay-staging-2 (eu-west-1)    54.229.160.49
+relay-staging-3 (ap-southeast-1) 18.136.67.102
+relay-staging-4 (ap-northeast-1) 3.112.148.59
+relay-staging-5 (us-west-2)    54.190.195.217
+```
+
 **Option:** Add a post-deploy step:
 ```bash
-make bench-relay RELAY_CHAIN=${RELAY1}:40000,${RELAY2}:40000 DURATION_SECS=60
+# 2-hop: us-east-1 -> eu-west-1
+make bench-relay \
+  RELAY_CHAIN=44.194.204.240:40000,54.229.160.49:40000 \
+  STACK=staging DURATION_SECS=60
+
+# 3-hop: us-east-1 -> eu-west-1 -> ap-southeast-1
+make bench-relay \
+  RELAY_CHAIN=44.194.204.240:40000,54.229.160.49:40000,18.136.67.102:40000 \
+  STACK=staging DURATION_SECS=60
 ```
-Expected: p50 RTT = baseline + 1x relay-to-relay RTT per additional hop.
+Expected: p50 RTT = baseline + 1x relay-to-relay RTT per additional hop
+(e.g. us-east-1 <-> eu-west-1 adds ~85 ms each direction).
 
 ### P4 - Higher PPS stress test
 
@@ -447,8 +481,9 @@ outputs when `STACK=staging` is set and individual override vars are not provide
 
 For multi-hop relay bench (manual chain):
 ```bash
+# Example: 2-hop us-east-1 -> eu-west-1
 make bench-relay \
-  RELAY_CHAIN=${RELAY1_IP}:40000,${RELAY2_IP}:40000 \
+  RELAY_CHAIN=44.194.204.240:40000,54.229.160.49:40000 \
   STACK=staging \
   DURATION_SECS=60
 ```
