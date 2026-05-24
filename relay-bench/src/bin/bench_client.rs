@@ -368,13 +368,13 @@ struct ServerBackendRefreshConfig {
 /// server-backend selects the relay chain and calls the game server webhook
 /// before returning tokens, so bench_client does not need to call
 /// /register_session on bench_server.
-fn create_session_via_sb(
+async fn create_session_via_sb(
     sb_url: &str,
     server_id: &str,
     client_lat: f64,
     client_lng: f64,
 ) -> Result<SessionResponse> {
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let resp = client
         .post(format!("{}/sessions", sb_url))
         .json(&serde_json::json!({
@@ -384,17 +384,18 @@ fn create_session_via_sb(
         }))
         .timeout(std::time::Duration::from_secs(10))
         .send()
+        .await
         .with_context(|| format!("POST /sessions to {}", sb_url))?;
 
     if !resp.status().is_success() {
         bail!(
             "POST /sessions returned HTTP {}: {}",
             resp.status(),
-            resp.text().unwrap_or_default()
+            resp.text().await.unwrap_or_default()
         );
     }
 
-    let body = resp.text().context("read /sessions response body")?;
+    let body = resp.text().await.context("read /sessions response body")?;
     serde_json::from_str(&body).with_context(|| format!("parse /sessions response: {}", body))
 }
 
@@ -402,8 +403,14 @@ fn create_session_via_sb(
 /// server-backend calls the game server webhook automatically, so
 /// bench_client does not call /register_session on bench_server.
 /// Returns RefreshedRouteData (same type as do_refresh for relay mode).
-fn do_refresh_via_sb(cfg: &ServerBackendRefreshConfig) -> Result<RefreshedRouteData> {
-    let client = reqwest::blocking::Client::new();
+///
+/// Uses async reqwest::Client (not the blocking variant) because this function
+/// is called directly from an async tokio task. Using reqwest::blocking inside
+/// tokio::task::spawn_blocking causes repeated invocations to take 13+ seconds
+/// (second runtime creation conflict) which exceeds CLIENT_ROUTE_TIMEOUT = 20s
+/// and causes ROUTE_REQUEST_TIMEOUT to fire, permanently setting fallback_to_direct.
+async fn do_refresh_via_sb(cfg: &ServerBackendRefreshConfig) -> Result<RefreshedRouteData> {
+    let client = reqwest::Client::new();
     let resp = client
         .post(format!(
             "{}/sessions/{}/refresh",
@@ -415,6 +422,7 @@ fn do_refresh_via_sb(cfg: &ServerBackendRefreshConfig) -> Result<RefreshedRouteD
         }))
         .timeout(std::time::Duration::from_secs(10))
         .send()
+        .await
         .with_context(|| {
             format!(
                 "POST /sessions/{}/refresh to {}",
@@ -427,11 +435,11 @@ fn do_refresh_via_sb(cfg: &ServerBackendRefreshConfig) -> Result<RefreshedRouteD
             "POST /sessions/{}/refresh returned HTTP {}: {}",
             cfg.session_id,
             resp.status(),
-            resp.text().unwrap_or_default()
+            resp.text().await.unwrap_or_default()
         );
     }
 
-    let body = resp.text().context("read refresh response body")?;
+    let body = resp.text().await.context("read refresh response body")?;
     let tok: SessionResponse =
         serde_json::from_str(&body).with_context(|| format!("parse refresh response: {}", body))?;
 
@@ -1487,6 +1495,7 @@ async fn main() -> Result<()> {
             //    before returning - bench_client does NOT call /register_session.
             let tok =
                 create_session_via_sb(server_backend_url, server_id, *client_lat, *client_lng)
+                    .await
                     .context("POST /sessions to server-backend")?;
 
             log::info!(
@@ -1775,6 +1784,10 @@ async fn main() -> Result<()> {
         // Server-backend refresh task: calls POST /sessions/{id}/refresh
         // every ROUTE_REFRESH_INTERVAL_SECS. server-backend calls the game
         // server webhook automatically on each refresh (no /register_session).
+        //
+        // Uses async reqwest::Client (not spawn_blocking + reqwest::blocking)
+        // to avoid the 13+ second latency caused by repeated runtime creation
+        // inside blocking threads when the outer tokio runtime is active.
         if let Some(sbrf) = sb_refresh_cfg {
             let refresh_client = Arc::clone(&client_arc);
             let refresh_shutdown = Arc::clone(&shutdown);
@@ -1790,21 +1803,10 @@ async fn main() -> Result<()> {
                         break;
                     }
 
-                    let sbrc = Arc::clone(&sbrf);
-                    let result =
-                        tokio::task::spawn_blocking(move || do_refresh_via_sb(&sbrc)).await;
-
-                    let refreshed = match result {
-                        Ok(Ok(r)) => r,
-                        Ok(Err(e)) => {
-                            log::warn!("bench_client: server-backend route refresh failed: {}", e);
-                            continue;
-                        }
+                    let refreshed = match do_refresh_via_sb(&sbrf).await {
+                        Ok(r) => r,
                         Err(e) => {
-                            log::warn!(
-                                "bench_client: server-backend route refresh task panicked: {}",
-                                e
-                            );
+                            log::warn!("bench_client: server-backend route refresh failed: {}", e);
                             continue;
                         }
                     };

@@ -426,3 +426,136 @@ async fn test_session_refresh_increments_version() {
         "session_id must remain stable across refresh"
     );
 }
+
+// -------------------------------------------------------
+// Test 5: refresh_webhook_uses_token_session_version
+// -------------------------------------------------------
+
+/// Regression test for the CLIENT_ROUTE_TIMEOUT = 20s drop in server-backend mode.
+///
+/// Root cause: refresh_session was sending `session_version = new_version` (the
+/// server-backend's internal counter = 2, 3, ...) in the game-server webhook.
+/// relay-backend embeds session_version = 1 inside every RouteToken it generates.
+/// The relay's session_map is keyed by (session_id, session_version). So the key
+/// created from the ROUTE_REQUEST token is {new_session_id, 1}. bench_server built
+/// ROUTE_RESPONSE with the webhook's session_version = 2. Relay looked up
+/// {new_session_id, 2}: not found -> dropped every ROUTE_RESPONSE ->
+/// bench_client's RouteManager hit ROUTE_REQUEST_TIMEOUT (10s) and set
+/// fallback_to_direct permanently.
+///
+/// Fix: WebhookPayload.session_version must equal token_resp.session_version
+/// (i.e. the version embedded in the token from relay-backend, currently always 1).
+///
+/// This test verifies that both the initial /notify_session and every
+/// /notify_session fired from /sessions/{id}/refresh carry session_version = 1
+/// (matching the token), not the server-backend's internal counter.
+#[tokio::test]
+async fn test_refresh_webhook_uses_token_session_version() {
+    use std::sync::Mutex;
+
+    // Mock game server that records the session_version from each notify_session call.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind capture server");
+    let addr = listener.local_addr().expect("local_addr");
+
+    let captured: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured_clone = Arc::clone(&captured);
+
+    let app = Router::new().route(
+        "/notify_session",
+        post({
+            let captured_clone = captured_clone.clone();
+            move |Json(body): Json<Value>| {
+                let captured_clone = captured_clone.clone();
+                async move {
+                    if let Some(v) = body["session_version"].as_u64() {
+                        captured_clone.lock().unwrap().push(v);
+                    }
+                    StatusCode::OK.into_response()
+                }
+            }
+        }),
+    );
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("capture server failed");
+    });
+    let game_server_url = format!("http://127.0.0.1:{}", addr.port());
+
+    let relay_backend_url = spawn_mock_relay_backend().await;
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let state = make_state(&relay_backend_url);
+    *state.route_matrix.write().expect("lock") = Some(fixture_route_matrix());
+    let router = create_router(state);
+
+    // Register game server.
+    let reg = serde_json::json!({
+        "udp_addr": "10.0.0.2:7777",
+        "lat": 0.0, "lng": 0.0,
+        "callback_url": &game_server_url
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/servers")
+        .header("content-type", "application/json")
+        .body(Body::from(reg.to_string()))
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let reg_json = body_json(resp).await;
+    let server_id = reg_json["server_id"].as_str().unwrap().to_string();
+
+    // POST /sessions - triggers initial notify_session (should be version=1).
+    let session_body = serde_json::json!({
+        "server_id": server_id,
+        "client_lat": 0.0, "client_lng": 0.0
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/sessions")
+        .header("content-type", "application/json")
+        .body(Body::from(session_body.to_string()))
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let session_json = body_json(resp).await;
+    let session_id = session_json["session_id"].as_u64().unwrap();
+
+    // POST /sessions/{id}/refresh - triggers refresh notify_session.
+    let refresh_body = serde_json::json!({ "client_lat": 0.0, "client_lng": 0.0 });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/sessions/{}/refresh", session_id))
+        .header("content-type", "application/json")
+        .body(Body::from(refresh_body.to_string()))
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Give axum a moment to deliver the webhook to the mock server.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let versions = captured.lock().unwrap().clone();
+    assert_eq!(
+        versions.len(),
+        2,
+        "exactly two notify_session calls expected (create + refresh); got {:?}",
+        versions
+    );
+    // Both webhooks must carry session_version = 1 (the version embedded in the
+    // RouteToken by relay-backend). If either uses the server-backend's internal
+    // counter (2 after refresh), the relay's session_map lookup will fail and
+    // bench_server's ROUTE_RESPONSE will be dropped -> ROUTE_REQUEST_TIMEOUT.
+    for (i, &v) in versions.iter().enumerate() {
+        assert_eq!(
+            v,
+            1,
+            "notify_session call #{} must carry session_version=1 (token version), got {}",
+            i + 1,
+            v
+        );
+    }
+}

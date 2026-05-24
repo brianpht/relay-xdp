@@ -134,6 +134,11 @@ struct WebhookPayload {
 #[derive(Deserialize)]
 struct BenchTokenResponse {
     session_id: u64,
+    /// Session version embedded inside the RouteToken (currently always 1 from
+    /// relay-backend). Must be forwarded verbatim to game server via webhook so
+    /// the ROUTE_RESPONSE session_version matches the relay's session_map entry.
+    #[serde(default = "default_session_version")]
+    session_version: u8,
     session_private_key: String,
     relay_secret_key: String,
     client_route_token: String,
@@ -141,6 +146,10 @@ struct BenchTokenResponse {
     current_magic: String,
     ping_key: String,
     client_public_address: String,
+}
+
+fn default_session_version() -> u8 {
+    1
 }
 
 // -------------------------------------------------------
@@ -458,7 +467,10 @@ async fn create_session(
         }
     };
 
-    let session_version: u8 = 1;
+    // Use session_version from the token (relay-backend embeds this in the RouteToken;
+    // bench_server ROUTE_RESPONSE must use the same version so the relay's session_map
+    // lookup succeeds). relay-backend currently always returns 1.
+    let session_version = token_resp.session_version;
 
     // 4. Notify game server via webhook BEFORE returning tokens to client.
     //    Required: game server must call register_session() before the client
@@ -594,10 +606,18 @@ async fn refresh_session(
     // 4. Notify game server of refreshed session (new relay session_id in tokens).
     //    relay_address = LAST hop (the relay that forwards to the game server);
     //    see create_session for rationale.
+    //
+    //    IMPORTANT: session_version in the webhook MUST match the version embedded
+    //    inside the RouteToken (token_resp.session_version from relay-backend /bench_token).
+    //    relay-backend currently always sets session_version = 1 inside the token.
+    //    If we used new_version here instead, bench_server would build ROUTE_RESPONSE
+    //    with session_version = new_version (2, 3, ...) but the relay's session_map
+    //    entry was created from the token with session_version = 1, causing a lookup
+    //    miss and the relay dropping every ROUTE_RESPONSE → CLIENT_ROUTE_TIMEOUT at 20s.
     let relay_address = stored.relay_chain.last().cloned().unwrap_or_default();
     let webhook = WebhookPayload {
         session_id: token_resp.session_id,
-        session_version: new_version,
+        session_version: token_resp.session_version,
         session_private_key_hex: token_resp.session_private_key.clone(),
         relay_address,
         ping_key_hex: token_resp.ping_key.clone(),
