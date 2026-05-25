@@ -344,7 +344,7 @@ fn urlencoding_simple(s: &str) -> String {
 /// Notify game server of new session via webhook.
 /// Returns Err if the webhook call fails or the server returns non-2xx.
 async fn notify_game_server(
-    state: &AppState,
+    state: Arc<AppState>,
     callback_url: &str,
     payload: &WebhookPayload,
 ) -> anyhow::Result<()> {
@@ -492,7 +492,7 @@ async fn create_session(
         current_magic_hex: token_resp.current_magic.clone(),
     };
 
-    if let Err(e) = notify_game_server(&state, &server.callback_url, &webhook).await {
+    if let Err(e) = notify_game_server(Arc::clone(&state), &server.callback_url, &webhook).await {
         log::warn!(
             "notify_game_server failed for server {}: {}",
             server.server_id,
@@ -613,7 +613,7 @@ async fn refresh_session(
     //    If we used new_version here instead, bench_server would build ROUTE_RESPONSE
     //    with session_version = new_version (2, 3, ...) but the relay's session_map
     //    entry was created from the token with session_version = 1, causing a lookup
-    //    miss and the relay dropping every ROUTE_RESPONSE → CLIENT_ROUTE_TIMEOUT at 20s.
+    //    miss and the relay dropping every ROUTE_RESPONSE -> CLIENT_ROUTE_TIMEOUT at 20s.
     let relay_address = stored.relay_chain.last().cloned().unwrap_or_default();
     let webhook = WebhookPayload {
         session_id: token_resp.session_id,
@@ -624,17 +624,26 @@ async fn refresh_session(
         current_magic_hex: token_resp.current_magic.clone(),
     };
 
-    if let Err(e) = notify_game_server(&state, &server.callback_url, &webhook).await {
-        log::warn!(
-            "notify_game_server on refresh failed for session {}: {}",
-            session_id,
-            e
-        );
-        return err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "game server webhook failed",
-        );
-    }
+    // 4b. Fire webhook in background - do not block the response on webhook latency.
+    //     Root cause of the ~4s refresh spike in bench-server-backend: cold TCP
+    //     connection to bench_server can take up to 3s (webhook_timeout_ms = 3000).
+    //     bench_server and server-backend are co-located in us-east-1, so the webhook
+    //     arrives sub-millisecond before the client sends ROUTE_REQUEST with the new
+    //     token (client round-trip to server-backend ~127ms vs intra-AZ ~1ms).
+    //     Webhook failures are logged but no longer block the SessionResponse.
+    tokio::spawn({
+        let state = Arc::clone(&state);
+        let callback_url = server.callback_url.clone();
+        async move {
+            if let Err(e) = notify_game_server(state, &callback_url, &webhook).await {
+                log::warn!(
+                    "notify_game_server on refresh failed for session {}: {}",
+                    session_id,
+                    e
+                );
+            }
+        }
+    });
 
     // 5. Update stored session version.
     {

@@ -104,10 +104,14 @@ None - this session was analysis and planning only. No code was changed.
 
 ## Next Steps
 
-1. **High - P5:** Run `make bench-relay STACK=staging PAYLOAD_BYTES=1200 DURATION_SECS=60` - validate near-MTU (1200 B) payload traverses eBPF correctly, no change needed.
-2. **High - P3 2-hop:** Run `make bench-relay RELAY_CHAIN=44.194.204.240:40000,54.229.160.49:40000 STACK=staging DURATION_SECS=60` - expected p50 ~340 ms.
-3. **High - P3 3-hop:** Run with chain `44.194.204.240:40000,54.229.160.49:40000,18.136.67.102:40000` - expected p50 ~470 ms.
-4. **High - P1:** Change `notify_game_server(...).await` to `tokio::spawn(...)` in `server-backend/src/handlers.rs refresh_session`. Update integration tests. CI: fmt + clippy + test.
+1. ~~**High - P5:** Run `make bench-relay STACK=staging PAYLOAD_BYTES=1200 DURATION_SECS=60` - validate near-MTU (1200 B) payload traverses eBPF correctly, no change needed.~~
+   **DONE 2026-05-25** - PASS. RTT p50=248 ms, p99=270 ms, loss <0.6% steady-state. Identical profile to 128B baseline. No fragmentation or drops. Infra re-provisioned; new relay IPs recorded in BENCH_RESULTS.md.
+2. ~~**High - P3 2-hop:** Run `make bench-relay RELAY_CHAIN=34.198.54.153:40000,52.215.28.227:40000 STACK=staging DURATION_SECS=60` - expected p50 ~340 ms. *(IPs updated from infra re-provision; old: 44.194.204.240, 54.229.160.49)*~~
+   **DONE 2026-05-25** - PASS. RTT p50=381 ms, p99=466 ms, loss <1.0% steady-state. Inter-relay delta: +132 ms (us-east-1 <-> eu-west-1 transatlantic round-trip, 66 ms each way). Plan estimate was +85 ms; actual +132 ms because the bench_server is co-located in us-east-1, so the eu-west-1 leg is traversed twice (r1 -> r2 -> bench_server). Route active 100% of 60s run.
+3. ~~**High - P3 3-hop:** Run with chain `34.198.54.153:40000,52.215.28.227:40000,13.250.83.214:40000` - expected p50 ~470 ms.~~
+   **DONE 2026-05-25** - PASS. RTT p50=720 ms, p99=796 ms, loss <1.4% (window artifact only). Actual delta vs 2-hop: +339 ms (eu-west-1->ap-southeast-1 ~160 ms one-way + ap-southeast-1->us-east-1 ~179 ms one-way). Plan estimate of ~470 ms was wrong - both new legs are long-haul, not regional. Route active 100% of 60s run. P3 fully resolved.
+4. ~~**High - P1:** Change `notify_game_server(...).await` to `tokio::spawn(...)` in `server-backend/src/handlers.rs refresh_session`. Update integration tests. CI: fmt + clippy + test.~~
+   **DONE 2026-05-25** - `notify_game_server` signature changed to take `Arc<AppState>`. In `refresh_session`: blocking `.await` replaced with `tokio::spawn` fire-and-forget. `create_session` webhook remains synchronous (game server must register before client connects). Integration test sleep bumped 50ms -> 200ms. All 3 CI checks pass (fmt + clippy zero warnings + all tests green). Re-ran `bench-server-backend` after deploy: **4s spike gone**. p50 256 ms, p99 max 322 ms (1s at t=10s only). Steady-state 264-273 ms p99. See BENCH_RESULTS.md Step 9.
 5. **Medium - P6:** Add `build-ebpf-rust-profiling` command in `xtask/src/main.rs`. Deploy profiling build to staging relay, read `/metrics` counters, compute avg ns per stage vs targets in `docs/PERFORMANCE_DESIGN.md`.
 6. **Medium - P2:** Add `bench-relay-colocated` Makefile target: build + scp bench_client + ssh remote run against relay-staging-1 from bench-staging-1 (same AZ). Expected p50 < 1 ms.
 7. **Low - P4:** After P2 is complete, run `make bench-relay-colocated STACK=staging TARGET_PPS=10000 DURATION_SECS=300`. Watch `relay_counter_session_evict` in relay-backend `/metrics`.
@@ -116,4 +120,7 @@ None - this session was analysis and planning only. No code was changed.
 
 | Status | File |
 |--------|------|
-| - | No files modified this session (analysis + planning only) |
+| Modified | `docs/BENCH_RESULTS.md` - added Steps 6-8 (P5, P3 2-hop, P3 3-hop results), updated infra IPs, summary table, improvement areas |
+| Modified | `ansible/ansible.cfg` - replaced removed `community.general.yaml` callback with `ansible.builtin.default` + `result_format=yaml` |
+| Modified | `server-backend/src/handlers.rs` - P1 fix: `notify_game_server` takes `Arc<AppState>`; `refresh_session` webhook fired via `tokio::spawn` (fire-and-forget) |
+| Modified | `server-backend/tests/integration.rs` - bump post-refresh sleep 50ms -> 200ms for async webhook delivery |

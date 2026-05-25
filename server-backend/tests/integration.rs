@@ -535,8 +535,10 @@ async fn test_refresh_webhook_uses_token_session_version() {
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    // Give axum a moment to deliver the webhook to the mock server.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // The refresh webhook is now fired in the background (tokio::spawn) so the
+    // response returns before the webhook is delivered. Give the background task
+    // time to make the loopback HTTP call to the mock server.
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let versions = captured.lock().unwrap().clone();
     assert_eq!(
