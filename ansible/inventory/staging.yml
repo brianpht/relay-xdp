@@ -14,34 +14,44 @@ all:
         backend_servers:
           hosts:
             backend-staging-1:
-              ansible_host: 34.235.205.132
+              ansible_host: 98.80.92.245
               ansible_user: ubuntu
         bench_servers:
           hosts:
             bench-staging-1:
-              ansible_host: 52.7.127.7
+              ansible_host: 18.232.46.96
               ansible_user: ubuntu
         relay_servers:
           hosts:
             relay-staging-1:
-              ansible_host: 34.198.54.153
+              ansible_host: 32.194.206.193
               ansible_user: ubuntu
+              relay_lat: 39.04
+              relay_lng: -77.49
               relay_name: relay-staging-1
             relay-staging-2:
-              ansible_host: 52.215.28.227
+              ansible_host: 52.19.170.80
               ansible_user: ubuntu
+              relay_lat: 53.33
+              relay_lng: -6.25
               relay_name: relay-staging-2
             relay-staging-3:
-              ansible_host: 13.250.83.214
+              ansible_host: 52.220.163.38
               ansible_user: ubuntu
+              relay_lat: 1.35
+              relay_lng: 103.82
               relay_name: relay-staging-3
             relay-staging-4:
-              ansible_host: 35.74.227.123
+              ansible_host: 35.79.118.52
               ansible_user: ubuntu
+              relay_lat: 35.68
+              relay_lng: 139.69
               relay_name: relay-staging-4
             relay-staging-5:
-              ansible_host: 52.13.242.5
+              ansible_host: 35.81.35.249
               ansible_user: ubuntu
+              relay_lat: 45.52
+              relay_lng: -122.68
               relay_name: relay-staging-5
   vars:
     ansible_python_interpreter: /usr/bin/python3

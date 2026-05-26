@@ -115,12 +115,16 @@ None - this session was analysis and planning only. No code was changed.
 5. **Medium - P6:** Add `build-ebpf-rust-profiling` command in `xtask/src/main.rs`. Deploy profiling build to staging relay, read `/metrics` counters, compute avg ns per stage vs targets in `docs/PERFORMANCE_DESIGN.md`.
 6. **Medium - P2:** Add `bench-relay-colocated` Makefile target: build + scp bench_client + ssh remote run against relay-staging-1 from bench-staging-1 (same AZ). Expected p50 < 1 ms.
 7. **Low - P4:** After P2 is complete, run `make bench-relay-colocated STACK=staging TARGET_PPS=10000 DURATION_SECS=300`. Watch `relay_counter_session_evict` in relay-backend `/metrics`.
+8. ~~**Done - Vietnam geo-scoring:** Run `make bench-server-backend STACK=staging SERVER_ID=fb53e497-29c0-416e-b7ce-1db853337e30 CLIENT_LAT=10.82 CLIENT_LNG=106.63 DURATION_SECS=60`.~~
+   **DONE 2026-05-26** - PASS. select_chain selected Oregon (us-west-2) -> Virginia (us-east-1) for HCMC coordinates, NOT Singapore as expected from pure proximity. Root cause: Haversine 1ms/100km model underestimates VN->Oregon (model=96ms, actual~160ms), while inter-relay RTT Oregon->Virginia (~72ms) << Singapore->Virginia (~230ms). Oregon total score ~168ms beats Singapore ~233ms. Same chain selected for all 4 tested client positions (Vietnam, SF, Tokyo, Dublin). Relay IPs updated in BENCH_RESULTS.md (second infra re-provision). See BENCH_RESULTS.md Step 10.
 
 ## Files Changed
 
 | Status | File |
 |--------|------|
 | Modified | `docs/BENCH_RESULTS.md` - added Steps 6-8 (P5, P3 2-hop, P3 3-hop results), updated infra IPs, summary table, improvement areas |
+| Modified | `docs/BENCH_RESULTS.md` - added Step 9 (P1 fix verification), updated summary table |
+| Modified | `docs/BENCH_RESULTS.md` - added Step 10 (Vietnam geo-scoring), updated summary table, known limitations |
 | Modified | `ansible/ansible.cfg` - replaced removed `community.general.yaml` callback with `ansible.builtin.default` + `result_format=yaml` |
 | Modified | `server-backend/src/handlers.rs` - P1 fix: `notify_game_server` takes `Arc<AppState>`; `refresh_session` webhook fired via `tokio::spawn` (fire-and-forget) |
 | Modified | `server-backend/tests/integration.rs` - bump post-refresh sleep 50ms -> 200ms for async webhook delivery |

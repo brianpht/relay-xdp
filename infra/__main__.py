@@ -132,6 +132,8 @@ pulumi.export(
                 instance_id=node.instance_id,
                 region=node.region,
                 name=node.name,
+                lat=node.lat,
+                lng=node.lng,
             )
             for name, node in relay_nodes.items()
         }

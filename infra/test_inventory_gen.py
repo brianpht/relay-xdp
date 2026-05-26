@@ -34,6 +34,8 @@ MOCK_STAGING_OUTPUTS = {
             "private_ip": "10.1.0.10",
             "instance_id": "i-0000000000000001",
             "region": "us-east-1",
+            "lat": 39.04,
+            "lng": -77.49,
         },
     },
     "backend": {
@@ -52,18 +54,24 @@ MOCK_PRODUCTION_OUTPUTS = {
             "private_ip": "10.1.0.11",
             "instance_id": "i-0000000000000011",
             "region": "us-east-1",
+            "lat": 39.04,
+            "lng": -77.49,
         },
         "relay-production-2": {
             "public_ip": "203.0.113.12",
             "private_ip": "10.2.0.11",
             "instance_id": "i-0000000000000012",
             "region": "eu-west-1",
+            "lat": 53.33,
+            "lng": -6.25,
         },
         "relay-production-3": {
             "public_ip": "203.0.113.13",
             "private_ip": "10.3.0.11",
             "instance_id": "i-0000000000000013",
             "region": "ap-southeast-1",
+            "lat": 1.35,
+            "lng": 103.82,
         },
     },
     "backend": {
@@ -148,7 +156,7 @@ def check_required_fields(inventory: dict, stack: str) -> list[str]:
         return errors
 
     for host_name, host_vars in env_children["relay_servers"]["hosts"].items():
-        for field in ("ansible_host", "relay_name", "ansible_user"):
+        for field in ("ansible_host", "relay_name", "relay_lat", "relay_lng", "ansible_user"):
             if field not in host_vars:
                 errors.append(f"[{stack}] relay_servers/{host_name} missing field: {field}")
         if host_vars.get("ansible_user") != "ubuntu":

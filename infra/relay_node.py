@@ -20,7 +20,7 @@ from textwrap import dedent
 import pulumi
 import pulumi_aws as aws
 
-from config import CANONICAL_OWNER_ID, AMI_NAME_FILTER
+from config import CANONICAL_OWNER_ID, AMI_NAME_FILTER, REGION_LATLONG_MAP
 from network import RelayNetworkResult
 
 
@@ -74,6 +74,8 @@ class RelayNode(pulumi.ComponentResource):
     instance_id: pulumi.Output[str]
     region: pulumi.Output[str]
     name: pulumi.Output[str]
+    lat: pulumi.Output[float]
+    lng: pulumi.Output[float]
 
     def __init__(
         self,
@@ -182,11 +184,15 @@ class RelayNode(pulumi.ComponentResource):
         # ------------------------------------------------------------------
         # Register component outputs
         # ------------------------------------------------------------------
+        lat, lng = REGION_LATLONG_MAP.get(region, (0.0, 0.0))
+
         self.public_ip   = eip.public_ip
         self.private_ip  = instance.private_ip
         self.instance_id = instance.id
         self.region      = pulumi.Output.from_input(region)
         self.name        = pulumi.Output.from_input(node_name)
+        self.lat         = pulumi.Output.from_input(lat)
+        self.lng         = pulumi.Output.from_input(lng)
 
         self.register_outputs({
             "public_ip":   self.public_ip,
@@ -194,5 +200,7 @@ class RelayNode(pulumi.ComponentResource):
             "instance_id": self.instance_id,
             "region":      self.region,
             "name":        self.name,
+            "lat":         self.lat,
+            "lng":         self.lng,
         })
 

@@ -30,6 +30,21 @@ from pathlib import Path
 # stack_outputs.py also serves tests/e2e-deployed.sh via its CLI.
 from stack_outputs import get_stack_outputs
 
+# Approximate datacenter coordinates per AWS region.
+# Mirrors config.py REGION_LATLONG_MAP - kept in sync manually.
+# Defined here to avoid importing config.py which pulls in pulumi at module level.
+_REGION_LATLONG: dict[str, tuple[float, float]] = {
+    "us-east-1":      (39.04,  -77.49),   # N. Virginia
+    "eu-west-1":      (53.33,   -6.25),   # Ireland
+    "ap-southeast-1": ( 1.35,  103.82),   # Singapore
+    "ap-northeast-1": (35.68,  139.69),   # Tokyo
+    "eu-central-1":   (50.11,    8.68),   # Frankfurt
+    "us-west-2":      (45.52, -122.68),   # Oregon
+    "sa-east-1":      (-23.55, -46.63),   # Sao Paulo
+    "ap-south-1":     (19.08,   72.88),   # Mumbai
+    "ca-central-1":   (45.53,  -73.55),   # Montreal
+}
+
 
 # Repo root relative to this file's location (infra/ -> ../)
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -96,9 +111,20 @@ def build_inventory(outputs: dict, stack: str) -> dict:
     relay_hosts: dict = {}
     for name in sorted(relay_nodes.keys()):
         node = relay_nodes[name]
+        # Prefer lat/lng from Pulumi outputs (set when relay_node.py exports them).
+        # Fall back to REGION_LATLONG_MAP lookup using the region field so that
+        # stacks deployed before lat/lng outputs were added still get correct coords.
+        if node.get("lat") is not None and node.get("lat") != 0.0:
+            lat = node["lat"]
+            lng = node["lng"]
+        else:
+            region = node.get("region", "")
+            lat, lng = _REGION_LATLONG.get(region, (0.0, 0.0))
         relay_hosts[name] = {
             "ansible_host": node["public_ip"],
             "relay_name":   name,
+            "relay_lat":    lat,
+            "relay_lng":    lng,
             "ansible_user": "ubuntu",
         }
 

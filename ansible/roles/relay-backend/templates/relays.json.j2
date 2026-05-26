@@ -7,6 +7,8 @@
     {
       "name": "{{ rname }}",
       "address": "{{ pubaddr }}",
+      "latitude": {{ hostvars[host]['relay_lat'] }},
+      "longitude": {{ hostvars[host]['relay_lng'] }},
       "datacenter_id": {{ loop.index }},
       "price": 0,
       "dest": true,

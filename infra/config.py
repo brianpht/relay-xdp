@@ -89,6 +89,21 @@ RELAY_AZ_MAP: dict[str, str] = {
     "ca-central-1":    "ca-central-1a",
 }
 
+# Geographic center coordinates per AWS region (latitude, longitude).
+# Used by relay-backend to compute distance-based route cost matrix.
+# Values are the approximate datacenter campus coordinates.
+REGION_LATLONG_MAP: dict[str, tuple[float, float]] = {
+    "us-east-1":       (39.04,  -77.49),   # N. Virginia
+    "eu-west-1":       (53.33,   -6.25),   # Ireland
+    "ap-southeast-1":  ( 1.35,  103.82),   # Singapore
+    "ap-northeast-1":  (35.68,  139.69),   # Tokyo
+    "eu-central-1":    (50.11,    8.68),   # Frankfurt
+    "us-west-2":       (45.52, -122.68),   # Oregon
+    "sa-east-1":       (-23.55, -46.63),   # Sao Paulo
+    "ap-south-1":      (19.08,   72.88),   # Mumbai
+    "ca-central-1":    (45.53,  -73.55),   # Montreal
+}
+
 
 # ---------------------------------------------------------------------------
 # Stack config dataclass
