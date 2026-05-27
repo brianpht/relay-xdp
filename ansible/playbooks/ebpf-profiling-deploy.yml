@@ -1,0 +1,164 @@
+---
+# playbooks/ebpf-profiling-deploy.yml
+# Deploy the profiling eBPF binary to relay nodes for per-stage latency measurement.
+#
+# The profiling build is compiled with `--features profiling`, which activates
+# `profile_now()` / `profile_record()` calls inside the XDP handler.  Each
+# call inserts a `bpf_ktime_get_ns()` checkpoint and writes elapsed nanoseconds
+# into stats_map counters 133-139 (PROFILE_STAGE_NS + PROFILE_SAMPLES per stage:
+# parse, filter, map_lookup, crypto, rewrite, total).
+#
+# relay-xdp reads those counters at 1 Hz and forwards them to relay-backend via
+# POST /relay_update.  relay-backend exposes them as Prometheus gauges at /metrics:
+#
+#   relay_counter_RELAY_COUNTER_PROFILE_PARSE_NS
+#   relay_counter_RELAY_COUNTER_PROFILE_FILTER_NS
+#   relay_counter_RELAY_COUNTER_PROFILE_MAP_LOOKUP_NS
+#   relay_counter_RELAY_COUNTER_PROFILE_CRYPTO_NS
+#   relay_counter_RELAY_COUNTER_PROFILE_REWRITE_NS
+#   relay_counter_RELAY_COUNTER_PROFILE_TOTAL_NS
+#   relay_counter_RELAY_COUNTER_PROFILE_SAMPLES
+#
+# avg_ns per stage = STAGE_NS / SAMPLES (when SAMPLES > 0).
+#
+# WARNING: do NOT run this on production nodes.
+# The extra bpf_ktime_get_ns() calls add ~20-50 ns overhead per packet.
+# Restore the production binary with: make ebpf-profiling-restore STACK=<stack>
+#
+# Prerequisites:
+#   - relay_xdp_rust_profiling.o built:
+#       cargo run -p xtask -- build-ebpf-rust-profiling
+#   - relay nodes deployed (relay-xdp running with relay_xdp_rust.o)
+#   - relay-backend running and exposing /metrics
+#
+# Usage:
+#   ansible-playbook -i inventory/staging.yml playbooks/ebpf-profiling-deploy.yml
+#
+# Read profiling counters (after deploy, wait >= 2 s for first update cycle):
+#   curl -s http://<backend-public-ip>:8091/metrics \
+#     | grep relay_counter_RELAY_COUNTER_PROFILE
+#
+# Expected targets (from docs/PERFORMANCE_DESIGN.md):
+#   parse       <= 50 ns
+#   filter      <= 30 ns
+#   map_lookup  <= 100 ns
+#   crypto      <= 150 ns
+#   rewrite     <= 30 ns
+#   total       <= 400 ns
+#
+# Restore production binary when done:
+#   ansible-playbook -i inventory/staging.yml playbooks/ebpf-profiling-restore.yml
+#   OR:  make ebpf-profiling-restore STACK=staging
+
+- name: Deploy profiling eBPF binary to relay nodes
+  hosts: relay_servers
+  gather_facts: true
+  serial: "{{ relay_serial | default(1) }}"
+  become: true
+
+  vars:
+    relay_profiling_obj_src: "{{ playbook_dir }}/../../relay_xdp_rust_profiling.o"
+    relay_profiling_obj_dst: "{{ relay_data_dir }}/relay_xdp_rust_profiling.o"
+
+  pre_tasks:
+    - name: Assert profiling binary exists locally
+      ansible.builtin.stat:
+        path: "{{ relay_profiling_obj_src }}"
+      register: profiling_bin
+      delegate_to: localhost
+      become: false
+
+    - name: Fail if profiling binary is missing
+      ansible.builtin.fail:
+        msg: >
+          relay_xdp_rust_profiling.o not found at {{ relay_profiling_obj_src }}.
+          Build it first: cargo run -p xtask -- build-ebpf-rust-profiling
+      when: not profiling_bin.stat.exists
+
+  tasks:
+    # -- 1. Back up current RELAY_XDP_OBJ setting so restore is safe -----------
+    - name: Capture current RELAY_XDP_OBJ value
+      ansible.builtin.command:
+        cmd: "grep '^RELAY_XDP_OBJ=' {{ relay_conf_dir }}/relay.env"
+      register: current_xdp_obj
+      changed_when: false
+      failed_when: current_xdp_obj.rc != 0
+
+    - name: Save current RELAY_XDP_OBJ to backup file
+      ansible.builtin.copy:
+        content: "{{ current_xdp_obj.stdout }}\n"
+        dest: "{{ relay_backup_dir }}/relay_xdp_obj.bak"
+        mode: "0640"
+        owner: "{{ relay_user }}"
+        group: "{{ relay_group }}"
+
+    # -- 2. Copy profiling eBPF binary -----------------------------------------
+    - name: Copy relay_xdp_rust_profiling.o to relay node
+      ansible.builtin.copy:
+        src: "{{ relay_profiling_obj_src }}"
+        dest: "{{ relay_profiling_obj_dst }}"
+        mode: "0644"
+        owner: "{{ relay_user }}"
+        group: "{{ relay_group }}"
+      notify: Restart relay-xdp
+
+    # -- 3. Switch RELAY_XDP_OBJ to profiling binary ---------------------------
+    - name: Update RELAY_XDP_OBJ to profiling binary in relay.env
+      ansible.builtin.lineinfile:
+        path: "{{ relay_conf_dir }}/relay.env"
+        regexp: "^RELAY_XDP_OBJ="
+        line: "RELAY_XDP_OBJ={{ relay_profiling_obj_dst }}"
+        backup: false
+      notify: Restart relay-xdp
+
+    # -- 4. Apply restart + wait -----------------------------------------------
+    - name: Flush handlers (restart relay-xdp with profiling binary)
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for relay-xdp restart
+      ansible.builtin.pause:
+        seconds: "{{ relay_startup_wait_s }}"
+      when: not ansible_check_mode
+
+    # -- 5. Verify active and XDP attached -------------------------------------
+    - name: Verify relay-xdp is active after profiling binary switch
+      ansible.builtin.command:
+        cmd: systemctl is-active relay-xdp
+      register: svc_active
+      changed_when: false
+      until: svc_active.stdout == "active"
+      retries: "{{ relay_verify_retries }}"
+      delay: "{{ relay_verify_delay_s }}"
+      failed_when: svc_active.stdout not in ["active", "activating"]
+      when: not ansible_check_mode
+
+    - name: Capture relay-xdp journal (last 30 lines)
+      ansible.builtin.command:
+        cmd: journalctl -u relay-xdp -n 30 --no-pager
+      register: journal_out
+      changed_when: false
+      failed_when: false
+      when: not ansible_check_mode
+
+    - name: Print relay-xdp journal
+      ansible.builtin.debug:
+        msg: "{{ journal_out.stdout_lines }}"
+      when: not ansible_check_mode
+
+    - name: Report profiling deploy complete
+      ansible.builtin.debug:
+        msg: >
+          [ebpf-profiling-deploy] {{ inventory_hostname }} PASS:
+          relay-xdp active with profiling eBPF binary.
+          Read counters: curl -s http://{{ ansible_host }}:{{ relay_http_port }}/metrics
+          | grep relay_counter_RELAY_COUNTER_PROFILE
+          Restore production binary: make ebpf-profiling-restore STACK={{ lookup('env', 'STACK') | default('staging') }}
+      when: not ansible_check_mode
+
+  handlers:
+    - name: Restart relay-xdp
+      ansible.builtin.systemd:
+        name: relay-xdp
+        daemon_reload: true
+        state: restarted
+

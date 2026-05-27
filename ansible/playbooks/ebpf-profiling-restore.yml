@@ -1,0 +1,85 @@
+---
+# playbooks/ebpf-profiling-restore.yml
+# Restore the production eBPF binary after a profiling session.
+#
+# Reverts RELAY_XDP_OBJ in relay.env to the value saved by
+# ebpf-profiling-deploy.yml (backed up at {{ relay_backup_dir }}/relay_xdp_obj.bak).
+# If the backup file is missing, falls back to the standard production path:
+#   {{ relay_data_dir }}/relay_xdp_rust.o
+#
+# Usage:
+#   ansible-playbook -i inventory/staging.yml playbooks/ebpf-profiling-restore.yml
+#   OR:  make ebpf-profiling-restore STACK=staging
+
+- name: Restore production eBPF binary on relay nodes
+  hosts: relay_servers
+  gather_facts: true
+  serial: "{{ relay_serial | default(1) }}"
+  become: true
+
+  tasks:
+    # -- 1. Read backup to find original RELAY_XDP_OBJ -------------------------
+    - name: Check for RELAY_XDP_OBJ backup
+      ansible.builtin.stat:
+        path: "{{ relay_backup_dir }}/relay_xdp_obj.bak"
+      register: bak_stat
+
+    - name: Read backed-up RELAY_XDP_OBJ value
+      ansible.builtin.slurp:
+        src: "{{ relay_backup_dir }}/relay_xdp_obj.bak"
+      register: bak_content
+      when: bak_stat.stat.exists
+
+    - name: Set restore path from backup
+      ansible.builtin.set_fact:
+        restore_xdp_obj_line: "{{ (bak_content.content | b64decode).strip() }}"
+      when: bak_stat.stat.exists
+
+    - name: Set restore path to production default (no backup found)
+      ansible.builtin.set_fact:
+        restore_xdp_obj_line: "RELAY_XDP_OBJ={{ relay_data_dir }}/relay_xdp_rust.o"
+      when: not bak_stat.stat.exists
+
+    # -- 2. Restore RELAY_XDP_OBJ in relay.env ---------------------------------
+    - name: Restore RELAY_XDP_OBJ in relay.env
+      ansible.builtin.lineinfile:
+        path: "{{ relay_conf_dir }}/relay.env"
+        regexp: "^RELAY_XDP_OBJ="
+        line: "{{ restore_xdp_obj_line }}"
+      notify: Restart relay-xdp
+
+    # -- 3. Apply restart + wait -----------------------------------------------
+    - name: Flush handlers (restart relay-xdp with production binary)
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for relay-xdp restart
+      ansible.builtin.pause:
+        seconds: "{{ relay_startup_wait_s }}"
+      when: not ansible_check_mode
+
+    # -- 4. Verify active ------------------------------------------------------
+    - name: Verify relay-xdp is active after restore
+      ansible.builtin.command:
+        cmd: systemctl is-active relay-xdp
+      register: svc_active
+      changed_when: false
+      until: svc_active.stdout == "active"
+      retries: "{{ relay_verify_retries }}"
+      delay: "{{ relay_verify_delay_s }}"
+      failed_when: svc_active.stdout not in ["active", "activating"]
+      when: not ansible_check_mode
+
+    - name: Report restore complete
+      ansible.builtin.debug:
+        msg: >
+          [ebpf-profiling-restore] {{ inventory_hostname }} PASS:
+          relay-xdp active with production binary ({{ restore_xdp_obj_line }}).
+      when: not ansible_check_mode
+
+  handlers:
+    - name: Restart relay-xdp
+      ansible.builtin.systemd:
+        name: relay-xdp
+        daemon_reload: true
+        state: restarted
+

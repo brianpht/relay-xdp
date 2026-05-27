@@ -3,6 +3,7 @@
         e2e-deployed e2e-teardown venv update-admin-cidr \
         bench-local bench-relay bench-server-backend \
         bench-deploy bench-server-backend-deploy \
+        ebpf-profiling-deploy ebpf-profiling-restore \
         vault-add-staging vault-add-production
 
 # Process substitution <(echo ...) requires bash.
@@ -517,5 +518,72 @@ bench-deploy:
 bench-server-backend-deploy:
 	cargo build --release -p server-backend
 	ansible-playbook -i $(INVENTORY) ansible/playbooks/bench-server-backend-deploy.yml \
+	$(_VAULT_FLAG)
+
+# ---------------------------------------------------------------------------
+# eBPF profiling targets
+#
+# ebpf-profiling-deploy: build profiling eBPF binary + deploy to relay nodes.
+#   Compiles relay-xdp-ebpf with `--features profiling`, which activates
+#   profile_now() / profile_record() checkpoints in the XDP handler.  The
+#   relay-xdp process forwards per-stage nanosecond counters to relay-backend
+#   at 1 Hz via POST /relay_update.  relay-backend exposes them as Prometheus
+#   gauges at GET /metrics:
+#
+#     relay_counter_RELAY_COUNTER_PROFILE_PARSE_NS
+#     relay_counter_RELAY_COUNTER_PROFILE_FILTER_NS
+#     relay_counter_RELAY_COUNTER_PROFILE_MAP_LOOKUP_NS
+#     relay_counter_RELAY_COUNTER_PROFILE_CRYPTO_NS
+#     relay_counter_RELAY_COUNTER_PROFILE_REWRITE_NS
+#     relay_counter_RELAY_COUNTER_PROFILE_TOTAL_NS
+#     relay_counter_RELAY_COUNTER_PROFILE_SAMPLES
+#
+#   avg_ns per stage = STAGE_NS / SAMPLES  (when SAMPLES > 0).
+#
+#   WARNING: do NOT run on production nodes.
+#   The extra bpf_ktime_get_ns() calls add ~20-50 ns overhead per packet.
+#   The profiling .o is deployed alongside the production .o; only RELAY_XDP_OBJ
+#   in relay.env is updated.  The original value is backed up on each node at
+#   /opt/relay/backup/relay_xdp_obj.bak for automatic restore.
+#
+#   Deployment roll: serial=1 (one relay at a time, same as relay-only.yml).
+#
+#   Usage:
+#     make ebpf-profiling-deploy                    # staging (default)
+#     make ebpf-profiling-deploy STACK=staging
+#
+#   Read profiling counters after deploy (wait >= 2 s for first 1 Hz cycle):
+#     eval $(python infra/stack_outputs.py --stack staging --format env)
+#     curl -s http://${BACKEND_HOST}:8091/metrics \
+#       | grep relay_counter_RELAY_COUNTER_PROFILE
+#
+#   Expected targets (docs/PERFORMANCE_DESIGN.md):
+#     parse <= 50 ns, filter <= 30 ns, map_lookup <= 100 ns,
+#     crypto <= 150 ns, rewrite <= 30 ns, total <= 400 ns
+#
+#   When profiling is done, restore the production binary:
+#     make ebpf-profiling-restore STACK=staging
+#
+#   Optional overrides:
+#     STACK     (default: staging)  Pulumi stack / inventory to target
+#     INVENTORY (default: ansible/inventory/$(STACK).yml)
+#
+# ebpf-profiling-restore: revert RELAY_XDP_OBJ to the production binary.
+#   Reads {{ relay_backup_dir }}/relay_xdp_obj.bak on each relay node
+#   (written by ebpf-profiling-deploy) and restores the original path.
+#   Falls back to {{ relay_data_dir }}/relay_xdp_rust.o if no backup exists.
+#   Restarts relay-xdp and verifies the service is active.
+#
+#   Usage:
+#     make ebpf-profiling-restore                   # staging (default)
+#     make ebpf-profiling-restore STACK=staging
+# ---------------------------------------------------------------------------
+ebpf-profiling-deploy:
+	cargo run -p xtask -- build-ebpf-rust-profiling
+	ansible-playbook -i $(INVENTORY) ansible/playbooks/ebpf-profiling-deploy.yml \
+	$(_VAULT_FLAG)
+
+ebpf-profiling-restore:
+	ansible-playbook -i $(INVENTORY) ansible/playbooks/ebpf-profiling-restore.yml \
 	$(_VAULT_FLAG)
 
