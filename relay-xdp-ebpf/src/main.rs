@@ -294,7 +294,7 @@ unsafe fn count_drop(stats: *mut RelayStats, pkt_size: usize) -> u32 {
 #[cfg(feature = "profiling")]
 #[inline(always)]
 unsafe fn profile_now() -> u64 {
-    aya_ebpf::bindings::bpf_ktime_get_ns()
+    aya_ebpf::helpers::bpf_ktime_get_ns()
 }
 
 /// No-op when profiling is disabled.
@@ -1829,7 +1829,8 @@ unsafe fn try_relay_xdp_filter(ctx: &XdpContext) -> Result<u32, ()> {
         }
 
         let t1 = profile_now(); // D2: profiling - after parse
-        profile_record(stats, RELAY_COUNTER_PROFILE_PARSE_NS, t0, t1);
+        // parse_ns deferred to full-path end so early-return ping packets do not
+        // inflate the per-sample average. See note near PROFILE_SAMPLES below.
 
         // === Basic packet filter ===
 
@@ -1858,7 +1859,7 @@ unsafe fn try_relay_xdp_filter(ctx: &XdpContext) -> Result<u32, ()> {
         }
 
         let t2 = profile_now(); // D2: profiling - after DDoS filter
-        profile_record(stats, RELAY_COUNTER_PROFILE_FILTER_NS, t1, t2);
+        // filter_ns deferred to full-path end (same reason as parse_ns above).
 
         // === Get relay state ===
 
@@ -1899,6 +1900,8 @@ unsafe fn try_relay_xdp_filter(ctx: &XdpContext) -> Result<u32, ()> {
 
         // === Second switch: remaining packet types ===
 
+        let t5 = profile_now(); // D2: profiling - before per-handler dispatch (crypto+rewrite)
+
         let action = match packet_type {
             RELAY_PONG_PACKET => Ok(handle_relay_pong(data, data_end, packet_data, stats, state, ip, udp, whitelist)),
             RELAY_ROUTE_REQUEST_PACKET => Ok(handle_route_request(ctx, data, data_end, packet_data, stats, config, state, udp, whitelist)),
@@ -1912,8 +1915,22 @@ unsafe fn try_relay_xdp_filter(ctx: &XdpContext) -> Result<u32, ()> {
             _ => Ok(count_drop(stats, data_end - data)),
         };
 
-        // D2: profiling - record total time and sample count
+        // D2: profiling - record all deferred stage counters and sample count.
+        // Parse, filter, and map_lookup are recorded here (NOT at the checkpoint
+        // sites) so that only full-path (non-ping, post-whitelist) packets are
+        // counted. This keeps the per-sample averages accurate: relay_ping packets
+        // record t0/t1/t2 but return before this point, so excluding them prevents
+        // ~2x inflation of parse_ns and filter_ns.
+        //
+        // crypto_ns = t5 -> t_end: time spent inside the per-handler dispatch
+        // (crypto verify + header rewrite + forward decision). Crypto and rewrite
+        // cannot be separated at this level; they are combined in a single stage.
+        // RELAY_COUNTER_PROFILE_REWRITE_NS is left at zero (handler-level
+        // instrumentation would be needed to split crypto from rewrite).
         let t_end = profile_now();
+        profile_record(stats, RELAY_COUNTER_PROFILE_PARSE_NS, t0, t1);
+        profile_record(stats, RELAY_COUNTER_PROFILE_FILTER_NS, t1, t2);
+        profile_record(stats, RELAY_COUNTER_PROFILE_CRYPTO_NS, t5, t_end);
         profile_record(stats, RELAY_COUNTER_PROFILE_TOTAL_NS, t0, t_end);
         increment_counter(stats, RELAY_COUNTER_PROFILE_SAMPLES);
 
