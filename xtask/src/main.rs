@@ -11,15 +11,23 @@ fn main() -> anyhow::Result<()> {
     match args.get(1).map(|s| s.as_str()) {
         Some("build-ebpf") => build_ebpf()?,
         Some("build-ebpf-rust") => build_ebpf_rust()?,
+        Some("build-ebpf-rust-profiling") => build_ebpf_rust_profiling()?,
         Some("func-test") => func_test()?,
         Some("help") | None => {
             println!("Usage: cargo xtask <command>");
             println!();
             println!("Commands:");
-            println!("  build-ebpf       Build the XDP eBPF program from C source (legacy)");
-            println!("  build-ebpf-rust  Build the Rust XDP eBPF program (requires nightly)");
-            println!("  func-test        Run functional parity tests (RELAY_NO_BPF mode)");
-            println!("  help             Show this help");
+            println!(
+                "  build-ebpf                Build the XDP eBPF program from C source (legacy)"
+            );
+            println!(
+                "  build-ebpf-rust           Build the Rust XDP eBPF program (requires nightly)"
+            );
+            println!(
+                "  build-ebpf-rust-profiling Build Rust XDP eBPF with profiling counters enabled"
+            );
+            println!("  func-test                 Run functional parity tests (RELAY_NO_BPF mode)");
+            println!("  help                      Show this help");
         }
         Some(cmd) => {
             eprintln!("Unknown command: {cmd}");
@@ -102,6 +110,66 @@ fn build_ebpf_rust() -> anyhow::Result<()> {
         .parent()
         .unwrap()
         .join("relay_xdp_rust.o");
+
+    if src.exists() {
+        std::fs::copy(&src, &dst)?;
+        println!("Copied {} -> {}", src.display(), dst.display());
+    } else {
+        println!("Warning: eBPF binary not found at {}", src.display());
+    }
+
+    Ok(())
+}
+
+/// Build the Rust eBPF program with profiling counters enabled.
+///
+/// Passes `--features profiling` to the eBPF crate, which activates
+/// `profile_now()` / `profile_record()` calls in the XDP handler.
+/// The output is written to `relay_xdp_rust_profiling.o` so that the
+/// production binary (`relay_xdp_rust.o`) is never overwritten by a
+/// profiling build.  Do not load the profiling binary in production:
+/// the extra `bpf_ktime_get_ns()` calls add ~20-50 ns per packet.
+fn build_ebpf_rust_profiling() -> anyhow::Result<()> {
+    let ebpf_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("relay-xdp-ebpf");
+
+    println!(
+        "Building Rust eBPF program (profiling) in {}",
+        ebpf_dir.display()
+    );
+
+    let status = Command::new("cargo")
+        .args([
+            "+nightly",
+            "build",
+            "--target",
+            "bpfel-unknown-none",
+            "-Z",
+            "build-std=core",
+            "--release",
+            "--features",
+            "profiling",
+        ])
+        .current_dir(&ebpf_dir)
+        .status()?;
+
+    if !status.success() {
+        anyhow::bail!("Failed to build Rust eBPF program (profiling)");
+    }
+
+    // Output lives in the same target dir as the production build.
+    // Copy it under a distinct name so both can coexist.
+    let src = ebpf_dir
+        .join("target")
+        .join("bpfel-unknown-none")
+        .join("release")
+        .join("relay-xdp-ebpf");
+    let dst = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("relay_xdp_rust_profiling.o");
 
     if src.exists() {
         std::fs::copy(&src, &dst)?;
